@@ -176,7 +176,7 @@ class QBittorrentClient:
                 continue
 
             ts = info.get("last_activity") if filter_type == "last_activity" else info.get("added_on")
-            if ts is None:
+            if not ts:  # None or 0 (never had network activity)
                 continue
 
             age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)

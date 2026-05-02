@@ -353,12 +353,13 @@ def _override_genre(result: ResultDict, config: Config) -> dict:
     genres = result.get("imdb_genres_list") or []
     override = {}
     for genre in genres:
-        genre_cfg = config.filters.override_genre.get(genre.lower(), {})
-        if genre_cfg:
-            if genre_cfg.get("minimum_rating"):
-                override["minimum_rating"] = genre_cfg["minimum_rating"]
-            if genre_cfg.get("minimum_votes"):
-                override["minimum_votes"] = genre_cfg["minimum_votes"]
+        genre_cfg = config.filters.override_genre.get(genre.lower())
+        if genre_cfg is None:
+            continue
+        if genre_cfg.minimum_rating:
+            override["minimum_rating"] = genre_cfg.minimum_rating
+        if genre_cfg.minimum_votes:
+            override["minimum_votes"] = genre_cfg.minimum_votes
     return override
 
 
@@ -492,7 +493,9 @@ def _evaluate_library_files(
         lib_res = extract_resolution(lib_san)
 
         if not lib_res:
-            continue
+            # Conservative: library file matched by title/year but resolution is unknown.
+            # Treat as present and skip re-download to avoid duplicates.
+            return _fail(result, f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present.")
 
         try:
             idx_res_int = int(index_resolution)

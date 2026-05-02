@@ -235,18 +235,12 @@ def _first_level_dir(path: str) -> str:
 def _resolve_destination(db_record, config: Config) -> str | None:
     """Choose the library copy path based on genre, cert, and resolution rules."""
     pp = config.post_process
-    rules = pp.copy_library_rules or []
-    default = pp.default_copy_library or {}
+    rules = pp.copy_library_rules
+    default = pp.default_copy_library
 
-    # Legacy compat: fall back to flat ``copy_library_path`` if no routing is configured.
-    if not default:
-        legacy = pp.copy_library_path
-        if legacy:
-            logger.warning("Using legacy 'copy_library_path'; consider migrating to routing rules.")
-            default = {"hd_path": legacy, "uhd_path": legacy}
-        else:
-            logger.warning("No 'default_copy_library' configured; cannot copy.")
-            return None
+    if not default.hd_path and not default.uhd_path:
+        logger.warning("No 'default_copy_library' configured; cannot copy.")
+        return None
 
     genres_raw = db_record.imdb_genres_list or []
     genres = _parse_genres(genres_raw)
@@ -267,16 +261,19 @@ def _pick_path(
     genres: list[str],
     cert: str,
     resolution: str | None,
-    rules: list[dict],
-    default: dict,
+    rules: list,
+    default,
 ) -> str | None:
     path_key = "uhd_path" if resolution in ("2160", "4k") else "hd_path"
 
     def default_path() -> str | None:
-        return default.get(path_key)
+        primary = getattr(default, path_key) or None
+        if primary is None and path_key == "uhd_path":
+            return default.hd_path or None
+        return primary
 
     genres_lower = {g.lower() for g in genres}
-    scored = [(len({g.lower() for g in (r.get("genres") or [])} & genres_lower), r) for r in rules]
+    scored = [(len({g.lower() for g in rule.genres} & genres_lower), rule) for rule in rules]
     scored = [(s, r) for s, r in scored if s > 0]
 
     if not scored:
@@ -286,19 +283,20 @@ def _pick_path(
     top_rules = [r for s, r in scored if s == max_score]
 
     if len(top_rules) != 1:
-        names = [r.get("name", "?") for r in top_rules]
+        names = [r.name for r in top_rules]
         logger.info("Genres {} tied across rules {}; using default path.", genres, names)
         return default_path()
 
     rule = top_rules[0]
-    max_cert = rule.get("max_certification")
-    if max_cert and not _cert_acceptable(cert, max_cert):
-        logger.info("Cert '{}' fails max_cert '{}' for rule '{}'; using default.", cert, max_cert, rule.get("name"))
+    if rule.max_certification and not _cert_acceptable(cert, rule.max_certification):
+        logger.info("Cert '{}' fails max_cert '{}' for rule '{}'; using default.", cert, rule.max_certification, rule.name)
         return default_path()
 
-    path = rule.get(path_key)
+    path = getattr(rule, path_key, "") or ""
+    if not path and path_key == "uhd_path":
+        path = getattr(rule, "hd_path", "") or ""
     if not path:
-        logger.warning("Rule '{}' has no '{}'; using default.", rule.get("name"), path_key)
+        logger.warning("Rule '{}' has no '{}'; using default.", rule.name, path_key)
         return default_path()
 
     return path

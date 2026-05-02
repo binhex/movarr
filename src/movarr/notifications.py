@@ -6,6 +6,8 @@ Sends an HTML summary email when a torrent is queued.  Fixes siphonator bug #2:
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import apprise
 from loguru import logger
 
@@ -131,9 +133,9 @@ def _build_apprise_url(email_cfg) -> str:
 
     auth = ""
     if user and password:
-        auth = f"{user}:{password}@"
+        auth = f"{quote(user, safe='')}:{quote(password, safe='')}@"
     elif user:
-        auth = f"{user}@"
+        auth = f"{quote(user, safe='')}@"
 
-    url = f"{scheme}://{auth}{host}:{port}/?from={from_addr}&to={to_addr}"
+    url = f"{scheme}://{auth}{host}:{port}/?from={quote(from_addr, safe='')}&to={quote(to_addr, safe='')}"
     return url
