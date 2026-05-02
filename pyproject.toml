@@ -36,6 +36,7 @@ dependencies = [
     "imdbpie",
     "xmltodict",
     "ffmpeg-python",
+    "pycountry>=26.2.16",
 ]
 
 [project.optional-dependencies]

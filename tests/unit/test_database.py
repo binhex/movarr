@@ -145,3 +145,72 @@ class TestGenresForTag:
 
     def test_missing_tag_returns_empty_list(self, db: Database) -> None:
         assert db.genres_for_tag("absent-tag") == []
+
+    def test_invalid_genres_string_returns_empty_list(self, db: Database, tmp_path: Path) -> None:
+        """Genres that fail both json.loads and ast.literal_eval return []."""
+        import sqlite3
+
+        db.write(_minimal_result(torrent_tag="bad-genre-tag"))
+        raw_path = str(tmp_path / "test.db")
+        con = sqlite3.connect(raw_path)
+        con.execute(
+            "UPDATE history SET imdb_genres_list = ? WHERE torrent_tag = ?",
+            ("not-valid-at-all", "bad-genre-tag"),
+        )
+        con.commit()
+        con.close()
+        # Re-open via Database — read genres
+        db2 = Database(raw_path)
+        assert db2.genres_for_tag("bad-genre-tag") == []
+
+
+# ---------------------------------------------------------------------------
+# Database upgrade path
+# ---------------------------------------------------------------------------
+
+
+class TestDatabaseUpgrade:
+    """Database._ensure_schema() must run _upgrade() on an older schema."""
+
+    def test_upgrade_from_version_5_adds_cert_columns(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        old_path = str(tmp_path / "old.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                torrent_hash TEXT,
+                torrent_tag TEXT UNIQUE,
+                result TEXT,
+                result_details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        con.execute("PRAGMA user_version = 5")
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        con2 = sqlite3.connect(old_path)
+        cursor = con2.execute("PRAGMA table_info(history)")
+        columns = [row[1] for row in cursor.fetchall()]
+        con2.close()
+        assert "imdb_certification" in columns
+        assert "imdb_cert_source" in columns
+        del db  # ensure object is not garbage collected before assertion
+
+
+# ---------------------------------------------------------------------------
+# Database vacuum
+# ---------------------------------------------------------------------------
+
+
+class TestDatabaseVacuum:
+    """Database.vacuum() must not raise."""
+
+    def test_vacuum_runs_without_error(self, db: Database) -> None:
+        db.vacuum()
