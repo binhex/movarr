@@ -12,61 +12,108 @@ try:
 except PackageNotFoundError:
     _VERSION = "unknown"
 
-# Compute default database path (project_root/db/movarr.db)
 _PROJECT_ROOT = get_project_root()
-_DEFAULT_DB_PATH = f"{_PROJECT_ROOT}/db/movarr.db"
-_DEFAULT_LOGS_PATH = f"{_PROJECT_ROOT}/logs/movarr.log"
 
 
 @click.command()
 @click.option(
-    "--database-path",
+    "--config-path",
     type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    required=False,
-    default=_DEFAULT_DB_PATH,
+    default=f"{_PROJECT_ROOT}/configs/movarr.yml",
     show_default=True,
     metavar="<path>",
-    help="Path to SQLite database file for tracking processed files.",
+    help="Path to YAML configuration file.",
+)
+@click.option(
+    "--db-path",
+    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    default=f"{_PROJECT_ROOT}/db/movarr.db",
+    show_default=True,
+    metavar="<path>",
+    help="Path to SQLite database file.",
+)
+@click.option(
+    "--log-path",
+    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    default=f"{_PROJECT_ROOT}/logs/movarr.log",
+    show_default=True,
+    metavar="<path>",
+    help="Path to log file.",
 )
 @click.option(
     "--log-level",
     default="INFO",
     type=click.Choice(["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"], case_sensitive=False),
-    metavar="<level>",
     show_default=True,
-    help="Logging level for console output",
+    metavar="<level>",
+    help="Logging level.",
 )
 @click.option(
-    "--log-path",
+    "--pid-path",
     type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    required=False,
-    default=_DEFAULT_LOGS_PATH,
+    default=f"{_PROJECT_ROOT}/movarr.pid",
     show_default=True,
     metavar="<path>",
-    help="Path to log file for tracking application events.",
+    help="Path to PID file (daemon mode).",
 )
-
-@click.version_option()
+@click.option(
+    "--ffprobe-path",
+    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    default="/usr/bin/ffprobe",
+    show_default=True,
+    metavar="<path>",
+    help="Path to ffprobe binary.",
+)
+@click.option(
+    "--daemon",
+    is_flag=True,
+    default=False,
+    help="Run in daemon (background) mode; otherwise single-pass foreground.",
+)
+@click.option(
+    "--test",
+    is_flag=True,
+    default=False,
+    help="Validate configuration and exit without running any tasks.",
+)
 @click.version_option(version=_VERSION, prog_name="movarr")
 def cli(
-    database_path: str | None,
-    log_level: str,
+    config_path: str,
+    db_path: str,
     log_path: str,
+    log_level: str,
+    pid_path: str,
+    ffprobe_path: str,
+    daemon: bool,
+    test: bool,
 ) -> None:
-    """movarr - Short description.
+    """movarr — torrent acquisition daemon.
 
-    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna
-    aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-    Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur
-    sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+    Polls Jackett for movie torrents, filters by IMDb metadata, adds passing
+    torrents to qBittorrent, post-processes completed downloads, and sends
+    email notifications.
     """
-
-    # Logger format for consistent output styling
     log_format = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
+    create_logger(log_format=log_format, log_level=log_level, log_path=log_path)
 
-    logger = create_logger(log_format=log_format, log_level=log_level, log_path=log_path)
+    from movarr.config import load_config
 
-    logger.info("WIP: CLI logic not yet implemented.")
+    config = load_config(config_path)
+
+    # Override config paths with CLI values so they take precedence.
+    config.general.db_path = db_path
+    config.general.daemon_mode = "background" if daemon else "foreground"
+    if ffprobe_path:
+        config.general.ffprobe_path = ffprobe_path
+
+    if test:
+        click.echo("Configuration loaded successfully. Test mode — exiting.")
+        return
+
+    from movarr.scheduler import run
+
+    run(config, pid_path=pid_path)
+
 
 if __name__ == "__main__":
     cli()

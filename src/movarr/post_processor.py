@@ -1,0 +1,340 @@
+"""Post-processor for movarr.
+
+Copies completed torrents to the library, applies routing rules (genre/cert/
+resolution), marks records as verified in the DB, and optionally removes the
+source torrent.
+
+Key improvements over siphonator:
+- Routing prefers the cert from ``imdb_cert_source`` (bug #8 fix) — MPAA certs
+  are not routed through BBFC rules.
+- SHA256 copy verification is delegated to ``file_utils.copy_with_verify()``.
+- The ``verified`` flag is set in the DB only after all files copy successfully.
+"""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+
+from loguru import logger
+
+from movarr.config import Config
+from movarr.database import Database
+from movarr.file_utils import copy_with_verify, make_directory
+from movarr.parsing import extract_resolution, sanitise
+from movarr.qbittorrent import QBittorrentClient
+
+__all__ = ["run_post_processing"]
+
+_BBFC_ORDER = ["U", "PG", "12", "12A", "15", "18", "R18"]
+_VIDEO_EXTS = (".mkv", ".mp4", ".avi")
+_RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
+
+
+def _safe_path_component(value: str) -> str:
+    """Strip characters that are unsafe in a filesystem path component."""
+    return _RE_PATH_UNSAFE.sub("", value).strip()
+
+
+def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+    """Main post-processing entry point.
+
+    Args:
+        config: Application configuration.
+        qbt: An already-connected ``QBittorrentClient`` instance.
+        db: Open database instance.
+    """
+    pp_cfg = config.post_process
+    if not pp_cfg.post_process_enabled:
+        logger.debug("Post-processing disabled; skipping.")
+        return
+
+    if not qbt.is_connected():
+        logger.warning("qBittorrent is unreachable; skipping post-processing.")
+        return
+
+    completed = qbt.list_completed()
+    if not completed:
+        logger.debug("No completed torrents to post-process.")
+        return
+
+    for torrent in completed:
+        _process_one(torrent, config, qbt, db)
+
+
+# ---------------------------------------------------------------------------
+# Per-torrent processing
+# ---------------------------------------------------------------------------
+
+
+def _process_one(
+    torrent: dict,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+) -> None:
+    tag = torrent.get("torrent_tag") or ""
+    torrent_hash = torrent.get("torrent_hash") or ""
+
+    db_record = db.read_by_tag(tag)
+    if not db_record:
+        logger.warning("No DB record for tag '{}'; skipping.", tag)
+        return
+
+    # Build the file copy list (applying exclusion rules).
+    src_files = _build_copy_list(torrent, config)
+    if not src_files:
+        logger.debug("No files to copy for tag '{}'.", tag)
+        return
+
+    # Determine destination.
+    dst_base = _resolve_destination(db_record, config)
+    if not dst_base:
+        logger.warning("Could not resolve copy destination for tag '{}'; skipping.", tag)
+        return
+
+    imdb_title = _safe_path_component(db_record.imdb_title or "Unknown") or "Unknown"
+    # Guard single dots (e.g. "." from stripping "...") which os.path.join treats as CWD.
+    if not imdb_title.strip("."):
+        imdb_title = "Unknown"
+    imdb_year = _safe_path_component(db_record.imdb_year or "")
+    folder_name = f"{imdb_title} ({imdb_year})" if imdb_year else imdb_title
+    dst_dir = os.path.join(dst_base, folder_name)
+
+    if not make_directory(dst_dir):
+        logger.error("Cannot create destination directory '{}'; skipping.", dst_dir)
+        return
+
+    # Determine canonical filename for the largest file (rename to parent-dir style).
+    largest_fname, largest_rel_path = _largest_file(torrent)
+
+    all_ok = True
+    for src_path in src_files:
+        src_fname = os.path.basename(src_path)
+        if src_fname == largest_fname:
+            dst_fname = _canonical_filename(torrent, largest_fname, largest_rel_path)
+        else:
+            dst_fname = src_fname
+
+        dst_path = os.path.join(dst_dir, dst_fname)
+        logger.info("Copying '{}' → '{}'.", src_path, dst_path)
+        if not copy_with_verify(src_path, dst_path):
+            logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
+            all_ok = False
+            break
+
+    if all_ok:
+        db.set_verified(tag)
+        logger.info("Marked tag '{}' as verified.", tag)
+
+    # Remove source torrent if configured (we're already processing completed torrents).
+    if all_ok and config.post_process.remove_completed:
+        qbt.delete_torrent(torrent_hash, delete_data=True, state="completed")
+
+
+# ---------------------------------------------------------------------------
+# File-list helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_copy_list(torrent: dict, config: Config) -> list[str]:
+    """Return absolute paths for files that should be copied to the library."""
+    pp = config.post_process
+    save_path = torrent.get("torrent_save_path") or ""
+    file_list = torrent.get("torrent_file_list") or []
+
+    exclude_min_kb = pp.exclude_file_min_kb or 0
+    exclude_file_regexes = [re.compile(r, re.IGNORECASE) for r in (pp.exclude_file_regex_list or [])]
+    exclude_folder_regexes = [re.compile(r, re.IGNORECASE) for r in (pp.exclude_folder_regex_list or [])]
+
+    result: list[str] = []
+    save_root = pathlib.Path(save_path).resolve()
+    for file_dict in file_list:
+        rel_path = file_dict.get("file_name") or ""
+        if not rel_path:
+            logger.debug("Skipping file entry with empty name.")
+            continue
+        abs_path = os.path.join(save_path, rel_path)
+        folder_part = os.path.dirname(rel_path)
+
+        # Guard against crafted torrent paths that escape the save directory.
+        try:
+            if not pathlib.Path(abs_path).resolve().is_relative_to(save_root):
+                logger.warning("Skipping '{}': path escapes save directory.", rel_path)
+                continue
+        except (ValueError, OSError):
+            logger.warning("Skipping '{}': could not resolve path.", rel_path)
+            continue
+
+        if any(rx.search(rel_path) for rx in exclude_file_regexes):
+            logger.debug("Excluding file '{}' (file regex match).", rel_path)
+            continue
+        if any(rx.search(folder_part) for rx in exclude_folder_regexes):
+            logger.debug("Excluding folder '{}' (folder regex match).", folder_part)
+            continue
+
+        file_size = file_dict.get("file_size") or 0
+        file_size_kb = file_size >> 10
+        if exclude_min_kb and file_size_kb < exclude_min_kb:
+            logger.debug("Excluding '{}' ({}KB < {}KB min).", rel_path, file_size_kb, exclude_min_kb)
+            continue
+
+        result.append(abs_path)
+
+    return result
+
+
+def _largest_file(torrent: dict) -> tuple[str, str]:
+    """Return (filename, relative_path_dir) of the largest file in the torrent."""
+    file_list = torrent.get("torrent_file_list") or []
+    if not file_list:
+        return "", ""
+    biggest = max(file_list, key=lambda f: f.get("file_size") or 0)
+    rel_path = biggest.get("file_name") or ""
+    return os.path.basename(rel_path), os.path.dirname(rel_path)
+
+
+def _canonical_filename(torrent: dict, largest_fname: str, largest_path_dir: str) -> str:
+    """Derive the best destination filename for the primary video file.
+
+    If the torrent has a non-trivial parent directory name that is longer than
+    the filename, rename the file to ``<parent_dir><ext>`` (siphonator convention).
+    """
+    if not largest_fname.lower().endswith(_VIDEO_EXTS):
+        return largest_fname
+
+    first_level = _first_level_dir(largest_path_dir)
+    if not first_level:
+        return largest_fname
+
+    from movarr.parsing import sanitise as _san
+
+    parent_san = _san(first_level)
+    if not parent_san:
+        return largest_fname
+
+    if len(parent_san) < len(largest_fname):
+        return largest_fname
+
+    ext = pathlib.Path(largest_fname).suffix
+    return f"{parent_san}{ext}"
+
+
+def _first_level_dir(path: str) -> str:
+    """Return the top-level directory component of a relative path."""
+    parts = pathlib.PurePosixPath(path).parts
+    return parts[0] if parts else ""
+
+
+# ---------------------------------------------------------------------------
+# Destination routing
+# ---------------------------------------------------------------------------
+
+
+def _resolve_destination(db_record, config: Config) -> str | None:
+    """Choose the library copy path based on genre, cert, and resolution rules."""
+    pp = config.post_process
+    rules = pp.copy_library_rules or []
+    default = pp.default_copy_library or {}
+
+    # Legacy compat: fall back to flat ``copy_library_path`` if no routing is configured.
+    if not default:
+        legacy = pp.copy_library_path
+        if legacy:
+            logger.warning("Using legacy 'copy_library_path'; consider migrating to routing rules.")
+            default = {"hd_path": legacy, "uhd_path": legacy}
+        else:
+            logger.warning("No 'default_copy_library' configured; cannot copy.")
+            return None
+
+    genres_raw = db_record.imdb_genres_list or []
+    genres = _parse_genres(genres_raw)
+
+    cert = db_record.imdb_certification or ""
+    cert_source = db_record.imdb_cert_source or "imdbpie"
+
+    # Bug #8 fix: only apply BBFC cert routing if the cert came from imdbpie (UK BBFC certs).
+    # OMDb returns MPAA ratings which are not compatible with BBFC ordering.
+    effective_cert = cert if cert_source == "imdbpie" else ""
+
+    resolution = _resolution_from_index_title(db_record.index_title or "")
+
+    return _pick_path(genres, effective_cert, resolution, rules, default)
+
+
+def _pick_path(
+    genres: list[str],
+    cert: str,
+    resolution: str | None,
+    rules: list[dict],
+    default: dict,
+) -> str | None:
+    path_key = "uhd_path" if resolution in ("2160", "4k") else "hd_path"
+
+    def default_path() -> str | None:
+        return default.get(path_key)
+
+    genres_lower = {g.lower() for g in genres}
+    scored = [(len({g.lower() for g in (r.get("genres") or [])} & genres_lower), r) for r in rules]
+    scored = [(s, r) for s, r in scored if s > 0]
+
+    if not scored:
+        return default_path()
+
+    max_score = max(s for s, _ in scored)
+    top_rules = [r for s, r in scored if s == max_score]
+
+    if len(top_rules) != 1:
+        names = [r.get("name", "?") for r in top_rules]
+        logger.info("Genres {} tied across rules {}; using default path.", genres, names)
+        return default_path()
+
+    rule = top_rules[0]
+    max_cert = rule.get("max_certification")
+    if max_cert and not _cert_acceptable(cert, max_cert):
+        logger.info("Cert '{}' fails max_cert '{}' for rule '{}'; using default.", cert, max_cert, rule.get("name"))
+        return default_path()
+
+    path = rule.get(path_key)
+    if not path:
+        logger.warning("Rule '{}' has no '{}'; using default.", rule.get("name"), path_key)
+        return default_path()
+
+    return path
+
+
+def _cert_acceptable(movie_cert: str, max_cert: str) -> bool:
+    mc = (movie_cert or "").strip().upper()
+    mx = (max_cert or "").strip().upper()
+    if mc not in _BBFC_ORDER or mx not in _BBFC_ORDER:
+        return False
+    return _BBFC_ORDER.index(mc) <= _BBFC_ORDER.index(mx)
+
+
+def _resolution_from_index_title(index_title: str) -> str | None:
+    san = sanitise(index_title)
+    if not san:
+        return None
+    return extract_resolution(san)
+
+
+def _parse_genres(raw) -> list[str]:
+    import ast
+    import json
+
+    if isinstance(raw, list):
+        return [str(g).strip() for g in raw]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(g).strip() for g in parsed]
+    except (ValueError, TypeError):
+        pass
+    try:
+        parsed = ast.literal_eval(raw)
+        if isinstance(parsed, list):
+            return [str(g).strip() for g in parsed]
+    except (ValueError, SyntaxError):
+        pass
+    return []
