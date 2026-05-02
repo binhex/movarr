@@ -1,6 +1,6 @@
 # Config Migration System — Design Spec
 
-**Date:** 2026-05-02  
+**Date:** 2026-05-02
 **Status:** Approved (autopilot)
 
 ---
@@ -35,7 +35,7 @@ As the project evolves this will happen repeatedly. A migration system is needed
 
 ### Version signal
 
-`general.config_version` (already present as `str = "1.0.0"`) is the migration key.  
+`general.config_version` (already present as `str = "1.0.0"`) is the migration key.
 The current application version constant (`_CONFIG_VERSION`) advances with each breaking schema change.
 
 | Value | Meaning |

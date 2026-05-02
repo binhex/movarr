@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from movarr.config import (
@@ -130,3 +131,65 @@ class TestLoadConfig:
         cfg_file.write_text("general:\n  daemon_mode: bad_value\n")
         with pytest.raises(ValidationError):
             load_config(str(cfg_file))
+
+
+# ---------------------------------------------------------------------------
+# Config migration
+# ---------------------------------------------------------------------------
+
+
+class TestConfigMigration:
+    """load_config must auto-migrate older config schemas on startup."""
+
+    def _v1_config(self, tmp_path: Path) -> Path:
+        """Write a v1.0.0 config (with notification.email block) to tmp_path."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n"
+            "  config_version: '1.0.0'\n"
+            "notification:\n"
+            "  email:\n"
+            "    enabled: false\n"
+            "    host: smtp.example.com\n"
+            "    port: 587\n"
+        )
+        return cfg_file
+
+    def test_v1_config_is_migrated_to_v2(self, tmp_path: Path) -> None:
+        """A v1.0.0 config with notification.email is migrated to v2.0.0."""
+        cfg_file = self._v1_config(tmp_path)
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.0.0"
+        assert cfg.notification.apprise_urls == []
+
+    def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
+        """After migration the on-disk YAML no longer contains notification.email."""
+        cfg_file = self._v1_config(tmp_path)
+        load_config(str(cfg_file))
+        raw = yaml.safe_load(cfg_file.read_text())
+        assert "email" not in raw.get("notification", {})
+        assert "apprise_urls" in raw.get("notification", {})
+
+    def test_v1_migration_creates_backup(self, tmp_path: Path) -> None:
+        """A backup file config.yml.bak.1.0.0 is created before migration."""
+        cfg_file = self._v1_config(tmp_path)
+        load_config(str(cfg_file))
+        backup = tmp_path / "config.yml.bak.1.0.0"
+        assert backup.exists()
+        raw = yaml.safe_load(backup.read_text())
+        assert "email" in raw.get("notification", {})
+
+    def test_no_version_key_treated_as_v1(self, tmp_path: Path) -> None:
+        """A config without general.config_version is treated as v1.0.0 and migrated."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.0.0"
+
+    def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
+        """A v2.0.0 config is loaded without creating a backup file."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
+        load_config(str(cfg_file))
+        backup = tmp_path / "config.yml.bak.2.0.0"
+        assert not backup.exists()

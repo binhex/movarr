@@ -2,15 +2,34 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = ["Config", "load_config"]
 
-_CONFIG_VERSION = "1.0.0"
+_CONFIG_VERSION = "2.0.0"
+
+
+def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v1.0.0 → v2.0.0: replace notification.email with apprise_urls."""
+    notification = raw.setdefault("notification", {})
+    notification.pop("email", None)
+    notification.setdefault("apprise_urls", [])
+    raw.setdefault("general", {})["config_version"] = "2.0.0"
+    return raw
+
+
+MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "1.0.0": _migrate_v1_to_v2,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +264,46 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
+    """Apply any pending schema migrations to *raw*, rewriting the file on disk.
+
+    A single backup of the original file is created before the first migration
+    step.  Migrations are applied sequentially until the config reaches
+    ``_CONFIG_VERSION``.
+
+    Args:
+        raw: The raw config dict loaded from YAML.
+        config_path: Path to the config file (used for backup and overwrite).
+
+    Returns:
+        The migrated raw dict (may be unchanged if already up to date).
+    """
+    current = raw.get("general", {}).get("config_version", "1.0.0")
+    if current not in MIGRATIONS:
+        return raw
+
+    backup_path = config_path.with_suffix(f".yml.bak.{current}")
+    try:
+        shutil.copy2(config_path, backup_path)
+        logger.info("Config backup created at {}", backup_path)
+    except OSError:
+        logger.warning(
+            "Could not create config backup at {}; proceeding without backup.",
+            backup_path,
+        )
+
+    while current in MIGRATIONS:
+        previous = current
+        raw = MIGRATIONS[current](raw)
+        current = raw.get("general", {}).get("config_version", current)
+        logger.info("Config migrated from v{} to v{}", previous, current)
+
+    with config_path.open("w", encoding="utf-8") as fh:
+        yaml.dump(raw, fh, default_flow_style=False, sort_keys=False)
+
+    return raw
+
+
 def _default_config_dict() -> dict[str, Any]:
     """Return the default config as a plain dict suitable for YAML serialisation."""
     return Config().model_dump()
@@ -282,6 +341,8 @@ def load_config(config_path: str | Path) -> Config:
 
     with path.open("r", encoding="utf-8") as fh:
         raw: dict[str, Any] = yaml.safe_load(fh) or {}
+
+    raw = _run_migrations(raw, path)
 
     merged = _deep_merge(_default_config_dict(), raw)
     return Config.model_validate(merged)
