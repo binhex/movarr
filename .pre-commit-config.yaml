@@ -34,10 +34,12 @@ repos:
           - sqlalchemy
           - pydantic>=2.0.0
           - pytest
+          - pytest-mock
           - click
           - tenacity
           - pydantic-settings
           - loguru
+          - backoff
 
   - repo: https://github.com/PyCQA/autoflake
     rev: v2.3.1

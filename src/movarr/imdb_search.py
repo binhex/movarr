@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
-from movarr.parsing import normalise_for_compare
+from movarr.parsing import normalise_for_compare, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config
@@ -55,8 +55,8 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
 
 def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     search_term = result.get("movie_title_and_year_search", "")
-    title_compare = result.get("index_title_compare", "")
-    year = result.get("movie_title_year", "")
+    title_compare = result.get("index_title_compare") or ""
+    year = result.get("movie_title_year") or ""
 
     try:
         import imdbpie
@@ -109,9 +109,9 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
         _fail(result, "TMDb: no API key configured.")
         return result
 
-    title = result.get("movie_title", "")
-    year = result.get("movie_title_year", "")
-    index_compare = result.get("index_title_compare", "")
+    title = result.get("movie_title") or ""
+    year = result.get("movie_title_year") or ""
+    index_compare = result.get("index_title_compare") or ""
 
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?query={encoded_title}&year={year}&api_key={api_key}"
@@ -174,9 +174,9 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
         _fail(result, "OMDb: no API key configured.")
         return result
 
-    title = result.get("movie_title", "")
-    year = result.get("movie_title_year", "")
-    index_compare = result.get("index_title_compare", "")
+    title = result.get("movie_title") or ""
+    year = result.get("movie_title_year") or ""
+    index_compare = result.get("index_title_compare") or ""
 
     encoded_title = urllib.parse.quote(title)
     url = f"http://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
@@ -219,8 +219,8 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
 
 def _search_google(result: ResultDict, _config: Config) -> ResultDict:
     search_term = result.get("movie_title_and_year_search", "")
-    index_compare = result.get("index_title_compare", "")
-    year = result.get("movie_title_year", "")
+    index_compare = result.get("index_title_compare") or ""
+    year = result.get("movie_title_year") or ""
 
     try:
         import googlesearch
@@ -242,8 +242,6 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
 
     g_title: str = hit.title or ""
     g_url: str = hit.url or ""
-
-    from movarr.parsing import sanitise
 
     san = sanitise(g_title)
     if not san:

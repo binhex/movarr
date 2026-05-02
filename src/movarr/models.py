@@ -24,18 +24,18 @@ class ResultDict(TypedDict, total=False):
     index_details: str
 
     # --- Parsed index fields ---
-    index_title_sanitised: str
+    index_title_sanitised: str | None
     index_title_group: str
-    index_title_resolution: str
-    index_title_after_year_to_end: str
-    index_title_compare: str
+    index_title_resolution: str | None
+    index_title_after_year_to_end: str | None
+    index_title_compare: str | None
 
     # --- Parsed movie fields ---
-    movie_title: str
-    movie_title_year: str
+    movie_title: str | None
+    movie_title_year: str | None
     movie_title_and_year_search: str
-    movie_title_compare: str
-    movie_title_and_year_compare: str
+    movie_title_compare: str | None
+    movie_title_and_year_compare: str | None
 
     # --- Torrent fields ---
     torrent_url: str
@@ -48,11 +48,11 @@ class ResultDict(TypedDict, total=False):
     # --- IMDb metadata ---
     imdb_id: str
     imdb_title: str | None
-    imdb_year: str | None
-    imdb_rating: str | None
-    imdb_votes: str | None
+    imdb_year: int | None
+    imdb_rating: float | None
+    imdb_votes: int | None
     imdb_title_type: str | None
-    imdb_running_time_in_minutes: str | None
+    imdb_running_time_in_minutes: int | None
     imdb_genres_list: list[str] | None
     imdb_credits_cast_list: list[str] | None
     imdb_credits_director_list: list[str] | None

@@ -75,6 +75,13 @@ _ROMAN_TO_INT: dict[str, str] = {
     "x": "10",
 }
 
+# Pre-compiled patterns for word/numeral replacement — avoids recompiling on every call.
+_NUMERAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(rf"(?<=[\s.\-_])({word})(?=[\s.\-_]|$)", re.IGNORECASE), digit)
+    for mapping in (_WORD_TO_INT, _ROMAN_TO_INT)
+    for word, digit in mapping.items()
+]
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -83,10 +90,8 @@ _ROMAN_TO_INT: dict[str, str] = {
 
 def _replace_words_with_ints(text: str) -> str:
     """Replace written/Roman numerals with digit strings (word-boundary aware)."""
-    for mapping in (_WORD_TO_INT, _ROMAN_TO_INT):
-        for word, digit in mapping.items():
-            pattern = re.compile(rf"(?<=[\s.\-_])({word})(?=[\s.\-_]|$)", re.IGNORECASE)
-            text = pattern.sub(digit, text)
+    for pattern, digit in _NUMERAL_PATTERNS:
+        text = pattern.sub(digit, text)
     return text
 
 

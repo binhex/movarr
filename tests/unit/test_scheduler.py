@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
-from movarr.config import Config
+from movarr.config import Config, GeneralConfig
 from movarr.scheduler import (
     _connect_qbt,
     _run_daemon,
@@ -122,7 +122,7 @@ class TestRun:
     def test_background_mode_delegates_to_run_daemon(self, mocker: MockerFixture) -> None:
         mock_run_once = mocker.patch("movarr.scheduler.run_once")
         mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
-        config = Config(general={"daemon_mode": "background"})
+        config = Config(general=GeneralConfig(daemon_mode="background"))
 
         run(config)
 
@@ -300,9 +300,7 @@ class TestConnectQbt:
 class TestRunDaemon:
     """Tests for _run_daemon — APScheduler-based background loop."""
 
-    def test_starts_three_scheduled_jobs_then_exits_on_keyboard_interrupt(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_starts_three_scheduled_jobs_then_exits_on_keyboard_interrupt(self, mocker: MockerFixture) -> None:
         """All three tasks are registered then the loop exits on KeyboardInterrupt."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")

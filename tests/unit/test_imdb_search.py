@@ -6,7 +6,9 @@ import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import pytest
+    from pytest_mock import MockerFixture
+
+    from movarr.models import ResultDict
 
 from movarr.config import Config
 from movarr.imdb_search import (
@@ -24,9 +26,9 @@ from movarr.imdb_search import (
 # ---------------------------------------------------------------------------
 
 
-def _make_result(**overrides: Any) -> dict:
+def _make_result(**overrides: Any) -> ResultDict:
     """Build a minimal pipeline result dict for search tests."""
-    base: dict = {
+    base: ResultDict = {
         "movie_title": "The Matrix",
         "movie_title_year": "1999",
         "movie_title_and_year_search": "The Matrix 1999",
@@ -34,7 +36,7 @@ def _make_result(**overrides: Any) -> dict:
         "result": "Passed",
         "result_details": [],
     }
-    base.update(overrides)
+    base.update(overrides)  # type: ignore[typeddict-item]
     return base
 
 
@@ -47,17 +49,17 @@ class TestFailHelper:
     """Unit tests for the _fail() result helper."""
 
     def test_sets_result_to_failed(self) -> None:
-        result: dict = {"result": "Passed", "result_details": []}
+        result: ResultDict = {"result": "Passed", "result_details": []}
         _fail(result, "something went wrong")
         assert result["result"] == "Failed"
 
     def test_appends_failed_message_to_details(self) -> None:
-        result: dict = {"result": "Passed", "result_details": []}
+        result: ResultDict = {"result": "Passed", "result_details": []}
         _fail(result, "bad thing")
         assert any("bad thing" in d for d in result["result_details"])
 
     def test_initialises_result_details_if_absent(self) -> None:
-        result: dict = {"result": "Passed"}
+        result: ResultDict = {"result": "Passed"}
         _fail(result, "error")
         assert "result_details" in result
         assert len(result["result_details"]) == 1
@@ -67,22 +69,22 @@ class TestPassHelper:
     """Unit tests for the _pass() result helper."""
 
     def test_sets_result_to_passed(self) -> None:
-        result: dict = {"result": "Failed", "result_details": []}
+        result: ResultDict = {"result": "Failed", "result_details": []}
         _pass(result, "tt0133093", "found it")
         assert result["result"] == "Passed"
 
     def test_sets_imdb_id(self) -> None:
-        result: dict = {"result": "Failed", "result_details": []}
+        result: ResultDict = {"result": "Failed", "result_details": []}
         _pass(result, "tt0133093", "found it")
         assert result["imdb_id"] == "tt0133093"
 
     def test_appends_passed_message_to_details(self) -> None:
-        result: dict = {"result": "Failed", "result_details": []}
+        result: ResultDict = {"result": "Failed", "result_details": []}
         _pass(result, "tt0133093", "found it")
         assert any("found it" in d for d in result["result_details"])
 
     def test_initialises_result_details_if_absent(self) -> None:
-        result: dict = {"result": "Failed"}
+        result: ResultDict = {"result": "Failed"}
         _pass(result, "tt0133093", "ok")
         assert "result_details" in result
 
@@ -95,7 +97,7 @@ class TestPassHelper:
 class TestSearchImdbpie:
     """Tests for the IMDbPie search strategy."""
 
-    def test_match_found_sets_imdb_id_and_passes(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_match_found_sets_imdb_id_and_passes(self, mocker: MockerFixture) -> None:
         mock_imdbpie = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_imdbpie.Imdb.return_value = mock_client
@@ -109,7 +111,7 @@ class TestSearchImdbpie:
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_no_hits_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_no_hits_sets_failed(self, mocker: MockerFixture) -> None:
         mock_imdbpie = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_imdbpie.Imdb.return_value = mock_client
@@ -120,7 +122,7 @@ class TestSearchImdbpie:
         out = _search_imdbpie(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_year_mismatch_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_year_mismatch_sets_failed(self, mocker: MockerFixture) -> None:
         mock_imdbpie = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_imdbpie.Imdb.return_value = mock_client
@@ -133,7 +135,7 @@ class TestSearchImdbpie:
         out = _search_imdbpie(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_title_mismatch_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_title_mismatch_sets_failed(self, mocker: MockerFixture) -> None:
         mock_imdbpie = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_imdbpie.Imdb.return_value = mock_client
@@ -146,14 +148,14 @@ class TestSearchImdbpie:
         out = _search_imdbpie(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_import_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_import_error_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         cfg = Config()
         result = _make_result()
         out = _search_imdbpie(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_hit_missing_imdb_id_skipped(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_hit_missing_imdb_id_skipped(self, mocker: MockerFixture) -> None:
         mock_imdbpie = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_imdbpie.Imdb.return_value = mock_client
@@ -181,7 +183,7 @@ class TestSearchTmdb:
         out = _search_tmdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_successful_match_sets_imdb_id_and_passes(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_match_sets_imdb_id_and_passes(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.tmdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -198,7 +200,7 @@ class TestSearchTmdb:
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_year_mismatch_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_year_mismatch_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.tmdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -212,7 +214,7 @@ class TestSearchTmdb:
         out = _search_tmdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_title_not_in_index_compare_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_title_not_in_index_compare_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.tmdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -226,7 +228,7 @@ class TestSearchTmdb:
         out = _search_tmdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_http_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_http_error_sets_failed(self, mocker: MockerFixture) -> None:
         from movarr.downloader import HttpError
 
         cfg = Config()
@@ -238,7 +240,7 @@ class TestSearchTmdb:
         out = _search_tmdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_empty_results_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_empty_results_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.tmdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -265,7 +267,7 @@ class TestSearchOmdb:
         out = _search_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_successful_match_sets_imdb_id_and_passes(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_match_sets_imdb_id_and_passes(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.omdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -278,7 +280,7 @@ class TestSearchOmdb:
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_title_mismatch_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_title_mismatch_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.omdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -290,7 +292,7 @@ class TestSearchOmdb:
         out = _search_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_year_mismatch_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_year_mismatch_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.omdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -302,7 +304,7 @@ class TestSearchOmdb:
         out = _search_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_http_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_http_error_sets_failed(self, mocker: MockerFixture) -> None:
         from movarr.downloader import HttpError
 
         cfg = Config()
@@ -314,7 +316,7 @@ class TestSearchOmdb:
         out = _search_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_missing_imdb_id_in_response_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_missing_imdb_id_in_response_sets_failed(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.credentials.omdb.api_key = "test_key"
         mock_http = mocker.MagicMock()
@@ -335,7 +337,7 @@ class TestSearchOmdb:
 class TestSearchGoogle:
     """Tests for the Google search strategy (last resort)."""
 
-    def test_imdb_id_extracted_from_url_passes(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_imdb_id_extracted_from_url_passes(self, mocker: MockerFixture) -> None:
         mock_gs = mocker.MagicMock()
         mock_hit = mocker.MagicMock()
         mock_hit.title = "The Matrix 1999"
@@ -349,7 +351,7 @@ class TestSearchGoogle:
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_no_results_stop_iteration_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_no_results_stop_iteration_sets_failed(self, mocker: MockerFixture) -> None:
         mock_gs = mocker.MagicMock()
         mock_gs.search.return_value = iter([])
         mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
@@ -358,7 +360,7 @@ class TestSearchGoogle:
         out = _search_google(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_no_imdb_id_in_url_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_no_imdb_id_in_url_sets_failed(self, mocker: MockerFixture) -> None:
         mock_gs = mocker.MagicMock()
         mock_hit = mocker.MagicMock()
         mock_hit.title = "The Matrix 1999"
@@ -370,7 +372,7 @@ class TestSearchGoogle:
         out = _search_google(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_year_not_in_title_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_year_not_in_title_sets_failed(self, mocker: MockerFixture) -> None:
         mock_gs = mocker.MagicMock()
         mock_hit = mocker.MagicMock()
         mock_hit.title = "The Matrix IMDb"  # no year
@@ -382,7 +384,7 @@ class TestSearchGoogle:
         out = _search_google(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_import_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_import_error_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"googlesearch": None})
         result = _make_result()
         cfg = Config()
@@ -398,7 +400,7 @@ class TestSearchGoogle:
 class TestSearchForImdbId:
     """Tests for the top-level search_for_imdb_id() orchestrator."""
 
-    def test_returns_on_first_successful_strategy(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_on_first_successful_strategy(self, mocker: MockerFixture) -> None:
         mocker.patch(
             "movarr.imdb_search._search_imdbpie",
             side_effect=lambda r, c: {**r, "result": "Passed", "imdb_id": "tt0133093"},
@@ -415,7 +417,7 @@ class TestSearchForImdbId:
         spy_omdb.assert_not_called()
         spy_google.assert_not_called()
 
-    def test_tries_next_strategy_when_first_fails(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_tries_next_strategy_when_first_fails(self, mocker: MockerFixture) -> None:
         mocker.patch(
             "movarr.imdb_search._search_imdbpie",
             side_effect=lambda r, c: {**r, "result": "Failed"},
@@ -431,7 +433,7 @@ class TestSearchForImdbId:
         assert out["result"] == "Passed"
         spy_omdb.assert_not_called()
 
-    def test_returns_failed_when_all_strategies_exhausted(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_failed_when_all_strategies_exhausted(self, mocker: MockerFixture) -> None:
         for strategy in ("_search_imdbpie", "_search_tmdb", "_search_omdb", "_search_google"):
             mocker.patch(
                 f"movarr.imdb_search.{strategy}",
@@ -442,7 +444,7 @@ class TestSearchForImdbId:
         out = search_for_imdb_id(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_google_used_as_last_resort(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_google_used_as_last_resort(self, mocker: MockerFixture) -> None:
         for strategy in ("_search_imdbpie", "_search_tmdb", "_search_omdb"):
             mocker.patch(
                 f"movarr.imdb_search.{strategy}",

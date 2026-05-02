@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from typing import Any, cast
+from typing import Any
 
 import backoff
 import requests
@@ -115,10 +115,10 @@ class HttpClient:
             original = self._read_timeout
             self._read_timeout = read_timeout
             try:
-                return cast("requests.Response", self._request("get", url, headers=headers, auth=auth))
+                return self._request("get", url, headers=headers, auth=auth)
             finally:
                 self._read_timeout = original
-        return cast("requests.Response", self._request("get", url, headers=headers, auth=auth))
+        return self._request("get", url, headers=headers, auth=auth)
 
     def post(
         self,
@@ -136,4 +136,4 @@ class HttpClient:
             headers: Extra request headers.
             auth: Optional ``(username, password)`` tuple.
         """
-        return cast("requests.Response", self._request("post", url, headers=headers, data=data, auth=auth))
+        return self._request("post", url, headers=headers, data=data, auth=auth)

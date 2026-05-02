@@ -78,15 +78,15 @@ class TestResultDictConstruction:
         result: ResultDict = {
             "imdb_id": "tt0133093",
             "imdb_title": "The Matrix",
-            "imdb_year": "1999",
-            "imdb_rating": "8.7",
-            "imdb_votes": "2000000",
+            "imdb_year": 1999,
+            "imdb_rating": 8.7,
+            "imdb_votes": 2_000_000,
             "imdb_title_type": "movie",
-            "imdb_running_time_in_minutes": "136",
+            "imdb_running_time_in_minutes": 136,
         }
         assert result["imdb_id"] == "tt0133093"
-        assert result["imdb_rating"] == "8.7"
-        assert result["imdb_running_time_in_minutes"] == "136"
+        assert result["imdb_rating"] == 8.7
+        assert result["imdb_running_time_in_minutes"] == 136
 
     def test_imdb_list_fields(self) -> None:
         """IMDb list fields can be set and read back."""
@@ -164,28 +164,28 @@ class TestResultDictGetMethod:
     def test_get_missing_key_returns_none(self) -> None:
         """Missing optional fields return None via .get()."""
         result: ResultDict = {}
-        assert result.get("result") is None  # type: ignore[call-overload]
+        assert result.get("result") is None
 
     def test_get_missing_key_with_default(self) -> None:
         """Missing optional fields return the supplied default via .get()."""
         result: ResultDict = {}
-        assert result.get("imdb_title", "unknown") == "unknown"  # type: ignore[call-overload]
+        assert result.get("imdb_title", "unknown") == "unknown"
 
     def test_get_present_key_returns_value(self) -> None:
         """Present fields return their value via .get()."""
         result: ResultDict = {"result": "Passed"}
-        assert result.get("result") == "Passed"  # type: ignore[call-overload]
+        assert result.get("result") == "Passed"
 
     def test_get_present_key_ignores_default(self) -> None:
         """When a key is present .get() returns the stored value, not the default."""
-        result: ResultDict = {"imdb_rating": "9.0"}
-        assert result.get("imdb_rating", "0.0") == "9.0"  # type: ignore[call-overload]
+        result: ResultDict = {"imdb_rating": 9.0}
+        assert result.get("imdb_rating", 0.0) == 9.0
 
     def test_get_none_value_not_confused_with_missing(self) -> None:
         """A field set to None should be distinguishable from a missing field."""
         result: ResultDict = {"imdb_title": None}
         assert "imdb_title" in result
-        assert result.get("imdb_title") is None  # type: ignore[call-overload]
+        assert result.get("imdb_title") is None
 
 
 class TestResultDictFullPayload:
@@ -219,11 +219,11 @@ class TestResultDictFullPayload:
             "torrent_tag": "hd",
             "imdb_id": "tt1375666",
             "imdb_title": "Inception",
-            "imdb_year": "2010",
-            "imdb_rating": "8.8",
-            "imdb_votes": "2300000",
+            "imdb_year": 2010,
+            "imdb_rating": 8.8,
+            "imdb_votes": 2_300_000,
             "imdb_title_type": "movie",
-            "imdb_running_time_in_minutes": "148",
+            "imdb_running_time_in_minutes": 148,
             "imdb_genres_list": ["Action", "Adventure", "Sci-Fi"],
             "imdb_credits_cast_list": ["Leonardo DiCaprio"],
             "imdb_credits_director_list": ["Christopher Nolan"],

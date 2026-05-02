@@ -13,6 +13,8 @@ Key improvements over siphonator:
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import pathlib
 import re
@@ -80,7 +82,7 @@ def _process_one(
     tag = torrent.get("torrent_tag") or ""
     torrent_hash = torrent.get("torrent_hash") or ""
 
-    db_record = db.read_by_tag(tag)
+    db_record = db.find_by_tag(tag)
     if not db_record:
         logger.warning("No DB record for tag '{}'; skipping.", tag)
         return
@@ -211,9 +213,7 @@ def _canonical_filename(torrent: dict, largest_fname: str, largest_path_dir: str
     if not first_level:
         return largest_fname
 
-    from movarr.parsing import sanitise as _san
-
-    parent_san = _san(first_level)
+    parent_san = sanitise(first_level)
     if not parent_san:
         return largest_fname
 
@@ -323,9 +323,6 @@ def _resolution_from_index_title(index_title: str) -> str | None:
 
 
 def _parse_genres(raw: object) -> list[str]:
-    import ast
-    import json
-
     if isinstance(raw, list):
         return [str(g).strip() for g in raw]
     if not isinstance(raw, (str, bytes, bytearray)):

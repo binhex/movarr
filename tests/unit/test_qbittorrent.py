@@ -14,6 +14,8 @@ from movarr.qbittorrent import QBittorrentClient
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
+    from movarr.models import ResultDict
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ class TestAddTorrent:
     def test_adds_magnet_url_and_sets_tag(self, mocker: MockerFixture) -> None:
         """Adds torrent via magnet_url and stamps result with a movarr- tag."""
         client, mock_api = _make_client(mocker)
-        result: dict[str, Any] = {
+        result: ResultDict = {
             "index_title": "Test Movie",
             "magnet_url": "magnet:?xt=urn:btih:abc123",
             "torrent_url": "",
@@ -96,7 +98,7 @@ class TestAddTorrent:
     def test_falls_back_to_torrent_url_when_no_magnet(self, mocker: MockerFixture) -> None:
         """Falls back to torrent_url when magnet_url is absent."""
         client, mock_api = _make_client(mocker)
-        result: dict[str, Any] = {
+        result: ResultDict = {
             "index_title": "Test Movie",
             "magnet_url": "",
             "torrent_url": "http://example.com/movie.torrent",
@@ -110,7 +112,7 @@ class TestAddTorrent:
     def test_returns_none_when_no_url(self, mocker: MockerFixture) -> None:
         """Returns None and skips API call when neither URL is set."""
         client, mock_api = _make_client(mocker)
-        result: dict[str, Any] = {"index_title": "Test Movie", "magnet_url": "", "torrent_url": ""}
+        result: ResultDict = {"index_title": "Test Movie", "magnet_url": "", "torrent_url": ""}
 
         assert client.add_torrent(result) is None
         mock_api.torrents_add.assert_not_called()
@@ -119,7 +121,7 @@ class TestAddTorrent:
         """Returns None when torrents_add raises APIError."""
         client, mock_api = _make_client(mocker)
         mock_api.torrents_add.side_effect = qbittorrentapi.APIError("quota exceeded")
-        result: dict[str, Any] = {
+        result: ResultDict = {
             "index_title": "Test Movie",
             "magnet_url": "magnet:?xt=urn:btih:abc123",
         }
@@ -131,7 +133,7 @@ class TestAddTorrent:
         import re
 
         client, _ = _make_client(mocker)
-        result: dict[str, Any] = {"index_title": "Movie", "magnet_url": "magnet:?xt=urn:btih:xyz"}
+        result: ResultDict = {"index_title": "Movie", "magnet_url": "magnet:?xt=urn:btih:xyz"}
         updated = client.add_torrent(result)
 
         assert updated is not None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 from pathlib import Path
@@ -16,6 +17,17 @@ if TYPE_CHECKING:
 __all__ = ["Database", "HistoryRecord"]
 
 _DB_VERSION = 7
+
+
+def _encode_field(value: object) -> str | None:
+    """Serialise a pipeline field for storage: lists → JSON, None → None, else str."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return json.dumps(value)
+    return str(value)
+
+
 _logger = logging.getLogger(__name__)
 
 
@@ -131,18 +143,10 @@ class Database:
         Args:
             result: The completed :class:`~movarr.models.ResultDict`.
         """
-
-        def _enc(value: object) -> str | None:
-            if value is None:
-                return None
-            if isinstance(value, list):
-                return json.dumps(value)
-            return str(value)
-
         record = HistoryRecord(
             index_title=result.get("index_title"),
             result=result.get("result"),
-            result_details=_enc(result.get("result_details")),
+            result_details=_encode_field(result.get("result_details")),
             index_details=result.get("index_details"),
             index_pubdate=result.get("index_pubdate"),
             index_seeders=result.get("index_seeders"),
@@ -165,13 +169,13 @@ class Database:
             imdb_votes=result.get("imdb_votes"),
             imdb_title_type=result.get("imdb_title_type"),
             imdb_running_time_in_minutes=result.get("imdb_running_time_in_minutes"),
-            imdb_genres_list=_enc(result.get("imdb_genres_list")),
-            imdb_credits_director_list=_enc(result.get("imdb_credits_director_list")),
-            imdb_credits_writer_list=_enc(result.get("imdb_credits_writer_list")),
-            imdb_credits_cast_list=_enc(result.get("imdb_credits_cast_list")),
-            imdb_credits_character_list=_enc(result.get("imdb_credits_character_list")),
-            imdb_language_list=_enc(result.get("imdb_language_list")),
-            imdb_country_list=_enc(result.get("imdb_country_list")),
+            imdb_genres_list=_encode_field(result.get("imdb_genres_list")),
+            imdb_credits_director_list=_encode_field(result.get("imdb_credits_director_list")),
+            imdb_credits_writer_list=_encode_field(result.get("imdb_credits_writer_list")),
+            imdb_credits_cast_list=_encode_field(result.get("imdb_credits_cast_list")),
+            imdb_credits_character_list=_encode_field(result.get("imdb_credits_character_list")),
+            imdb_language_list=_encode_field(result.get("imdb_language_list")),
+            imdb_country_list=_encode_field(result.get("imdb_country_list")),
             imdb_certification=result.get("imdb_certification"),
             imdb_cert_source=result.get("imdb_cert_source"),
         )
@@ -234,10 +238,6 @@ class Database:
         with Session(self._engine) as session:
             return session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).first()
 
-    def read_by_tag(self, torrent_tag: str) -> HistoryRecord | None:
-        """Alias for :meth:`find_by_tag` — returns a history record by tag."""
-        return self.find_by_tag(torrent_tag)
-
     def genres_for_tag(self, torrent_tag: str) -> list[str]:
         """Return the genre list stored for *torrent_tag*, or an empty list.
 
@@ -256,8 +256,6 @@ class Database:
             pass
         # Legacy: Python repr list e.g. "['Action', 'Comedy']"
         try:
-            import ast
-
             value = ast.literal_eval(raw)
             if isinstance(value, list):
                 return [str(g) for g in value]

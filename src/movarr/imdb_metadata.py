@@ -175,12 +175,12 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
             return None
         return str(val)
 
-    # Strip non-digits from votes and runtime.
+    # Strip non-digits from votes and runtime, then normalise to int.
     raw_votes = _nona("imdb_votes")
-    votes = "".join(re.findall(r"\d+", raw_votes)) if raw_votes else None
+    votes: int | None = int("".join(re.findall(r"\d+", raw_votes))) if raw_votes else None
 
     raw_runtime = _nona("runtime")
-    runtime = "".join(re.findall(r"\d+", raw_runtime)) if raw_runtime else None
+    runtime: int | None = int("".join(re.findall(r"\d+", raw_runtime))) if raw_runtime else None
 
     # Split comma-separated credits.
     cast = [x.strip() for x in (_nona("actors") or "").split(",") if x.strip()] or None
@@ -197,15 +197,22 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     countries = _convert_countries(_nona("country"))
     languages = _convert_languages(_nona("language"))
 
+    # Normalise year and rating to canonical numeric types.
+    raw_year = _nona("year")
+    year: int | None = int(raw_year) if raw_year else None
+
+    raw_rating = _nona("imdb_rating")
+    rating: float | None = float(raw_rating) if raw_rating else None
+
     result.update(
         {
             "imdb_title": _nona("title"),
-            "imdb_year": _nona("year"),
+            "imdb_year": year,
             "imdb_poster_url": _nona("poster"),
             "imdb_trailer_url": None,
             "imdb_plot_summary": _nona("plot"),
             "imdb_plot_outline": None,
-            "imdb_rating": _nona("imdb_rating"),
+            "imdb_rating": rating,
             "imdb_votes": votes,
             "imdb_title_type": _nona("type"),
             "imdb_running_time_in_minutes": runtime,

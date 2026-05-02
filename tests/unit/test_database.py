@@ -69,26 +69,18 @@ class TestWrite:
 # ---------------------------------------------------------------------------
 
 
-class TestReadByTag:
-    """Database.read_by_tag() must return the correct record or None."""
+class TestFindByTag:
+    """Database.find_by_tag() must return the correct record or None."""
 
     def test_returns_record_for_known_tag(self, db: Database) -> None:
         result = _minimal_result(torrent_tag="unique-tag-001")
         db.write(result)
-        record = db.read_by_tag("unique-tag-001")
+        record = db.find_by_tag("unique-tag-001")
         assert record is not None
         assert record.torrent_tag == "unique-tag-001"
 
     def test_returns_none_for_unknown_tag(self, db: Database) -> None:
-        assert db.read_by_tag("no-such-tag") is None
-
-    def test_find_by_tag_same_result(self, db: Database) -> None:
-        result = _minimal_result(torrent_tag="shared-tag")
-        db.write(result)
-        rec1 = db.find_by_tag("shared-tag")
-        rec2 = db.read_by_tag("shared-tag")
-        assert rec1 is not None and rec2 is not None
-        assert rec1.torrent_tag == rec2.torrent_tag == "shared-tag"
+        assert db.find_by_tag("no-such-tag") is None
 
 
 # ---------------------------------------------------------------------------

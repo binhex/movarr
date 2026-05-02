@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from movarr.config import Config, EmailConfig
 from movarr.notifications import (
@@ -16,18 +16,20 @@ from movarr.notifications import (
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
+    from movarr.models import ResultDict
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_full_result(**overrides: Any) -> dict[str, Any]:
+def _make_full_result(**overrides: object) -> ResultDict:
     """Return a fully-populated result dict for notification testing."""
-    base: dict[str, Any] = {
+    base: ResultDict = {
         "imdb_title": "Inception",
-        "imdb_year": "2010",
-        "imdb_rating": "8.8",
-        "imdb_votes": "2000000",
+        "imdb_year": 2010,
+        "imdb_rating": 8.8,
+        "imdb_votes": 2_000_000,
         "imdb_id": "tt1375666",
         "imdb_plot_outline": "A thief who steals corporate secrets.",
         "imdb_credits_cast_list": ["Leonardo DiCaprio", "Joseph Gordon-Levitt"],
@@ -38,7 +40,7 @@ def _make_full_result(**overrides: Any) -> dict[str, Any]:
         "index_size_mb": "8192",
         "result_details": ["Quality: Rating: 8.8"],
     }
-    base.update(overrides)
+    base.update(overrides)  # type: ignore[typeddict-item]
     return base
 
 
@@ -52,19 +54,19 @@ class TestBuildSubject:
 
     def test_with_year_and_rating(self) -> None:
         """Subject includes year and rating when both are present."""
-        result = {"imdb_title": "Inception", "imdb_year": "2010", "imdb_rating": "8.8"}
+        result: ResultDict = {"imdb_title": "Inception", "imdb_year": 2010, "imdb_rating": 8.8}
         assert _build_subject(result) == "movarr: Inception (2010) — IMDb 8.8 — Queued"
 
     def test_without_year_omits_parentheses(self) -> None:
         """Subject omits year parentheses when imdb_year is absent."""
-        result = {"imdb_title": "Unknown Film", "imdb_year": None, "imdb_rating": "7.5"}
+        result: ResultDict = {"imdb_title": "Unknown Film", "imdb_year": None, "imdb_rating": 7.5}
         subject = _build_subject(result)
         assert "()" not in subject
         assert "Unknown Film" in subject
 
     def test_without_rating_uses_question_mark(self) -> None:
         """Subject shows '?' for rating when imdb_rating is absent."""
-        result = {"imdb_title": "Film", "imdb_year": "2020", "imdb_rating": None}
+        result: ResultDict = {"imdb_title": "Film", "imdb_year": 2020, "imdb_rating": None}
         assert "IMDb ?" in _build_subject(result)
 
     def test_missing_title_defaults_to_unknown(self) -> None:
@@ -105,7 +107,7 @@ class TestBuildBody:
         """Body shows '—' for actors when cast list is None (null-guard)."""
         cfg = Config()
         result = _make_full_result()
-        result["imdb_credits_cast_list"] = None  # type: ignore[typeddict-item]
+        result["imdb_credits_cast_list"] = None
         assert "—" in _build_body(result, cfg)
 
     def test_add_paused_true_shows_paused(self) -> None:

@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import pytest
+    from pytest_mock import MockerFixture
+
+    from movarr.models import ResultDict
 
 from movarr.config import Config
 from movarr.imdb_metadata import _fetch_imdbpie, _fetch_omdb, fetch_metadata
@@ -15,14 +17,14 @@ from movarr.imdb_metadata import _fetch_imdbpie, _fetch_omdb, fetch_metadata
 # ---------------------------------------------------------------------------
 
 
-def _make_result(**overrides: Any) -> dict:
+def _make_result(**overrides: object) -> ResultDict:
     """Build a minimal pipeline result dict for metadata tests."""
-    base: dict = {
+    base: ResultDict = {
         "imdb_id": "tt0133093",
         "result": "Passed",
         "result_details": [],
     }
-    base.update(overrides)
+    base.update(overrides)  # type: ignore[typeddict-item]
     return base
 
 
@@ -59,7 +61,7 @@ def _make_imdbpie_data() -> tuple[dict, dict, dict, dict]:
     return title_data, genres_data, credits_data, aux_data
 
 
-def _mock_imdbpie_client(mocker: pytest.MonkeyPatch, *, raise_on_fetch: bool = False) -> Any:
+def _mock_imdbpie_client(mocker: MockerFixture, *, raise_on_fetch: bool = False) -> Any:
     """Set up sys.modules mock for imdbpie and return (mock_module, mock_client)."""
     title_data, genres_data, credits_data, aux_data = _make_imdbpie_data()
     mock_imdbpie = mocker.MagicMock()
@@ -85,12 +87,12 @@ class TestFetchMetadata:
     """Tests for the public fetch_metadata() orchestrator."""
 
     def test_no_imdb_id_sets_failed(self) -> None:
-        result: dict = {"result": "Passed", "result_details": []}
+        result: ResultDict = {"result": "Passed", "result_details": []}
         cfg = Config()
         out = fetch_metadata(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_imdbpie_success_returns_passed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_imdbpie_success_returns_passed(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         cfg = Config()
@@ -98,7 +100,7 @@ class TestFetchMetadata:
         assert out["result"] == "Passed"
         assert out.get("imdb_title") == "The Matrix"
 
-    def test_imdbpie_failure_tries_omdb_fallback(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_imdbpie_failure_tries_omdb_fallback(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         mock_omdb_module = mocker.MagicMock()
         mock_omdb_client = mocker.MagicMock()
@@ -126,7 +128,7 @@ class TestFetchMetadata:
         out = fetch_metadata(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_both_strategies_fail_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_both_strategies_fail_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         mock_omdb_module = mocker.MagicMock()
         mock_omdb_module.OMDB.side_effect = RuntimeError("omdb unavailable")
@@ -145,7 +147,7 @@ class TestFetchMetadata:
 class TestFetchImdbpie:
     """Tests for _fetch_imdbpie()."""
 
-    def test_successful_fetch_populates_all_fields(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_fetch_populates_all_fields(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         out = _fetch_imdbpie(result)
@@ -162,7 +164,7 @@ class TestFetchImdbpie:
         assert out["imdb_language_list"] == ["English"]
         assert out["imdb_country_list"] == ["US"]
 
-    def test_successful_fetch_populates_credits(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_fetch_populates_credits(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         out = _fetch_imdbpie(result)
@@ -171,37 +173,37 @@ class TestFetchImdbpie:
         assert out["imdb_credits_cast_list"] == ["Keanu Reeves"]
         assert out["imdb_credits_character_list"] == ["Neo"]
 
-    def test_successful_fetch_sets_trailer_url(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_fetch_sets_trailer_url(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out.get("imdb_trailer_url") == "https://imdb.com/video/vi1234567"
 
-    def test_imdbpie_import_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_imdbpie_import_error_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out["result"] == "Failed"
 
-    def test_data_fetch_error_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_data_fetch_error_sets_failed(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker, raise_on_fetch=True)
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out["result"] == "Failed"
 
-    def test_poster_url_populated(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_poster_url_populated(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out.get("imdb_poster_url") == "https://example.com/poster.jpg"
 
-    def test_plot_summary_populated(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_plot_summary_populated(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out.get("imdb_plot_summary") == "A computer hacker learns the truth about reality."
 
-    def test_no_cert_sets_cert_source_none(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_no_cert_sets_cert_source_none(self, mocker: MockerFixture) -> None:
         title_data, genres_data, credits_data, _ = _make_imdbpie_data()
         aux_data: dict = {"spokenLanguages": ["English"], "origins": ["US"]}
         mock_imdbpie = mocker.MagicMock()
@@ -225,14 +227,14 @@ class TestFetchImdbpie:
 class TestFetchOmdb:
     """Tests for _fetch_omdb()."""
 
-    def _setup_omdb_mock(self, mocker: pytest.MonkeyPatch, return_value: dict) -> None:
+    def _setup_omdb_mock(self, mocker: MockerFixture, return_value: dict) -> None:
         mock_omdb = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_omdb.OMDB.return_value = mock_client
         mock_client.get_movie.return_value = return_value
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
 
-    def test_successful_fetch_populates_fields(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_successful_fetch_populates_fields(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
             {
@@ -259,10 +261,10 @@ class TestFetchOmdb:
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Passed"
         assert out["imdb_title"] == "The Matrix"
-        assert out["imdb_year"] == "1999"
+        assert out["imdb_year"] == 1999
         assert out["imdb_cert_source"] == "omdb"
 
-    def test_cert_source_none_when_no_rating(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_cert_source_none_when_no_rating(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
             {
@@ -276,7 +278,7 @@ class TestFetchOmdb:
         out = _fetch_omdb(result, cfg)
         assert out.get("imdb_cert_source") is None
 
-    def test_not_rated_normalised_to_none(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_not_rated_normalised_to_none(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
             {"title": "The Matrix", "year": "1999", "rated": "Not Rated"},
@@ -286,7 +288,7 @@ class TestFetchOmdb:
         out = _fetch_omdb(result, cfg)
         assert out.get("imdb_certification") is None
 
-    def test_omdb_exception_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_omdb_exception_sets_failed(self, mocker: MockerFixture) -> None:
         mock_omdb = mocker.MagicMock()
         mock_client = mocker.MagicMock()
         mock_omdb.OMDB.return_value = mock_client
@@ -297,7 +299,7 @@ class TestFetchOmdb:
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_omdb_constructor_exception_sets_failed(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_omdb_constructor_exception_sets_failed(self, mocker: MockerFixture) -> None:
         mock_omdb = mocker.MagicMock()
         mock_omdb.OMDB.side_effect = RuntimeError("no connection")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
@@ -306,7 +308,7 @@ class TestFetchOmdb:
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_votes_digits_only_extracted(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_votes_digits_only_extracted(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
             {"title": "The Matrix", "year": "1999", "imdb_votes": "1,500,000", "imdb_rating": "8.7"},
@@ -314,12 +316,12 @@ class TestFetchOmdb:
         result = _make_result()
         cfg = Config()
         out = _fetch_omdb(result, cfg)
-        # Votes should be digits only (no commas)
+        # Votes should be an integer (no commas or non-digit chars)
         votes = out.get("imdb_votes")
         if votes:
-            assert votes.isdigit()
+            assert isinstance(votes, int)
 
-    def test_genres_split_by_comma(self, mocker: pytest.MonkeyPatch) -> None:
+    def test_genres_split_by_comma(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
             {"title": "The Matrix", "year": "1999", "genre": "Action, Sci-Fi, Thriller"},

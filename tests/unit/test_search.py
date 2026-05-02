@@ -7,15 +7,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
+    from movarr.models import ResultDict
+
 from movarr.config import Config, SearchCriteriaConfig
-from movarr.search import _enrich_index_metadata, _process_criteria, run_search
+from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, run_search
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _base_result(index_title: str = "The Matrix 1999 1080p BluRay") -> dict[str, Any]:
+def _base_result(index_title: str = "The Matrix 1999 1080p BluRay") -> ResultDict:
     """Minimal result dict as returned by jackett.search."""
     return {"index_title": index_title}
 
@@ -63,13 +65,13 @@ class TestEnrichIndexMetadata:
             assert "movie_title_and_year_compare" not in result
 
     def test_empty_index_title_returns_result_unchanged(self) -> None:
-        raw: dict[str, Any] = {"index_title": ""}
+        raw: ResultDict = {"index_title": ""}
         result = _enrich_index_metadata(raw)
         assert "movie_title" not in result
         assert "result" not in result
 
     def test_missing_index_title_key_returns_result_unchanged(self) -> None:
-        raw: dict[str, Any] = {}
+        raw: ResultDict = {}
         result = _enrich_index_metadata(raw)
         assert "movie_title" not in result
 
@@ -82,7 +84,7 @@ class TestEnrichIndexMetadata:
         assert "index_title_after_year_to_end" in result
 
     def test_existing_fields_preserved(self) -> None:
-        raw: dict[str, Any] = {
+        raw: ResultDict = {
             "index_title": "The Matrix 1999 1080p BluRay",
             "index_size": "8000000000",
         }
@@ -144,7 +146,7 @@ class TestRunSearch:
         run_search(cfg, qbt, db)
 
         call_kwargs = mock_process.call_args_list[0][1]
-        assert call_kwargs["jackett"] is mock_jackett_cls.return_value
+        assert call_kwargs["session"].jackett is mock_jackett_cls.return_value
 
 
 # ---------------------------------------------------------------------------
@@ -166,15 +168,18 @@ class TestProcessCriteria:
         db: Any,
         config: Config | None = None,
     ) -> None:
-        _process_criteria(
-            criteria_cfg=self._criteria_cfg(),
-            category="2000",
-            indexer="all",
+        session = _SearchSession(
             config=config or Config(),
             jackett=jackett,
             qbt=qbt,
             db=db,
             library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=self._criteria_cfg(),
+            category="2000",
+            indexer="all",
+            session=session,
         )
 
     def test_happy_path_full_pipeline(self, mocker: MockerFixture) -> None:
@@ -407,10 +412,12 @@ class TestProcessCriteria:
         )
         mocker.patch("movarr.search.send_queued_notification")
         jackett = mocker.MagicMock()
-        jackett.search.return_value = iter([
-            _base_result("The Matrix 1999 1080p BluRay"),
-            _base_result("Inception 2010 1080p BluRay"),
-        ])
+        jackett.search.return_value = iter(
+            [
+                _base_result("The Matrix 1999 1080p BluRay"),
+                _base_result("Inception 2010 1080p BluRay"),
+            ]
+        )
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()

@@ -110,7 +110,7 @@ class QBittorrentClient:
     def list_by_category(self) -> dict[str, Any]:
         """Return a ``{hash: torrent_info}`` dict for all category torrents."""
         torrents = self._client.torrents_info(category=self._category)
-        torrent_map = {t["hash"]: t for t in torrents}
+        torrent_map: dict[str, Any] = {str(t["hash"]): t for t in torrents}
         _logger.debug("Found {} torrent(s) in category '{}'.", len(torrent_map), self._category)
         return torrent_map
 

@@ -180,7 +180,7 @@ def _connect_qbt(config: Config) -> QBittorrentClient:
 def _write_pid(pid_path: str) -> None:
     try:
         os.makedirs(os.path.dirname(pid_path), exist_ok=True)
-        with open(pid_path, "w") as f:
+        with open(pid_path, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
         logger.debug("PID {} written to '{}'.", os.getpid(), pid_path)
     except OSError:

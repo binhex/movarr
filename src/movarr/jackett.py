@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import urllib.parse
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import xmltodict
 from loguru import logger as _logger
@@ -133,7 +133,6 @@ class JackettClient:
         # xmltodict returns a dict (not a list) when there is exactly one item.
         if isinstance(items, dict):
             items = [items]
-        from typing import cast
 
         return cast("list[dict[str, Any]]", items)
 

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from loguru import logger as _logger
 
 
-def create_logger(log_format: str, log_level: str = "INFO", log_path: str | None = None):  # type: ignore[no-untyped-def]
+def create_logger(log_format: str, log_level: str = "INFO", log_path: str | None = None) -> Any:
     """Return a configured Loguru logger instance.
 
     Args:

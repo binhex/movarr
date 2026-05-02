@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import requests
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _make_session_mock(mocker: MockerFixture, *, status_code: int = 200, content: bytes = b"ok") -> requests.Response:
+def _make_session_mock(mocker: MockerFixture, *, status_code: int = 200, content: bytes = b"ok") -> Any:
     """Patch requests.Session and return the mock response.
 
     The mock is set up so that ``with requests.Session() as session:``
@@ -120,7 +120,7 @@ class TestHttpClientGet:
         client = HttpClient(read_timeout=30.0)
         captured: list[float] = []
 
-        def _capture(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def _capture(*args, **kwargs):
             captured.append(client._read_timeout)
             return mocker.MagicMock(spec=requests.Response)
 

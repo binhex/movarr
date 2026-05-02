@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pytest
+    from pytest_mock import MockerFixture
 
 from movarr.file_utils import (
     copy_with_verify,
@@ -67,7 +67,7 @@ class TestMakeDirectory:
         result = make_directory(target)
         assert result is True
 
-    def test_returns_false_on_permission_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_false_on_permission_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mocker.patch("pathlib.Path.mkdir", side_effect=PermissionError("denied"))
         result = make_directory(tmp_path / "new_dir")
         assert result is False
@@ -78,7 +78,7 @@ class TestMakeDirectory:
         assert result is True
         assert Path(target).is_dir()
 
-    def test_returns_false_on_os_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_false_on_os_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mocker.patch("pathlib.Path.mkdir", side_effect=OSError("filesystem error"))
         result = make_directory(tmp_path / "new_dir")
         assert result is False
@@ -99,7 +99,7 @@ class TestDeleteFile:
         result = delete_file(f)
         assert result is True
 
-    def test_returns_false_on_permission_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_false_on_permission_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         f = tmp_path / "locked.txt"
         f.write_text("locked")
         mocker.patch("pathlib.Path.unlink", side_effect=PermissionError("denied"))
@@ -113,7 +113,7 @@ class TestDeleteFile:
         assert result is True
         assert not f.exists()
 
-    def test_returns_false_on_os_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_false_on_os_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         f = tmp_path / "err.txt"
         f.write_text("data")
         mocker.patch("pathlib.Path.unlink", side_effect=OSError("io error"))
@@ -133,7 +133,7 @@ class TestCopyWithVerify:
         assert dst.is_file()
         assert dst.read_bytes() == b"video data"
 
-    def test_skips_copy_when_dst_already_matches(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_skips_copy_when_dst_already_matches(self, tmp_path: Path, mocker: MockerFixture) -> None:
         content = b"identical content"
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst.mkv"
@@ -159,9 +159,7 @@ class TestCopyWithVerify:
         result = copy_with_verify(src, dst)
         assert result is False
 
-    def test_returns_false_on_post_copy_checksum_mismatch(
-        self, tmp_path: Path, mocker: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_false_on_post_copy_checksum_mismatch(self, tmp_path: Path, mocker: MockerFixture) -> None:
         src = tmp_path / "src.mkv"
         dst_dir = tmp_path / "dst"
         dst_dir.mkdir()
@@ -172,9 +170,7 @@ class TestCopyWithVerify:
         result = copy_with_verify(src, dst)
         assert result is False
 
-    def test_returns_false_when_directory_creation_fails(
-        self, tmp_path: Path, mocker: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_false_when_directory_creation_fails(self, tmp_path: Path, mocker: MockerFixture) -> None:
         src = tmp_path / "src.mkv"
         src.write_bytes(b"data")
         dst = tmp_path / "newdir" / "dst.mkv"
@@ -194,14 +190,12 @@ class TestCopyWithVerify:
 class TestResolutionFromFfprobe:
     """Tests for resolution_from_ffprobe()."""
 
-    def test_returns_none_when_ffmpeg_not_installed(
-        self, tmp_path: Path, mocker: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_when_ffmpeg_not_installed(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"ffmpeg": None})
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result is None
 
-    def test_maps_1920_width_to_1080(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_maps_1920_width_to_1080(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{"width": 1920, "height": 1080}]}
         mock_ffmpeg.Error = RuntimeError
@@ -209,7 +203,7 @@ class TestResolutionFromFfprobe:
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result == "1080"
 
-    def test_maps_3840_width_to_2160(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_maps_3840_width_to_2160(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{"width": 3840, "height": 2160}]}
         mock_ffmpeg.Error = RuntimeError
@@ -217,7 +211,7 @@ class TestResolutionFromFfprobe:
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result == "2160"
 
-    def test_maps_1280_width_to_720(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_maps_1280_width_to_720(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{"width": 1280, "height": 720}]}
         mock_ffmpeg.Error = RuntimeError
@@ -225,7 +219,7 @@ class TestResolutionFromFfprobe:
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result == "720"
 
-    def test_returns_raw_height_for_unmapped_width(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_raw_height_for_unmapped_width(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{"width": 854, "height": 480}]}
         mock_ffmpeg.Error = RuntimeError
@@ -233,7 +227,7 @@ class TestResolutionFromFfprobe:
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result == "480"
 
-    def test_returns_none_on_probe_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_none_on_probe_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.Error = RuntimeError
         mock_ffmpeg.probe.side_effect = RuntimeError("probe failed")
@@ -241,7 +235,7 @@ class TestResolutionFromFfprobe:
         result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
         assert result is None
 
-    def test_uses_custom_ffprobe_path(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_uses_custom_ffprobe_path(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{"width": 1920, "height": 1080}]}
         mock_ffmpeg.Error = RuntimeError
@@ -251,7 +245,7 @@ class TestResolutionFromFfprobe:
         _, kwargs = mock_ffmpeg.probe.call_args
         assert kwargs.get("cmd") == "/usr/bin/ffprobe"
 
-    def test_returns_none_on_key_error(self, tmp_path: Path, mocker: pytest.MonkeyPatch) -> None:
+    def test_returns_none_on_key_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
         mock_ffmpeg = mocker.MagicMock()
         mock_ffmpeg.probe.return_value = {"streams": [{}]}  # missing width/height
         mock_ffmpeg.Error = RuntimeError

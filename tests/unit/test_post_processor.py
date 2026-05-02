@@ -296,9 +296,7 @@ class TestPickPath:
         uhd: str = "",
         max_cert: str | None = None,
     ) -> CopyLibraryRuleConfig:
-        return CopyLibraryRuleConfig(
-            name=name, genres=genres, hd_path=hd, uhd_path=uhd, max_certification=max_cert
-        )
+        return CopyLibraryRuleConfig(name=name, genres=genres, hd_path=hd, uhd_path=uhd, max_certification=max_cert)
 
     def test_no_rules_returns_default_hd_path(self) -> None:
         result = _pick_path(["Action"], "15", "1080", [], self._default())
@@ -535,9 +533,7 @@ class TestResolveDestination:
     def test_omdb_cert_not_applied_to_bbfc_rules(self, mocker: MockerFixture) -> None:
         """Bug #8: MPAA certs from omdb must not be routed via BBFC rules."""
         cfg = self._config_with_default()
-        rule = CopyLibraryRuleConfig(
-            name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids"
-        )
+        rule = CopyLibraryRuleConfig(name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids")
         cfg.post_process.copy_library_rules = [rule]
         # MPAA "R" from omdb → effective_cert="" → cert check fails → default path used
         rec = self._db_record(mocker, genres='["Animation"]', cert="R", cert_source="omdb")
@@ -546,9 +542,7 @@ class TestResolveDestination:
 
     def test_imdbpie_cert_applied_to_bbfc_routing(self, mocker: MockerFixture) -> None:
         cfg = self._config_with_default()
-        rule = CopyLibraryRuleConfig(
-            name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids"
-        )
+        rule = CopyLibraryRuleConfig(name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids")
         cfg.post_process.copy_library_rules = [rule]
         # cert "15" > "PG" in BBFC → cert fails → default path
         rec = self._db_record(mocker, genres='["Animation"]', cert="15", cert_source="imdbpie")
@@ -557,9 +551,7 @@ class TestResolveDestination:
 
     def test_imdbpie_u_cert_routes_to_kids_path(self, mocker: MockerFixture) -> None:
         cfg = self._config_with_default()
-        rule = CopyLibraryRuleConfig(
-            name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids"
-        )
+        rule = CopyLibraryRuleConfig(name="kids", genres=["Animation"], max_certification="PG", hd_path="/media/kids")
         cfg.post_process.copy_library_rules = [rule]
         rec = self._db_record(mocker, genres='["Animation"]', cert="U", cert_source="imdbpie")
         result = _resolve_destination(rec, cfg)
@@ -605,7 +597,7 @@ class TestRunPostProcessing:
 
         run_post_processing(cfg, qbt, db)
 
-        db.read_by_tag.assert_not_called()
+        db.find_by_tag.assert_not_called()
 
     def test_processes_each_completed_torrent(self, mocker: MockerFixture) -> None:
         cfg = Config()
@@ -738,9 +730,7 @@ class TestProcessOne:
         cfg = Config()
         cfg.post_process.remove_completed = remove_completed
         cfg.post_process.post_process_enabled = True
-        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(
-            hd_path="/media/hd", uhd_path=""
-        )
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
         return cfg
 
     def _torrent(self, tag: str = "tag1", torrent_hash: str = "abc123") -> dict[str, Any]:
@@ -764,9 +754,9 @@ class TestProcessOne:
         return rec
 
     def test_no_db_record_returns_early(self, mocker: MockerFixture) -> None:
-        """When db.read_by_tag returns None, everything else is skipped."""
+        """When db.find_by_tag returns None, everything else is skipped."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = None
+        db.find_by_tag.return_value = None
         qbt = mocker.MagicMock()
 
         _process_one(self._torrent(), self._config(), qbt, db)
@@ -776,7 +766,7 @@ class TestProcessOne:
     def test_no_files_to_copy_returns_early(self, mocker: MockerFixture) -> None:
         """When _build_copy_list returns empty, processing is skipped."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=[])
         qbt = mocker.MagicMock()
 
@@ -787,7 +777,7 @@ class TestProcessOne:
     def test_no_destination_returns_early(self, mocker: MockerFixture) -> None:
         """When _resolve_destination returns None, files are not copied."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value=None)
         qbt = mocker.MagicMock()
@@ -799,7 +789,7 @@ class TestProcessOne:
     def test_make_directory_fails_returns_early(self, mocker: MockerFixture) -> None:
         """When make_directory returns False, copy is not attempted."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
         mocker.patch("movarr.post_processor.make_directory", return_value=False)
@@ -812,7 +802,7 @@ class TestProcessOne:
     def test_copy_verify_fails_does_not_set_verified(self, mocker: MockerFixture) -> None:
         """When copy_with_verify returns False, set_verified is not called."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
         mocker.patch("movarr.post_processor.make_directory", return_value=True)
@@ -827,7 +817,7 @@ class TestProcessOne:
     def test_full_happy_path_sets_verified_and_deletes_torrent(self, mocker: MockerFixture) -> None:
         """All steps succeed: set_verified called and torrent deleted (remove_completed=True)."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
         mocker.patch("movarr.post_processor.make_directory", return_value=True)
@@ -844,7 +834,7 @@ class TestProcessOne:
     def test_copy_succeeds_without_remove_completed(self, mocker: MockerFixture) -> None:
         """All steps succeed but remove_completed=False: set_verified but no torrent deletion."""
         db = mocker.MagicMock()
-        db.read_by_tag.return_value = self._db_record(mocker)
+        db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
         mocker.patch("movarr.post_processor.make_directory", return_value=True)
@@ -860,7 +850,7 @@ class TestProcessOne:
         """imdb_title that sanitises to '.' (single dot) is replaced with 'Unknown'."""
         db = mocker.MagicMock()
         rec = self._db_record(mocker, title="...")
-        db.read_by_tag.return_value = rec
+        db.find_by_tag.return_value = rec
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
         mock_mkdir = mocker.patch("movarr.post_processor.make_directory", return_value=True)

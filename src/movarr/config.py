@@ -207,7 +207,7 @@ class DefaultCopyLibraryConfig(BaseModel):
     """Fallback destination paths when no routing rule matches."""
 
     hd_path: str = ""
-    uhd_path: str = ""
+    uhd_path: str | None = None
 
 
 class PostProcessConfig(BaseModel):
@@ -294,8 +294,3 @@ def load_config(config_path: str | Path) -> Config:
 
     merged = _deep_merge(_default_config_dict(), raw)
     return Config.model_validate(merged)
-
-
-def get_config_path(config_dir: str | Path) -> Path:
-    """Return the canonical path to config.yml inside *config_dir*."""
-    return Path(config_dir) / "config.yml"

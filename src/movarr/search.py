@@ -13,6 +13,7 @@ For each configured search criteria tier:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -41,6 +42,17 @@ if TYPE_CHECKING:
 __all__ = ["run_search"]
 
 
+@dataclass(frozen=True)
+class _SearchSession:
+    """Immutable session-level dependencies shared across all criteria tiers."""
+
+    config: Config
+    jackett: JackettClient
+    qbt: QBittorrentClient
+    db: Database
+    library_walk: list | None
+
+
 def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     """Run the full search pipeline for all configured criteria tiers.
 
@@ -63,6 +75,14 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     if config.general.library_path_list:
         library_walk = list(walk_library(config.general.library_path_list))
 
+    session = _SearchSession(
+        config=config,
+        jackett=jackett,
+        qbt=qbt,
+        db=db,
+        library_walk=library_walk,
+    )
+
     for criteria_cfg in site_cfg.search:
         # Apply any per-indexer category override.
         indexer = site_cfg.jackett_indexer
@@ -78,32 +98,19 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
             criteria_cfg.criteria,
             category,
         )
-        _process_criteria(
-            criteria_cfg=criteria_cfg,
-            category=category,
-            indexer=indexer,
-            config=config,
-            jackett=jackett,
-            qbt=qbt,
-            db=db,
-            library_walk=library_walk,
-        )
+        _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=indexer, session=session)
 
 
 def _process_criteria(
     criteria_cfg: SearchCriteriaConfig,
     category: str,
     indexer: str,
-    config: Config,
-    jackett: JackettClient,
-    qbt: QBittorrentClient,
-    db: Database,
-    library_walk: list | None,
+    session: _SearchSession,
 ) -> None:
     """Fetch and process all Jackett results for one criteria tier."""
     site_dict = criteria_cfg.model_dump()
 
-    for result in jackett.search(indexer, criteria_cfg.criteria, category):
+    for result in session.jackett.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(result)
 
         if not result.get("movie_title"):
@@ -114,36 +121,36 @@ def _process_criteria(
             logger.debug("No year from '{}'; skipping.", result.get("index_title"))
             continue
 
-        result = filter_by_index(result, site_dict, config, library_walk)
+        result = filter_by_index(result, site_dict, session.config, session.library_walk)
         if result.get("result") != "Passed":
-            db.write(result)
+            session.db.write(result)
             continue
 
         # Resolve IMDb ID if not supplied by the index.
         if not result.get("imdb_id"):
-            result = search_for_imdb_id(result, config)
+            result = search_for_imdb_id(result, session.config)
         if result.get("result") != "Passed" or not result.get("imdb_id"):
-            db.write(result)
+            session.db.write(result)
             continue
 
-        result = fetch_metadata(result, config)
+        result = fetch_metadata(result, session.config)
         if result.get("result") != "Passed":
-            db.write(result)
+            session.db.write(result)
             continue
 
-        result = filter_by_imdb(result, config, library_walk)
+        result = filter_by_imdb(result, session.config, session.library_walk)
         if result.get("result") != "Passed":
-            db.write(result)
+            session.db.write(result)
             continue
 
         logger.info("'{}' passed all filters.", result.get("index_title"))
 
-        send_queued_notification(result, config)
+        send_queued_notification(result, session.config)
 
-        updated = qbt.add_torrent(result)
+        updated = session.qbt.add_torrent(result)
         if updated is not None:
             result = updated
-        db.write(result)
+        session.db.write(result)
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:
@@ -160,15 +167,15 @@ def _enrich_index_metadata(result: ResultDict) -> ResultDict:
     after_year = extract_after_year(san)
     resolution = extract_resolution(san)
 
-    result["movie_title"] = title  # type: ignore[typeddict-item]
-    result["movie_title_year"] = year  # type: ignore[typeddict-item]
-    result["index_title_after_year_to_end"] = after_year  # type: ignore[typeddict-item]
-    result["index_title_resolution"] = resolution  # type: ignore[typeddict-item]
+    result["movie_title"] = title
+    result["movie_title_year"] = year
+    result["index_title_after_year_to_end"] = after_year
+    result["index_title_resolution"] = resolution
 
     # Build compare strings used by duplicate/bad-title checks.
     if title and year:
-        result["movie_title_compare"] = normalise_for_compare(title)  # type: ignore[typeddict-item]
-        result["movie_title_and_year_compare"] = normalise_for_compare(f"{title} {year}")  # type: ignore[typeddict-item]
+        result["movie_title_compare"] = normalise_for_compare(title)
+        result["movie_title_and_year_compare"] = normalise_for_compare(f"{title} {year}")
 
     result["result"] = "Passed"
     result["result_details"] = []
