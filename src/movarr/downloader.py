@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from typing import Any
+from typing import Any, cast
 
 import backoff
 import requests
@@ -89,7 +89,9 @@ class HttpClient:
             )
 
         if not 200 <= response.status_code <= 299:
-            raise HttpError(f"HTTP {response.status_code} for {url!r}: {response.content[:200]}")
+            raise HttpError(
+                f"HTTP {response.status_code} for {url!r}: {response.content[:200].decode('utf-8', errors='replace')}"
+            )
 
         return response
 
@@ -113,10 +115,10 @@ class HttpClient:
             original = self._read_timeout
             self._read_timeout = read_timeout
             try:
-                return self._request("get", url, headers=headers, auth=auth)
+                return cast("requests.Response", self._request("get", url, headers=headers, auth=auth))
             finally:
                 self._read_timeout = original
-        return self._request("get", url, headers=headers, auth=auth)
+        return cast("requests.Response", self._request("get", url, headers=headers, auth=auth))
 
     def post(
         self,
@@ -134,4 +136,4 @@ class HttpClient:
             headers: Extra request headers.
             auth: Optional ``(username, password)`` tuple.
         """
-        return self._request("post", url, headers=headers, data=data, auth=auth)
+        return cast("requests.Response", self._request("post", url, headers=headers, data=data, auth=auth))

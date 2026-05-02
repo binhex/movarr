@@ -18,11 +18,10 @@ from __future__ import annotations
 import os
 import re
 from decimal import Decimal
+from typing import TYPE_CHECKING, cast
 
 from loguru import logger as _logger
 
-from movarr.config import Config
-from movarr.models import ResultDict
 from movarr.parsing import (
     bad_keyword_search,
     extract_movie_title,
@@ -33,6 +32,10 @@ from movarr.parsing import (
     quality_score,
     sanitise,
 )
+
+if TYPE_CHECKING:
+    from movarr.config import Config
+    from movarr.models import ResultDict
 
 __all__ = ["filter_by_index", "filter_by_imdb"]
 
@@ -49,7 +52,7 @@ def filter_by_index(
     result: ResultDict,
     index_site: dict,
     config: Config,
-    library_walk=None,
+    library_walk: list[tuple[str, list[str], list[str]]] | None = None,
 ) -> ResultDict:
     """Apply pre-IMDb index-level filters.
 
@@ -81,7 +84,7 @@ def filter_by_index(
 def filter_by_imdb(
     result: ResultDict,
     config: Config,
-    library_walk=None,
+    library_walk: list[tuple[str, list[str], list[str]]] | None = None,
 ) -> ResultDict:
     """Apply post-IMDb metadata filters.
 
@@ -122,7 +125,9 @@ def filter_by_imdb(
         # Genre override can relax rating/votes thresholds.
         override_thresholds = _override_genre(result, config)
 
-        if not (_check_rating(result, config, override_thresholds) and _check_votes(result, config, override_thresholds)):
+        if not (
+            _check_rating(result, config, override_thresholds) and _check_votes(result, config, override_thresholds)
+        ):
             return result
 
     # Library dedup post-IMDb using canonical title (runs even on override hard-passes).
@@ -190,12 +195,15 @@ def _check_bad_movie_titles(result: ResultDict, config: Config) -> ResultDict:
 
     title_and_year_compare = result.get("movie_title_and_year_compare") or ""
     for bad_title in bad_list:
-        if normalise_for_compare(bad_title) in title_and_year_compare:
+        norm = normalise_for_compare(bad_title)
+        if norm and norm in title_and_year_compare:
             return _fail(result, f"Index title matches bad movie title '{bad_title}'.")
     return _pass(result, "Index title passes bad movie title check.")
 
 
-def _check_library(result: ResultDict, config: Config, library_walk) -> ResultDict:
+def _check_library(
+    result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]] | None
+) -> ResultDict:
     """Check whether a matching title/year already exists in the library."""
     library_paths = config.general.library_path_list
     if not library_paths or library_walk is None:
@@ -247,7 +255,7 @@ def _check_bad_genre(result: ResultDict, config: Config) -> ResultDict:
     return _pass(result, f"Genres {genres_lower} pass bad genre check.")
 
 
-def _check_bitrate(result: ResultDict, _config) -> ResultDict:
+def _check_bitrate(result: ResultDict, _config: object) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
     if not min_bitrate_mb:
@@ -300,7 +308,7 @@ def _check_language_country(result: ResultDict, config: Config, kind: str) -> Re
     if not good_list:
         return _pass(result, f"No good {kind} list defined.")
 
-    imdb_list = result.get(f"imdb_{kind}_list") or []
+    imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
         return _pass(result, f"No IMDb {kind} found; assuming OK.")
 
@@ -320,7 +328,7 @@ def _override_person(result: ResultDict, config: Config, person_type: str) -> bo
         return False
 
     credits_field = "cast" if person_type == "cast" else person_type
-    imdb_list = result.get(f"imdb_credits_{credits_field}_list") or []
+    imdb_list: list[str] = cast("list[str]", result.get(f"imdb_credits_{credits_field}_list") or [])
     if not imdb_list:
         return False
 
@@ -406,7 +414,9 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
     return False
 
 
-def _check_library_canonical(result: ResultDict, config: Config, library_walk) -> ResultDict:
+def _check_library_canonical(
+    result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]]
+) -> ResultDict:
     """Library dedup using the canonical IMDb title — cleaner than index title."""
     imdb_title = result.get("imdb_title") or ""
     imdb_year = str(result.get("imdb_year") or "")
@@ -415,6 +425,8 @@ def _check_library_canonical(result: ResultDict, config: Config, library_walk) -
         return _pass(result, "Insufficient IMDb fields for canonical library check.")
 
     canonical_compare = normalise_for_compare(imdb_title)
+    if not canonical_compare:
+        return _pass(result, "Cannot normalise IMDb title for canonical library check.")
     matches = _find_library_files_by_compare(canonical_compare, imdb_year, library_walk)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
@@ -427,7 +439,7 @@ def _check_library_canonical(result: ResultDict, config: Config, library_walk) -
 # ---------------------------------------------------------------------------
 
 
-def _library_files_for_title(result: ResultDict, library_walk) -> list[str]:
+def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
     """Return absolute paths to library video files matching the index title+year."""
     title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
@@ -438,11 +450,14 @@ def _library_files_for_title(result: ResultDict, library_walk) -> list[str]:
             if not fname.lower().endswith(_VIDEO_EXTS):
                 continue
             san = sanitise(fname)
+            if not san:
+                continue
             lib_title = extract_movie_title(san)
             lib_year = extract_year(san)
             if not lib_title or not lib_year:
                 continue
-            if normalise_for_compare(lib_title) not in title_compare:
+            norm = normalise_for_compare(lib_title)
+            if not norm or norm not in title_compare:
                 continue
             if lib_year not in year:
                 continue
@@ -451,7 +466,9 @@ def _library_files_for_title(result: ResultDict, library_walk) -> list[str]:
     return found
 
 
-def _find_library_files_by_compare(title_compare: str, year: str, library_walk) -> list[str]:
+def _find_library_files_by_compare(
+    title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
+) -> list[str]:
     """Walk the library and return video files matching *title_compare* and *year*."""
     found: list[str] = []
     for root, _dirs, files in library_walk:
@@ -459,11 +476,14 @@ def _find_library_files_by_compare(title_compare: str, year: str, library_walk) 
             if not fname.lower().endswith(_VIDEO_EXTS):
                 continue
             san = sanitise(fname)
+            if not san:
+                continue
             lib_title = extract_movie_title(san)
             lib_year = extract_year(san)
             if not lib_title or not lib_year:
                 continue
-            if normalise_for_compare(lib_title) not in title_compare:
+            norm = normalise_for_compare(lib_title)
+            if not norm or norm not in title_compare:
                 continue
             if lib_year not in year:
                 continue
@@ -495,7 +515,9 @@ def _evaluate_library_files(
         if not lib_res:
             # Conservative: library file matched by title/year but resolution is unknown.
             # Treat as present and skip re-download to avoid duplicates.
-            return _fail(result, f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present.")
+            return _fail(
+                result, f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present."
+            )
 
         try:
             idx_res_int = int(index_resolution)
@@ -547,17 +569,17 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
 
 def _pass(result: ResultDict, message: str) -> ResultDict:
     _logger.info(message)
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
     details.append(f"Passed: {message}")
     result["result"] = "Passed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details
     return result
 
 
 def _fail(result: ResultDict, message: str) -> ResultDict:
     _logger.info(message)
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
     details.append(f"Failed: {message}")
     result["result"] = "Failed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details
     return result

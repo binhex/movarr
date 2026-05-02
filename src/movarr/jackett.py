@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import urllib.parse
-from collections.abc import Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import xmltodict
 from loguru import logger as _logger
 
-from movarr.config import Config
 from movarr.downloader import HttpClient, HttpError
-from movarr.models import ResultDict
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from movarr.config import Config
+    from movarr.models import ResultDict
 
 __all__ = ["JackettClient", "JackettError"]
 
@@ -130,7 +133,9 @@ class JackettClient:
         # xmltodict returns a dict (not a list) when there is exactly one item.
         if isinstance(items, dict):
             items = [items]
-        return items  # type: ignore[return-value]
+        from typing import cast
+
+        return cast("list[dict[str, Any]]", items)
 
     def _parse_item(self, item: dict[str, Any]) -> ResultDict | None:
         """Extract a :class:`~movarr.models.ResultDict` from a single Torznab item."""
@@ -150,7 +155,7 @@ class JackettClient:
             "magnet_url": self._attr(item, "magneturl"),
             "category": self._attr(item, "category"),
             "result": "Passed",
-            "result_details": "",
+            "result_details": [],
         }
 
         # Prefer an embedded IMDb ID if present.

@@ -6,13 +6,15 @@ Sends an HTML summary email when a torrent is queued.  Fixes siphonator bug #2:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import apprise
 from loguru import logger
 
-from movarr.config import Config
-from movarr.models import ResultDict
+if TYPE_CHECKING:
+    from movarr.config import Config, EmailConfig
+    from movarr.models import ResultDict
 
 __all__ = ["send_queued_notification"]
 
@@ -74,9 +76,9 @@ def _build_body(result: ResultDict, config: Config) -> str:
     votes = result.get("imdb_votes") or "?"
 
     # Bug #2 fix: null-guard all list → string conversions.
-    cast_list = result.get("imdb_credits_cast_list") or []
-    directors = result.get("imdb_credits_director_list") or []
-    genres = result.get("imdb_genres_list") or []
+    cast_list: list[str] = result.get("imdb_credits_cast_list") or []
+    directors: list[str] = result.get("imdb_credits_director_list") or []
+    genres: list[str] = result.get("imdb_genres_list") or []
 
     actors_str = ", ".join(cast_list[:10]) or "—"
     directors_str = ", ".join(directors) or "—"
@@ -121,7 +123,7 @@ def _format_result_details(details: list[str]) -> str:
     return f"<ul>{items}</ul>"
 
 
-def _build_apprise_url(email_cfg) -> str:
+def _build_apprise_url(email_cfg: EmailConfig) -> str:
     """Build an apprise SMTP URL from the email config section."""
     scheme = "mailtos" if email_cfg.enable_tls or email_cfg.enable_ssl else "mailto"
     user = email_cfg.username or ""

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+from pydantic import ValidationError
 
 from movarr.config import (
     Config,
@@ -10,6 +13,9 @@ from movarr.config import (
     QueueManagementConfig,
     load_config,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # GeneralConfig defaults
@@ -32,7 +38,7 @@ class TestGeneralConfigDefaults:
         assert cfg.ffprobe_path
 
     def test_invalid_daemon_mode_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             GeneralConfig(daemon_mode="invalid")
 
 
@@ -100,27 +106,27 @@ class TestConfigConstruction:
 class TestLoadConfig:
     """load_config must merge YAML with defaults and return a validated Config."""
 
-    def test_loads_empty_file_with_defaults(self, tmp_path) -> None:
+    def test_loads_empty_file_with_defaults(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("{}\n")
         cfg = load_config(str(cfg_file))
         assert isinstance(cfg, Config)
 
-    def test_partial_override_preserves_defaults(self, tmp_path) -> None:
+    def test_partial_override_preserves_defaults(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  log_level_console: debug\n")
         cfg = load_config(str(cfg_file))
         assert cfg.general.log_level_console == "debug"
         assert cfg.general.daemon_mode == "foreground"  # default unchanged
 
-    def test_creates_file_if_absent(self, tmp_path) -> None:
+    def test_creates_file_if_absent(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yml"
         cfg = load_config(str(cfg_file))
         assert cfg_file.exists()
         assert isinstance(cfg, Config)
 
-    def test_invalid_daemon_mode_in_file_raises(self, tmp_path) -> None:
+    def test_invalid_daemon_mode_in_file_raises(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  daemon_mode: bad_value\n")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(str(cfg_file))

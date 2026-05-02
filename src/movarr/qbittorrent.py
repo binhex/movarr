@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import qbittorrentapi
 from loguru import logger as _logger
 
-from movarr.config import Config
-from movarr.models import ResultDict
+if TYPE_CHECKING:
+    from movarr.config import Config
+    from movarr.models import ResultDict
 
 __all__ = ["QBittorrentClient", "QBittorrentError"]
 
@@ -52,9 +53,8 @@ class QBittorrentClient:
         """Return True if qBittorrent reports ``connected`` status."""
         try:
             status = self._client.sync_maindata().server_state.connection_status
-            connected = status == "connected"
             _logger.debug("qBittorrent connection status: {}.", status)
-            return connected
+            return bool(status == "connected")
         except qbittorrentapi.APIError as exc:
             _logger.warning("qBittorrent connectivity check failed: {}.", exc)
             return False
@@ -100,9 +100,8 @@ class QBittorrentClient:
             return None
 
         self._client.torrents_reannounce(torrent_hashes="all")
-        result = dict(result)  # type: ignore[assignment]
         result["torrent_tag"] = tag
-        return result  # type: ignore[return-value]
+        return result
 
     # ------------------------------------------------------------------
     # Querying torrents

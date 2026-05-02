@@ -10,13 +10,16 @@ import json
 import re
 import urllib.parse
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from loguru import logger as _logger
 
-from movarr.config import Config
 from movarr.downloader import HttpClient, HttpError
-from movarr.models import ResultDict
 from movarr.parsing import normalise_for_compare
+
+if TYPE_CHECKING:
+    from movarr.config import Config
+    from movarr.models import ResultDict
 
 __all__ = ["search_for_imdb_id"]
 
@@ -72,7 +75,8 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
         imdb_title = hit.get("title")
         if not imdb_title:
             continue
-        if normalise_for_compare(imdb_title) not in title_compare:
+        norm = normalise_for_compare(imdb_title)
+        if not norm or norm not in title_compare:
             continue
         hit_year = hit.get("year")
         if hit_year is None:
@@ -122,8 +126,10 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
     for hit in data.get("results", []):
         for field in ("title", "original_title"):
             candidate = hit.get(field, "")
-            if candidate and normalise_for_compare(candidate) in index_compare:
-                break
+            if candidate:
+                norm = normalise_for_compare(candidate)
+                if norm and norm in index_compare:
+                    break
         else:
             continue
 
@@ -183,7 +189,8 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
         return result
 
     omdb_title = data.get("Title")
-    if not omdb_title or normalise_for_compare(omdb_title) not in index_compare:
+    omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
+    if not omdb_title or not omdb_norm or omdb_norm not in index_compare:
         _fail(result, f"OMDb: title '{omdb_title}' does not match '{index_compare}'.")
         return result
 
@@ -216,7 +223,7 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
     year = result.get("movie_title_year", "")
 
     try:
-        import googlesearch  # type: ignore[import-untyped]
+        import googlesearch
 
         gen = googlesearch.search(
             f"imdb {search_term}",
@@ -238,7 +245,12 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
 
     from movarr.parsing import sanitise
 
-    if normalise_for_compare(sanitise(g_title)) not in index_compare:
+    san = sanitise(g_title)
+    if not san:
+        _fail(result, f"Google: cannot sanitise title '{g_title}'.")
+        return result
+    norm = normalise_for_compare(san)
+    if not norm or norm not in index_compare:
         _fail(result, f"Google: title '{g_title}' not in index compare.")
         return result
 
@@ -263,16 +275,16 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
 
 def _fail(result: ResultDict, message: str) -> None:
     _logger.warning(message)
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
     details.append(f"Failed: {message}")
     result["result"] = "Failed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details
 
 
 def _pass(result: ResultDict, imdb_id: str, message: str) -> None:
     _logger.info("IMDb ID '{}' — {}", imdb_id, message)
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
     details.append(f"Passed: {message}")
     result["imdb_id"] = imdb_id
     result["result"] = "Passed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details

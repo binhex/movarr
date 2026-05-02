@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from movarr.database import Database
-from movarr.models import ResultDict
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from movarr.models import ResultDict
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -13,13 +19,13 @@ from movarr.models import ResultDict
 
 
 @pytest.fixture()
-def db(tmp_path) -> Database:
+def db(tmp_path: Path) -> Database:
     """In-memory SQLite database for each test."""
     db_file = str(tmp_path / "test.db")
     return Database(db_file)
 
 
-def _minimal_result(**overrides) -> ResultDict:
+def _minimal_result(**overrides: object) -> ResultDict:
     """Return a minimal ResultDict suitable for writing to the DB."""
     base: ResultDict = {
         "index_title": "The Dark Knight 2008 1080p BluRay",
@@ -117,7 +123,7 @@ class TestGenresForTag:
     def test_json_encoded_genres(self, db: Database) -> None:
         result = _minimal_result(
             torrent_tag="genre-tag-json",
-            imdb_genres_list='["Action", "Drama"]',  # type: ignore[typeddict-item]
+            imdb_genres_list='["Action", "Drama"]',
         )
         db.write(result)
         genres = db.genres_for_tag("genre-tag-json")
@@ -127,7 +133,7 @@ class TestGenresForTag:
     def test_python_repr_encoded_genres(self, db: Database) -> None:
         result = _minimal_result(
             torrent_tag="genre-tag-repr",
-            imdb_genres_list="['Comedy', 'Thriller']",  # type: ignore[typeddict-item]
+            imdb_genres_list="['Comedy', 'Thriller']",
         )
         db.write(result)
         genres = db.genres_for_tag("genre-tag-repr")

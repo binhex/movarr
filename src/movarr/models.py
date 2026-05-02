@@ -40,32 +40,34 @@ class ResultDict(TypedDict, total=False):
     # --- Torrent fields ---
     torrent_url: str
     magnet_url: str
+    torrent_hash: str
     category: str
+    _filter_minimum_bitrate_mb: str
     torrent_tag: str
 
     # --- IMDb metadata ---
     imdb_id: str
-    imdb_title: str
-    imdb_year: str
-    imdb_rating: str
-    imdb_votes: str
-    imdb_title_type: str
-    imdb_running_time_in_minutes: str
-    imdb_genres_list: str
-    imdb_credits_cast_list: str
-    imdb_credits_director_list: str
-    imdb_credits_writer_list: str
-    imdb_credits_character_list: str
-    imdb_language_list: str
-    imdb_country_list: str
-    imdb_certification: str
-    imdb_cert_source: str  # "bbfc" | "mpaa" | None — tracks cert origin
-    imdb_poster_url: str
-    imdb_trailer_url: str
-    imdb_plot_summary: str
-    imdb_plot_outline: str
+    imdb_title: str | None
+    imdb_year: str | None
+    imdb_rating: str | None
+    imdb_votes: str | None
+    imdb_title_type: str | None
+    imdb_running_time_in_minutes: str | None
+    imdb_genres_list: list[str] | None
+    imdb_credits_cast_list: list[str] | None
+    imdb_credits_director_list: list[str] | None
+    imdb_credits_writer_list: list[str] | None
+    imdb_credits_character_list: list[str] | None
+    imdb_language_list: list[str] | None
+    imdb_country_list: list[str] | None
+    imdb_certification: str | None
+    imdb_cert_source: str | None  # "bbfc" | "mpaa" | None — tracks cert origin
+    imdb_poster_url: str | None
+    imdb_trailer_url: str | None
+    imdb_plot_summary: str | None
+    imdb_plot_outline: str | None
 
     # --- Pipeline outcome ---
     result: str  # "Passed" | "Failed"
-    result_details: str  # human-readable chain of pass/fail reasons
+    result_details: list[str]  # human-readable chain of pass/fail reasons
     verified: str  # "true" once post-processing copy succeeds

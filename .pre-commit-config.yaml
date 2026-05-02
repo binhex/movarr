@@ -30,6 +30,8 @@ repos:
         additional_dependencies:
           - types-requests
           - types-pyyaml
+          - types-xmltodict
+          - sqlalchemy
           - pydantic>=2.0.0
           - pytest
           - click

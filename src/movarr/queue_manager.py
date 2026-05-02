@@ -7,10 +7,13 @@ torrents that will never complete.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
-from movarr.config import Config
-from movarr.qbittorrent import QBittorrentClient
+if TYPE_CHECKING:
+    from movarr.config import Config
+    from movarr.qbittorrent import QBittorrentClient
 
 __all__ = ["run_queue_management"]
 

@@ -111,6 +111,43 @@ plugins = ["pydantic.mypy"]
 module = "tests.*"
 disallow_untyped_defs = false
 
+# Third-party packages without type stubs
+[[tool.mypy.overrides]]
+module = "backoff"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "qbittorrentapi"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "apprise"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pycountry"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "imdbpie"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "omdb"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ffmpeg"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "googlesearch"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 minversion = "7.0"

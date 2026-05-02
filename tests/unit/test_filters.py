@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from movarr.config import Config
 from movarr.filters import filter_by_imdb, filter_by_index
-from movarr.models import ResultDict
+
+if TYPE_CHECKING:
+    from movarr.models import ResultDict
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -163,7 +165,7 @@ class TestFilterByImdbTitleType:
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_tvSeries_type_rejected(self) -> None:
+    def test_tv_series_type_rejected(self) -> None:
         cfg = Config()
         result = _imdb_result(imdb_title_type="tvSeries")
         out = filter_by_imdb(result, cfg)

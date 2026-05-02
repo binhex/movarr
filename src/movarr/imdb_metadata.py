@@ -10,13 +10,16 @@ the post-processor can correctly skip MPAA certs when routing by BBFC
 
 from __future__ import annotations
 
+import contextlib
 import re
+from typing import TYPE_CHECKING, Any
 
 import pycountry
 from loguru import logger as _logger
 
-from movarr.config import Config
-from movarr.models import ResultDict
+if TYPE_CHECKING:
+    from movarr.config import Config
+    from movarr.models import ResultDict
 
 __all__ = ["fetch_metadata"]
 
@@ -59,7 +62,7 @@ def fetch_metadata(result: ResultDict, config: Config) -> ResultDict:
 
 def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     imdb_id = result.get("imdb_id", "")
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
 
     try:
         import imdbpie
@@ -70,7 +73,7 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
         result["result"] = "Failed"
-        result["result_details"] = details  # type: ignore[typeddict-item]
+        result["result_details"] = details
         return result
 
     try:
@@ -83,11 +86,9 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
         result["result"] = "Failed"
-        result["result_details"] = details  # type: ignore[typeddict-item]
-        try:
+        result["result_details"] = details
+        with contextlib.suppress(Exception):
             client.session.close()
-        except Exception:  # noqa: BLE001
-            pass
         return result
 
     directors = _credits_names(credits_data, "director")
@@ -109,7 +110,7 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     plot_outline = _safe_str(title_data, "plot", "outline", "text")
     trailer_url = _extract_trailer(aux_data)
 
-    result.update(  # type: ignore[typeddict-item]
+    result.update(
         {
             "imdb_title": title,
             "imdb_year": year,
@@ -137,12 +138,10 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     _logger.info(msg)
     details.append(f"Passed: {msg}")
     result["result"] = "Passed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details
 
-    try:
+    with contextlib.suppress(Exception):
         client.session.close()
-    except Exception:  # noqa: BLE001
-        pass
     return result
 
 
@@ -156,7 +155,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
 
     api_key = config.credentials.omdb.api_key
     imdb_id = result.get("imdb_id", "")
-    details: list[str] = result.get("result_details") or []  # type: ignore[assignment]
+    details: list[str] = result.get("result_details") or []
 
     try:
         omdb_client = omdb.OMDB(api_key=api_key, timeout=30.0)
@@ -166,7 +165,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
         result["result"] = "Failed"
-        result["result_details"] = details  # type: ignore[typeddict-item]
+        result["result_details"] = details
         return result
 
     def _nona(key: str) -> str | None:
@@ -174,7 +173,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         val = data.get(key)
         if val in (None, "N/A", ""):
             return None
-        return val
+        return str(val)
 
     # Strip non-digits from votes and runtime.
     raw_votes = _nona("imdb_votes")
@@ -198,7 +197,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     countries = _convert_countries(_nona("country"))
     languages = _convert_languages(_nona("language"))
 
-    result.update(  # type: ignore[typeddict-item]
+    result.update(
         {
             "imdb_title": _nona("title"),
             "imdb_year": _nona("year"),
@@ -226,7 +225,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     _logger.info(msg)
     details.append(f"Passed: {msg}")
     result["result"] = "Passed"
-    result["result_details"] = details  # type: ignore[typeddict-item]
+    result["result_details"] = details
     return result
 
 
@@ -269,7 +268,7 @@ def _get(data: dict, key: str) -> list | None:
         return None
 
 
-def _safe_val(data: dict, *keys: str | int):  # noqa: ANN001
+def _safe_val(data: dict, *keys: str | int) -> Any:
     """Traverse nested dict/list by *keys*; return value or None."""
     cur = data
     for k in keys:
@@ -288,7 +287,8 @@ def _safe_str(data: dict, *keys: str | int) -> str | None:
 def _extract_cert_imdbpie(aux: dict) -> str | None:
     """Try multiple paths in the auxiliary data for a UK certificate."""
     try:
-        return aux["certificate"]["certificate"]
+        val = aux["certificate"]["certificate"]
+        return str(val)
     except (KeyError, TypeError):
         pass
     try:
@@ -333,8 +333,6 @@ def _convert_languages(raw: str | None) -> list[str] | None:
         name = name.strip()
         lang = pycountry.languages.get(name=name)
         if lang:
-            try:
+            with contextlib.suppress(AttributeError):
                 result.append(lang.alpha_2.lower())
-            except AttributeError:
-                pass
     return result or None

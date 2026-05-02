@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from itertools import chain
 from pathlib import Path
@@ -32,16 +33,7 @@ def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[s
     Args:
         library_paths: List of root directories to walk.
     """
-    return chain.from_iterable(
-        Path(p).walk() if hasattr(Path, "walk") else _os_walk(p) for p in library_paths if library_paths
-    )
-
-
-def _os_walk(path: str) -> chain[tuple[str, list[str], list[str]]]:
-    """Compatibility wrapper for ``os.walk``."""
-    import os
-
-    return chain(os.walk(path, topdown=False))
+    return chain.from_iterable(os.walk(p) for p in library_paths)
 
 
 def _sha256(file_path: Path) -> str:
@@ -176,7 +168,7 @@ def resolution_from_ffprobe(file_path: str | Path, ffprobe_path: str | None = No
         Resolution as a string (e.g. ``"1080"``), or ``None`` on failure.
     """
     try:
-        import ffmpeg  # type: ignore[import-untyped]
+        import ffmpeg
     except ImportError:
         _logger.warning("ffmpeg-python not installed; cannot probe '{}'.", file_path)
         return None

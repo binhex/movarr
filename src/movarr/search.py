@@ -13,16 +13,15 @@ For each configured search criteria tier:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
-from movarr.config import Config, SearchCriteriaConfig
-from movarr.database import Database
 from movarr.file_utils import walk_library
 from movarr.filters import filter_by_imdb, filter_by_index
 from movarr.imdb_metadata import fetch_metadata
 from movarr.imdb_search import search_for_imdb_id
 from movarr.jackett import JackettClient
-from movarr.models import ResultDict
 from movarr.notifications import send_queued_notification
 from movarr.parsing import (
     extract_after_year,
@@ -32,7 +31,12 @@ from movarr.parsing import (
     normalise_for_compare,
     sanitise,
 )
-from movarr.qbittorrent import QBittorrentClient
+
+if TYPE_CHECKING:
+    from movarr.config import Config, SearchCriteriaConfig
+    from movarr.database import Database
+    from movarr.models import ResultDict
+    from movarr.qbittorrent import QBittorrentClient
 
 __all__ = ["run_search"]
 
@@ -55,7 +59,7 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         logger.warning("Jackett is not reachable; skipping search.")
         return
 
-    library_walk: list | None = None
+    library_walk: list[tuple[str, list[str], list[str]]] | None = None
     if config.general.library_path_list:
         library_walk = list(walk_library(config.general.library_path_list))
 
@@ -136,7 +140,9 @@ def _process_criteria(
 
         send_queued_notification(result, config)
 
-        result = qbt.add_torrent(result)
+        updated = qbt.add_torrent(result)
+        if updated is not None:
+            result = updated
         db.write(result)
 
 
@@ -147,7 +153,7 @@ def _enrich_index_metadata(result: ResultDict) -> ResultDict:
     if not san:
         return result
 
-    result["index_title_sanitised"] = san  # type: ignore[typeddict-item]
+    result["index_title_sanitised"] = san
 
     title = extract_movie_title(san)
     year = extract_year(san)
@@ -165,6 +171,6 @@ def _enrich_index_metadata(result: ResultDict) -> ResultDict:
         result["movie_title_and_year_compare"] = normalise_for_compare(f"{title} {year}")  # type: ignore[typeddict-item]
 
     result["result"] = "Passed"
-    result["result_details"] = []  # type: ignore[typeddict-item]
+    result["result_details"] = []
 
     return result

@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import Column, Integer, String, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from movarr.models import ResultDict
+if TYPE_CHECKING:
+    from movarr.models import ResultDict
 
 __all__ = ["Database", "HistoryRecord"]
 
@@ -249,7 +251,7 @@ class Database:
             return []
         raw = record.imdb_genres_list.strip()
         try:
-            return json.loads(raw)
+            return cast("list[str]", json.loads(raw))
         except json.JSONDecodeError:
             pass
         # Legacy: Python repr list e.g. "['Action', 'Comedy']"

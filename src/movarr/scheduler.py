@@ -16,16 +16,21 @@ import os
 import signal
 import sys
 import time
+from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from loguru import logger
 
-from movarr.config import Config
 from movarr.database import Database
 from movarr.post_processor import run_post_processing
 from movarr.qbittorrent import QBittorrentClient
 from movarr.queue_manager import run_queue_management
 from movarr.search import run_search
+
+if TYPE_CHECKING:
+    import types
+
+    from movarr.config import Config
 
 __all__ = ["run", "run_once"]
 
@@ -119,7 +124,7 @@ def _run_daemon(config: Config) -> None:
     )
 
     # Block until SIGTERM or SIGINT.
-    def _shutdown(signum, frame):
+    def _shutdown(signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal {}; shutting down.", signum)
         scheduler.shutdown(wait=False)
         sys.exit(0)

@@ -16,14 +16,17 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from movarr.config import Config
-from movarr.database import Database
 from movarr.file_utils import copy_with_verify, make_directory
 from movarr.parsing import extract_resolution, sanitise
-from movarr.qbittorrent import QBittorrentClient
+
+if TYPE_CHECKING:
+    from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
+    from movarr.database import Database, HistoryRecord
+    from movarr.qbittorrent import QBittorrentClient
 
 __all__ = ["run_post_processing"]
 
@@ -94,11 +97,11 @@ def _process_one(
         logger.warning("Could not resolve copy destination for tag '{}'; skipping.", tag)
         return
 
-    imdb_title = _safe_path_component(db_record.imdb_title or "Unknown") or "Unknown"
+    imdb_title = _safe_path_component(str(db_record.imdb_title or "Unknown")) or "Unknown"
     # Guard single dots (e.g. "." from stripping "...") which os.path.join treats as CWD.
     if not imdb_title.strip("."):
         imdb_title = "Unknown"
-    imdb_year = _safe_path_component(db_record.imdb_year or "")
+    imdb_year = _safe_path_component(str(db_record.imdb_year or ""))
     folder_name = f"{imdb_title} ({imdb_year})" if imdb_year else imdb_title
     dst_dir = os.path.join(dst_base, folder_name)
 
@@ -232,7 +235,7 @@ def _first_level_dir(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_destination(db_record, config: Config) -> str | None:
+def _resolve_destination(db_record: HistoryRecord, config: Config) -> str | None:
     """Choose the library copy path based on genre, cert, and resolution rules."""
     pp = config.post_process
     rules = pp.copy_library_rules
@@ -242,17 +245,17 @@ def _resolve_destination(db_record, config: Config) -> str | None:
         logger.warning("No 'default_copy_library' configured; cannot copy.")
         return None
 
-    genres_raw = db_record.imdb_genres_list or []
+    genres_raw: object = db_record.imdb_genres_list or []
     genres = _parse_genres(genres_raw)
 
-    cert = db_record.imdb_certification or ""
-    cert_source = db_record.imdb_cert_source or "imdbpie"
+    cert: str = str(db_record.imdb_certification or "")
+    cert_source: str = str(db_record.imdb_cert_source or "imdbpie")
 
     # Bug #8 fix: only apply BBFC cert routing if the cert came from imdbpie (UK BBFC certs).
     # OMDb returns MPAA ratings which are not compatible with BBFC ordering.
     effective_cert = cert if cert_source == "imdbpie" else ""
 
-    resolution = _resolution_from_index_title(db_record.index_title or "")
+    resolution = _resolution_from_index_title(str(db_record.index_title or ""))
 
     return _pick_path(genres, effective_cert, resolution, rules, default)
 
@@ -261,8 +264,8 @@ def _pick_path(
     genres: list[str],
     cert: str,
     resolution: str | None,
-    rules: list,
-    default,
+    rules: list[CopyLibraryRuleConfig],
+    default: DefaultCopyLibraryConfig,
 ) -> str | None:
     path_key = "uhd_path" if resolution in ("2160", "4k") else "hd_path"
 
@@ -289,7 +292,9 @@ def _pick_path(
 
     rule = top_rules[0]
     if rule.max_certification and not _cert_acceptable(cert, rule.max_certification):
-        logger.info("Cert '{}' fails max_cert '{}' for rule '{}'; using default.", cert, rule.max_certification, rule.name)
+        logger.info(
+            "Cert '{}' fails max_cert '{}' for rule '{}'; using default.", cert, rule.max_certification, rule.name
+        )
         return default_path()
 
     path = getattr(rule, path_key, "") or ""
@@ -317,12 +322,14 @@ def _resolution_from_index_title(index_title: str) -> str | None:
     return extract_resolution(san)
 
 
-def _parse_genres(raw) -> list[str]:
+def _parse_genres(raw: object) -> list[str]:
     import ast
     import json
 
     if isinstance(raw, list):
         return [str(g).strip() for g in raw]
+    if not isinstance(raw, (str, bytes, bytearray)):
+        return []
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
@@ -330,7 +337,7 @@ def _parse_genres(raw) -> list[str]:
     except (ValueError, TypeError):
         pass
     try:
-        parsed = ast.literal_eval(raw)
+        parsed = ast.literal_eval(raw if isinstance(raw, str) else raw.decode())
         if isinstance(parsed, list):
             return [str(g).strip() for g in parsed]
     except (ValueError, SyntaxError):
