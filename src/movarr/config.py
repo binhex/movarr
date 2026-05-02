@@ -103,24 +103,15 @@ class TorrentClientConfig(BaseModel):
     qbittorrent: QbittorrentConfig = Field(default_factory=QbittorrentConfig)
 
 
-class EmailConfig(BaseModel):
-    """SMTP email notification settings."""
-
-    enabled: bool = False
-    host: str = ""
-    port: int = 587
-    enable_tls: bool = True
-    enable_ssl: bool = False
-    username: str = ""
-    password: str = ""
-    from_address: str = ""
-    to_address: str = ""
-
-
 class NotificationConfig(BaseModel):
-    """Notification settings."""
+    """Notification settings.
 
-    email: EmailConfig = Field(default_factory=EmailConfig)
+    Specify one or more `apprise <https://github.com/caronc/apprise>`_ service URLs.
+    An empty list disables notifications.  Any apprise-supported service works:
+    ``ntfy://topic``, ``discord://id/token``, ``mailtos://user:pass@host:587/``, etc.
+    """
+
+    apprise_urls: list[str] = Field(default_factory=list)
 
 
 class JackettConfig(BaseModel):

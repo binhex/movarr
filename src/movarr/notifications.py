@@ -1,45 +1,48 @@
-"""Email notification via apprise for movarr.
+"""Notification via apprise for movarr.
 
-Sends an HTML summary email when a torrent is queued.  Fixes siphonator bug #2:
-``", ".join(None)`` crashes — all list fields are null-guarded here.
+Sends an HTML summary when a torrent is queued.  Any apprise-supported
+service URL can be specified in ``config.notification.apprise_urls``.
+
+Fixes siphonator bug #2: ``", ".join(None)`` crashes — all list fields
+are null-guarded here.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import quote
 
 import apprise
 from loguru import logger
 
 if TYPE_CHECKING:
-    from movarr.config import Config, EmailConfig
+    from movarr.config import Config
     from movarr.models import ResultDict
 
 __all__ = ["send_queued_notification"]
 
 
 def send_queued_notification(result: ResultDict, config: Config) -> bool:
-    """Send an email notification for a newly queued torrent.
+    """Send a notification for a newly queued torrent via all configured apprise URLs.
 
     Args:
         result: Fully-populated pipeline dict (index + IMDb metadata).
         config: Application configuration.
 
     Returns:
-        ``True`` if the notification was sent without error, ``False`` otherwise.
+        ``True`` if the notification was sent without error, ``False`` otherwise
+        (including when no URLs are configured).
     """
-    email_cfg = config.notification.email
-    if not email_cfg.enabled:
-        logger.debug("Email notifications disabled; skipping.")
+    urls = config.notification.apprise_urls
+    if not urls:
+        logger.debug("No apprise URLs configured; skipping notification.")
         return False
 
     body = _build_body(result, config)
     subject = _build_subject(result)
 
-    url = _build_apprise_url(email_cfg)
     ap = apprise.Apprise()
-    ap.add(url)
+    for url in urls:
+        ap.add(url)
 
     try:
         sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
@@ -121,23 +124,3 @@ def _format_result_details(details: list[str]) -> str:
         else:
             items += f"<li>{item}</li>"
     return f"<ul>{items}</ul>"
-
-
-def _build_apprise_url(email_cfg: EmailConfig) -> str:
-    """Build an apprise SMTP URL from the email config section."""
-    scheme = "mailtos" if email_cfg.enable_tls or email_cfg.enable_ssl else "mailto"
-    user = email_cfg.username or ""
-    password = email_cfg.password or ""
-    host = email_cfg.host
-    port = email_cfg.port
-    from_addr = email_cfg.from_address or ""
-    to_addr = email_cfg.to_address or ""
-
-    auth = ""
-    if user and password:
-        auth = f"{quote(user, safe='')}:{quote(password, safe='')}@"
-    elif user:
-        auth = f"{quote(user, safe='')}@"
-
-    url = f"{scheme}://{auth}{host}:{port}/?from={quote(from_addr, safe='')}&to={quote(to_addr, safe='')}"
-    return url

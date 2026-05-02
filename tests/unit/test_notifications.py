@@ -1,12 +1,11 @@
-"""Unit tests for movarr.notifications — email notification helpers."""
+"""Unit tests for movarr.notifications — notification helpers."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from movarr.config import Config, EmailConfig
+from movarr.config import Config
 from movarr.notifications import (
-    _build_apprise_url,
     _build_body,
     _build_subject,
     _format_result_details,
@@ -137,57 +136,6 @@ class TestBuildBody:
 
 
 # ---------------------------------------------------------------------------
-# _build_apprise_url
-# ---------------------------------------------------------------------------
-
-
-class TestBuildAppriseUrl:
-    """Tests for the _build_apprise_url pure helper."""
-
-    def test_tls_enabled_uses_mailtos(self) -> None:
-        """TLS flag produces a mailtos:// scheme."""
-        cfg = EmailConfig(host="smtp.example.com", port=587, enable_tls=True)
-        assert _build_apprise_url(cfg).startswith("mailtos://")
-
-    def test_ssl_enabled_uses_mailtos(self) -> None:
-        """SSL flag produces a mailtos:// scheme."""
-        cfg = EmailConfig(host="smtp.example.com", port=465, enable_tls=False, enable_ssl=True)
-        assert _build_apprise_url(cfg).startswith("mailtos://")
-
-    def test_no_tls_no_ssl_uses_mailto(self) -> None:
-        """Without TLS/SSL the scheme is mailto://."""
-        cfg = EmailConfig(host="smtp.example.com", port=587, enable_tls=False, enable_ssl=False)
-        assert _build_apprise_url(cfg).startswith("mailto://")
-
-    def test_user_and_password_included(self) -> None:
-        """User and password are embedded in the URL."""
-        cfg = EmailConfig(host="smtp.example.com", port=587, username="user", password="secret")
-        url = _build_apprise_url(cfg)
-        assert "user" in url
-        assert "secret" in url
-
-    def test_special_chars_in_password_are_encoded(self) -> None:
-        """Special characters in password are percent-encoded."""
-        cfg = EmailConfig(host="smtp.example.com", port=587, username="user", password="p@$$w0rd!")
-        url = _build_apprise_url(cfg)
-        # Raw special chars must not appear unencoded in the URL
-        assert "p@$$w0rd!" not in url
-        assert "%" in url
-
-    def test_user_without_password_omits_colon(self) -> None:
-        """When only username is set, no colon-separated password appears."""
-        cfg = EmailConfig(host="smtp.example.com", port=587, username="user", password="")
-        url = _build_apprise_url(cfg)
-        assert "user@" in url
-        assert ":@" not in url
-
-    def test_host_and_port_in_url(self) -> None:
-        """Host and port are correctly placed in the URL."""
-        cfg = EmailConfig(host="mail.test.com", port=2525)
-        assert "mail.test.com:2525" in _build_apprise_url(cfg)
-
-
-# ---------------------------------------------------------------------------
 # _format_result_details
 # ---------------------------------------------------------------------------
 
@@ -228,18 +176,16 @@ class TestFormatResultDetails:
 class TestSendQueuedNotification:
     """Tests for the public send_queued_notification function."""
 
-    def test_disabled_returns_false_immediately(self) -> None:
-        """Returns False without calling apprise when notifications are disabled."""
+    def test_empty_url_list_returns_false_immediately(self) -> None:
+        """Returns False without calling apprise when apprise_urls is empty."""
         cfg = Config()
-        cfg.notification.email.enabled = False
+        cfg.notification.apprise_urls = []
         assert send_queued_notification(_make_full_result(), cfg) is False
 
-    def test_enabled_notifies_and_returns_true(self, mocker: MockerFixture) -> None:
+    def test_single_url_notifies_and_returns_true(self, mocker: MockerFixture) -> None:
         """Returns True when apprise successfully delivers the notification."""
         cfg = Config()
-        cfg.notification.email.enabled = True
-        cfg.notification.email.host = "smtp.example.com"
-        cfg.notification.email.port = 587
+        cfg.notification.apprise_urls = ["ntfy://topic"]
 
         mock_instance = mocker.MagicMock()
         mock_instance.notify.return_value = True
@@ -249,14 +195,26 @@ class TestSendQueuedNotification:
 
         assert result is True
         mock_cls.assert_called_once()
-        mock_instance.add.assert_called_once()
+        mock_instance.add.assert_called_once_with("ntfy://topic")
         mock_instance.notify.assert_called_once()
 
-    def test_apprise_returns_false_logs_warning_and_returns_false(self, mocker: MockerFixture) -> None:
+    def test_multiple_urls_all_added(self, mocker: MockerFixture) -> None:
+        """All URLs in apprise_urls are added to the Apprise instance."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic", "discord://id/token"]
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        send_queued_notification(_make_full_result(), cfg)
+
+        assert mock_instance.add.call_count == 2
+
+    def test_apprise_returns_false_returns_false(self, mocker: MockerFixture) -> None:
         """Returns False when apprise.notify() returns False."""
         cfg = Config()
-        cfg.notification.email.enabled = True
-        cfg.notification.email.host = "smtp.example.com"
+        cfg.notification.apprise_urls = ["ntfy://topic"]
 
         mock_instance = mocker.MagicMock()
         mock_instance.notify.return_value = False
@@ -267,11 +225,31 @@ class TestSendQueuedNotification:
     def test_apprise_raises_exception_returns_false(self, mocker: MockerFixture) -> None:
         """Returns False when apprise.notify() raises an unexpected exception."""
         cfg = Config()
-        cfg.notification.email.enabled = True
-        cfg.notification.email.host = "smtp.example.com"
+        cfg.notification.apprise_urls = ["ntfy://topic"]
 
         mock_instance = mocker.MagicMock()
         mock_instance.notify.side_effect = RuntimeError("connection refused")
         mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
 
         assert send_queued_notification(_make_full_result(), cfg) is False
+
+
+# ---------------------------------------------------------------------------
+# NotificationConfig defaults (via Config)
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationConfigDefaults:
+    """NotificationConfig must default to empty URL list."""
+
+    def test_default_apprise_urls_is_empty_list(self) -> None:
+        """Default config has no apprise URLs configured."""
+        cfg = Config()
+        assert cfg.notification.apprise_urls == []
+
+    def test_apprise_urls_accepts_list_of_strings(self) -> None:
+        """apprise_urls accepts a list of service URL strings."""
+        from movarr.config import NotificationConfig
+
+        nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
+        assert len(nc.apprise_urls) == 2
