@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 __all__ = ["fetch_metadata"]
 
 _TRAILER_VI_RE = re.compile(r"vi\d+")
+_re_imdb_id = re.compile(r"tt\d{7,}")
 
 
 def fetch_metadata(result: ResultDict, config: Config) -> ResultDict:
@@ -60,6 +61,39 @@ def fetch_metadata(result: ResultDict, config: Config) -> ResultDict:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
+    """Return the canonical IMDb ID, following any API-level redirect.
+
+    IMDbPie calls the same endpoint internally but only returns True/False.
+    We replicate its logic to extract the canonical ``tt`` ID so we can retry
+    with it instead of failing immediately.
+    """
+    try:
+        from datetime import date
+        from urllib.parse import urljoin
+
+        from imdbpie.constants import BASE_URI
+
+        path = "/template/imdb-ios-writable/title-auxiliary-v31.jstl/render"
+        resource = client._get(
+            url=urljoin(BASE_URI, path),
+            params={
+                "tconst": imdb_id,
+                "today": date.today().strftime("%Y-%m-%d"),
+                "region": client.region,
+            },
+        )
+        if resource:
+            returned_id = resource.get("id", "")
+            if returned_id:
+                match = _re_imdb_id.search(returned_id)
+                if match:
+                    return match.group()
+    except Exception:  # noqa: BLE001
+        pass
+    return imdb_id
+
+
 def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     imdb_id = result.get("imdb_id", "")
     details: list[str] = result.get("result_details") or []
@@ -75,6 +109,15 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
         result["result"] = "Failed"
         result["result_details"] = details
         return result
+
+    # Resolve redirect IDs up-front so get_title() doesn't immediately fail.
+    # IMDbPie raises LookupError for redirect IDs; the same API endpoint
+    # returns the canonical ID in the 'id' field of the response resource.
+    canonical_id = _resolve_imdbpie_redirect(client, imdb_id)
+    if canonical_id != imdb_id:
+        _logger.info("Resolved IMDb redirect: '{}' → '{}'.", imdb_id, canonical_id)
+        result["imdb_id"] = canonical_id
+        imdb_id = canonical_id
 
     try:
         title_data = client.get_title(imdb_id)

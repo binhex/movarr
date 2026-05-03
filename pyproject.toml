@@ -132,7 +132,7 @@ module = "pycountry"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "imdbpie"
+module = ["imdbpie", "imdbpie.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

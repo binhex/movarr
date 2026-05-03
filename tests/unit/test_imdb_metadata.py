@@ -218,6 +218,19 @@ class TestFetchImdbpie:
         out = _fetch_imdbpie(result)
         assert out.get("imdb_cert_source") is None
 
+    def test_redirect_resolved_before_fetch(self, mocker: MockerFixture) -> None:
+        """When IMDb redirects an ID, the canonical ID is used for all API calls."""
+        _mock_imdbpie_client(mocker)
+        # Make _resolve_imdbpie_redirect return a different (canonical) ID.
+        mocker.patch(
+            "movarr.imdb_metadata._resolve_imdbpie_redirect",
+            return_value="tt9999999",
+        )
+        result = _make_result(imdb_id="tt0000001")
+        out = _fetch_imdbpie(result)
+        # The canonical ID must be propagated into the result dict.
+        assert out.get("imdb_id") == "tt9999999"
+
 
 # ---------------------------------------------------------------------------
 # _fetch_omdb
