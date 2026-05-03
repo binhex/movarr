@@ -25,7 +25,7 @@ _SINGLE_ITEM_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>Movie 2023 1080p BluRay</title>
       <link>http://example.com/dl.torrent</link>
-      <torznab:attr name="size" value="8589934592"/>
+      <size>8589934592</size>
       <torznab:attr name="seeders" value="42"/>
       <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:abc123"/>
     </item>
@@ -38,14 +38,14 @@ _MULTI_ITEM_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>Movie 2023 1080p BluRay</title>
       <link>http://example.com/dl1.torrent</link>
-      <torznab:attr name="size" value="8589934592"/>
+      <size>8589934592</size>
       <torznab:attr name="seeders" value="42"/>
       <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:abc123"/>
     </item>
     <item>
       <title>AnotherMovie 2022 1080p</title>
       <link>http://example.com/dl2.torrent</link>
-      <torznab:attr name="size" value="4294967296"/>
+      <size>4294967296</size>
       <torznab:attr name="seeders" value="10"/>
       <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:def456"/>
     </item>
@@ -58,7 +58,7 @@ _IMDB_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>Inception 2010 1080p</title>
       <link>http://example.com/inception.torrent</link>
-      <torznab:attr name="size" value="5368709120"/>
+      <size>5368709120</size>
       <torznab:attr name="seeders" value="100"/>
       <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:xyz789"/>
       <torznab:attr name="imdbid" value="tt1375666"/>
@@ -127,12 +127,12 @@ class TestToMb:
     """Tests for JackettClient._to_mb static helper."""
 
     def test_converts_bytes_to_mb(self) -> None:
-        """8 GiB in bytes converts to 8192 MiB."""
-        assert JackettClient._to_mb("8589934592") == "8192"
+        """8 GB (8,589,934,592 bytes) converts to 8589 decimal MB."""
+        assert JackettClient._to_mb("8589934592") == "8589"
 
     def test_truncates_remainder(self) -> None:
         """Conversion truncates (integer division), does not round."""
-        assert JackettClient._to_mb("1048577") == "1"  # just over 1 MiB
+        assert JackettClient._to_mb("1000001") == "1"  # just over 1 MB
 
     def test_zero_bytes(self) -> None:
         """Zero bytes converts to '0'."""
@@ -162,20 +162,22 @@ class TestParseItem:
     def test_returns_result_dict_with_correct_fields(self, mocker: MockerFixture) -> None:
         """parse_item extracts all expected ResultDict fields."""
         client, _ = _make_client(mocker)
-        item = _make_item(
-            "Movie 2023 1080p BluRay",
-            [
-                {"@name": "size", "@value": "8589934592"},
+        item: dict[str, Any] = {
+            "title": "Movie 2023 1080p BluRay",
+            "link": "http://example.com/dl.torrent",
+            "size": "8589934592",  # standard RSS element
+            _NS_ATTR: [
                 {"@name": "seeders", "@value": "42"},
                 {"@name": "magneturl", "@value": "magnet:?xt=urn:btih:abc123"},
             ],
-        )
+        }
         result = client._parse_item(item)
 
         assert result is not None
         assert result["index_title"] == "Movie 2023 1080p BluRay"
         assert result["index_seeders"] == "42"
-        assert result["index_size_mb"] == "8192"
+        assert result["index_size"] == "8589934592"
+        assert result["index_size_mb"] == "8589"
         assert result["magnet_url"] == "magnet:?xt=urn:btih:abc123"
         assert result["result"] == "Passed"
 
@@ -188,14 +190,15 @@ class TestParseItem:
     def test_includes_imdb_id_when_present(self, mocker: MockerFixture) -> None:
         """imdb_id is added to result when torznab attr imdbid is present."""
         client, _ = _make_client(mocker)
-        item = _make_item(
-            "Inception 2010 1080p",
-            [
-                {"@name": "size", "@value": "5368709120"},
+        item: dict[str, Any] = {
+            "title": "Inception 2010 1080p",
+            "link": "http://example.com/inception.torrent",
+            "size": "5368709120",  # standard RSS element
+            _NS_ATTR: [
                 {"@name": "seeders", "@value": "100"},
                 {"@name": "imdbid", "@value": "tt1375666"},
             ],
-        )
+        }
         result = client._parse_item(item)
 
         assert result is not None
@@ -209,6 +212,33 @@ class TestParseItem:
 
         assert result is not None
         assert "imdb_id" not in result
+
+    def test_size_read_from_rss_element(self, mocker: MockerFixture) -> None:
+        """index_size is populated from the top-level <size> RSS element, not torznab:attr."""
+        client, _ = _make_client(mocker)
+        # size as a standard RSS element (top-level dict key), no torznab:attr for size
+        item: dict[str, Any] = {
+            "title": "Big.Movie.2024.2160p.Remux",
+            "link": "http://example.com/dl.torrent",
+            "size": "10737418240",  # 10 GiB as RSS element
+            _NS_ATTR: [{"@name": "seeders", "@value": "5"}],
+        }
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["index_size"] == "10737418240"
+        assert result["index_size_mb"] == "10737"
+
+    def test_size_in_torznab_attr_only_is_ignored(self, mocker: MockerFixture) -> None:
+        """size in torznab:attr only (no <size> element) gives empty index_size."""
+        client, _ = _make_client(mocker)
+        # size only in torznab:attr — this is the wrong place; should NOT be read
+        item = _make_item("Movie", [{"@name": "size", "@value": "8589934592"}])
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["index_size"] == ""
+        assert result["index_size_mb"] == "0"
 
 
 # ---------------------------------------------------------------------------

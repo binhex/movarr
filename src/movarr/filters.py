@@ -161,7 +161,10 @@ def _check_size(result: ResultDict, index_site: dict, bound: str) -> ResultDict:
     if not raw_size:
         return _fail(result, "No index size available; assuming below threshold.")
 
-    size_mb = int(raw_size) // 1_000_000
+    try:
+        size_mb = int(raw_size) // 1_000_000
+    except (ValueError, TypeError):
+        return _fail(result, f"Could not parse index size '{raw_size}'.")
     ok = (size_mb >= threshold_mb) if bound == "minimum" else (size_mb <= threshold_mb)
     msg = f"Size {size_mb} MB {'≥' if bound == 'minimum' else '≤'} {threshold_mb} MB."
     return _pass(result, msg) if ok else _fail(result, msg)
@@ -268,8 +271,11 @@ def _check_bitrate(result: ResultDict, _config: object) -> ResultDict:
     if not runtime:
         return _fail(result, "No runtime available for bitrate check.")
 
-    size_mb = int(raw_size) // 1_000_000
-    bitrate_mb = size_mb // int(runtime)
+    try:
+        size_mb = int(raw_size) // 1_000_000
+        bitrate_mb = size_mb // int(runtime)
+    except (ValueError, TypeError, ZeroDivisionError):
+        return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
     if bitrate_mb >= int(min_bitrate_mb):
         return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {min_bitrate_mb}.")
     return _fail(result, f"Bitrate {bitrate_mb} MB/min < {min_bitrate_mb}.")

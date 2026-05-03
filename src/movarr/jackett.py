@@ -148,8 +148,8 @@ class JackettClient:
             "index_details": item.get("comments", ""),
             "index_seeders": self._attr(item, "seeders"),
             "index_peers": self._attr(item, "peers"),
-            "index_size": self._attr(item, "size"),
-            "index_size_mb": self._to_mb(self._attr(item, "size")),
+            "index_size": item.get("size", ""),
+            "index_size_mb": self._to_mb(item.get("size", "")),
             "torrent_url": item.get("link", ""),
             "magnet_url": self._attr(item, "magneturl"),
             "category": self._attr(item, "category"),
@@ -178,8 +178,8 @@ class JackettClient:
 
     @staticmethod
     def _to_mb(size_bytes: str) -> str:
-        """Convert a byte string to a megabyte string (integer, truncated)."""
+        """Convert a byte string to a decimal megabyte string (integer, truncated)."""
         try:
-            return str(int(size_bytes) // (1024 * 1024))
+            return str(int(size_bytes) // 1_000_000)
         except (ValueError, TypeError):
             return "0"
