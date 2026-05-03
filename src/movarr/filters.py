@@ -514,6 +514,8 @@ def _evaluate_library_files(
     raw_san = result.get("index_title_sanitised") or index_title
     index_san = sanitise(raw_san) or ""
 
+    best_reason = ""
+
     for lib_path in library_files:
         lib_fname = os.path.basename(lib_path)
         lib_san = sanitise(lib_fname) or ""
@@ -535,15 +537,27 @@ def _evaluate_library_files(
         if idx_res_int < lib_res_int:
             return _fail(result, f"Library has higher resolution ({lib_res}p > {index_resolution}p).")
 
-        if idx_res_int == lib_res_int:
-            idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
-            lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
-            idx_score += _special_edition_bonus(index_san, lib_san)
-            lib_score += _special_edition_bonus(lib_san, index_san)
+        if idx_res_int > lib_res_int:
+            best_reason = (
+                f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
+            )
+            continue
 
-            if lib_score >= idx_score:
-                return _fail(result, f"Library quality score ({lib_score}) ≥ index ({idx_score}).")
+        # Same resolution — compare quality scores.
+        idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
+        lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
+        idx_score += _special_edition_bonus(index_san, lib_san)
+        lib_score += _special_edition_bonus(lib_san, index_san)
 
+        if lib_score >= idx_score:
+            return _fail(result, f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score}).")
+
+        best_reason = (
+            f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+        )
+
+    if best_reason:
+        return _pass(result, f"Index title '{index_title}' passes library check — {best_reason}.")
     return _pass(result, f"Index title '{index_title}' passes library check.")
 
 

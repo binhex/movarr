@@ -1043,6 +1043,37 @@ class TestEvaluateLibraryFilesEdgeCases:
         out = _evaluate_library_files(result, ["/lib/Test Film 2008 2160p BluRay.mkv"], "1080", Config())
         assert out["result"] != "Passed"
 
+    def test_passes_when_index_scores_higher_at_same_resolution(self) -> None:
+        """Index with a REMUX and UNRATED bonus should beat a plain BluRay at same resolution."""
+        from movarr.filters import _evaluate_library_files
+
+        # Index has REMUX + UNRATED (special edition bonus) — will outscore plain BluRay
+        result = _imdb_result(
+            index_title="Test Film 2008 1080p BluRay REMUX UNRATED",
+            index_title_sanitised="Test Film 2008 1080p BluRay REMUX UNRATED",
+            index_title_resolution="1080",
+        )
+        out = _evaluate_library_files(
+            result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "1080", Config()
+        )
+        assert out["result"] == "Passed"
+        assert "lib score:" in (out.get("result_details") or [""])[-1]
+
+    def test_passes_with_reason_when_index_is_higher_resolution(self) -> None:
+        """Pass message includes reason when index outresolves the library file."""
+        from movarr.filters import _evaluate_library_files
+
+        result = _imdb_result(
+            index_title="Test Film 2008 2160p BluRay",
+            index_title_sanitised="Test Film 2008 2160p BluRay",
+            index_title_resolution="2160",
+        )
+        out = _evaluate_library_files(
+            result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "2160", Config()
+        )
+        assert out["result"] == "Passed"
+        assert "lower resolution" in (out.get("result_details") or [""])[-1]
+
 
 # ---------------------------------------------------------------------------
 # _group_bonus and _special_edition_bonus
