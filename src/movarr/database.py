@@ -311,6 +311,42 @@ class Database:
             session.commit()
         return int(deleted)
 
+    def expire_passed(self, days: int) -> int:
+        """Delete passed history records older than *days* days.
+
+        Called at the start of each search run to allow retry of titles whose
+        queued torrent was never completed (e.g. qBittorrent was reset externally).
+        A *days* value of 0 disables expiry (no records deleted).
+
+        .. warning::
+            Only ``Passed`` rows with a ``created_at`` timestamp are eligible.
+            Rows that transitioned to ``Completed`` or ``Stalled`` are excluded.
+            Setting *days* too low risks expiring records for torrents that are
+            still legitimately downloading (e.g. a very large file with few
+            seeders).  The default of 30 days is intentionally conservative.
+
+        Args:
+            days: Retention window in days.  0 = no expiry.
+
+        Returns:
+            Number of records deleted.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
+        with Session(self._engine) as session:
+            deleted = (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.result == "Passed",
+                    HistoryRecord.created_at.isnot(None),
+                    HistoryRecord.created_at < cutoff,
+                )
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+        return int(deleted)
+
     # ------------------------------------------------------------------
     # Read / deduplication
     # ------------------------------------------------------------------

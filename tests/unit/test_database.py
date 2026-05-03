@@ -501,3 +501,68 @@ class TestExpireFailed:
         assert record is not None
         assert record.created_at is not None
         assert "T" in record.created_at  # ISO 8601 format
+
+
+class TestExpirePassed:
+    """Database.expire_passed() deletes Passed rows older than N days."""
+
+    def _backdate_created(self, db: Database, index_title: str, days_ago: int) -> None:
+        """Force created_at to *days_ago* days in the past."""
+        import datetime
+
+        from sqlalchemy.orm import Session as _Session
+
+        from movarr.database import HistoryRecord
+
+        old_ts = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days_ago)).isoformat()
+        with _Session(db._engine) as s:
+            s.query(HistoryRecord).filter_by(index_title=index_title).update({"created_at": old_ts})
+            s.commit()
+
+    def test_deletes_old_passed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Passed", "index_title": "Old Passed Movie"})
+        self._backdate_created(db, "Old Passed Movie", days_ago=35)
+
+        count = db.expire_passed(days=30)
+
+        assert count == 1
+
+    def test_retains_recent_passed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Passed", "index_title": "Recent Passed Movie"})
+
+        count = db.expire_passed(days=30)
+
+        assert count == 0
+
+    def test_zero_days_is_noop(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Passed", "index_title": "Any Passed Movie"})
+        self._backdate_created(db, "Any Passed Movie", days_ago=100)
+
+        count = db.expire_passed(days=0)
+
+        assert count == 0
+
+    def test_does_not_delete_completed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Completed", "index_title": "Completed Movie"})
+        self._backdate_created(db, "Completed Movie", days_ago=35)
+
+        count = db.expire_passed(days=30)
+
+        assert count == 0
+
+    def test_does_not_delete_failed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Failed", "index_title": "Failed Movie"})
+        self._backdate_created(db, "Failed Movie", days_ago=35)
+
+        count = db.expire_passed(days=30)
+
+        assert count == 0
+
+    def test_returns_count_deleted(self, db: Database) -> None:
+        for title in ["Passed Alpha", "Passed Beta"]:
+            db.write({**_minimal_result(), "result": "Passed", "index_title": title})
+            self._backdate_created(db, title, days_ago=35)
+
+        count = db.expire_passed(days=30)
+
+        assert count == 2

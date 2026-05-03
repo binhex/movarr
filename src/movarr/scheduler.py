@@ -145,8 +145,12 @@ def _run_daemon(config: Config) -> None:
 
 def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     try:
-        db.expire_stalled(config.database.stalled_expiry_days)
-        db.expire_failed(config.database.failed_expiry_days)
+        if n := db.expire_stalled(config.database.stalled_expiry_days):
+            logger.info(f"Expired {n} stalled history record(s) older than {config.database.stalled_expiry_days} days.")
+        if n := db.expire_failed(config.database.failed_expiry_days):
+            logger.info(f"Expired {n} failed history record(s) older than {config.database.failed_expiry_days} days.")
+        if n := db.expire_passed(config.database.passed_expiry_days):
+            logger.info(f"Expired {n} passed history record(s) older than {config.database.passed_expiry_days} days.")
         run_search(config, qbt, db)
     except Exception:
         logger.exception("Search task failed.")
