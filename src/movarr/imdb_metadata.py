@@ -158,8 +158,8 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     details: list[str] = result.get("result_details") or []
 
     try:
-        omdb_client = omdb.OMDB(api_key=api_key, timeout=30.0)
-        data = omdb_client.get_movie(imdbid=imdb_id)
+        omdb_client = omdb.OMDBClient(apikey=api_key)
+        data = omdb_client.imdbid(imdb_id, timeout=30)
     except Exception as exc:  # noqa: BLE001
         msg = f"OMDb fetch failed for '{imdb_id}': {exc}"
         _logger.warning(msg)

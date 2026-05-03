@@ -37,6 +37,7 @@ dependencies = [
     "xmltodict",
     "ffmpeg-python",
     "pycountry>=26.2.16",
+    "omdb>=0.10.1",
 ]
 
 [project.optional-dependencies]

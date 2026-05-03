@@ -104,8 +104,8 @@ class TestFetchMetadata:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         mock_omdb_module = mocker.MagicMock()
         mock_omdb_client = mocker.MagicMock()
-        mock_omdb_module.OMDB.return_value = mock_omdb_client
-        mock_omdb_client.get_movie.return_value = {
+        mock_omdb_module.OMDBClient.return_value = mock_omdb_client
+        mock_omdb_client.imdbid.return_value = {
             "title": "The Matrix",
             "year": "1999",
             "imdb_rating": "8.7",
@@ -131,7 +131,7 @@ class TestFetchMetadata:
     def test_both_strategies_fail_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"imdbpie": None})
         mock_omdb_module = mocker.MagicMock()
-        mock_omdb_module.OMDB.side_effect = RuntimeError("omdb unavailable")
+        mock_omdb_module.OMDBClient.side_effect = RuntimeError("omdb unavailable")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb_module})
         result = _make_result()
         cfg = Config()
@@ -230,8 +230,8 @@ class TestFetchOmdb:
     def _setup_omdb_mock(self, mocker: MockerFixture, return_value: dict) -> None:
         mock_omdb = mocker.MagicMock()
         mock_client = mocker.MagicMock()
-        mock_omdb.OMDB.return_value = mock_client
-        mock_client.get_movie.return_value = return_value
+        mock_omdb.OMDBClient.return_value = mock_client
+        mock_client.imdbid.return_value = return_value
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
 
     def test_successful_fetch_populates_fields(self, mocker: MockerFixture) -> None:
@@ -291,8 +291,8 @@ class TestFetchOmdb:
     def test_omdb_exception_sets_failed(self, mocker: MockerFixture) -> None:
         mock_omdb = mocker.MagicMock()
         mock_client = mocker.MagicMock()
-        mock_omdb.OMDB.return_value = mock_client
-        mock_client.get_movie.side_effect = RuntimeError("api error")
+        mock_omdb.OMDBClient.return_value = mock_client
+        mock_client.imdbid.side_effect = RuntimeError("api error")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
         result = _make_result()
         cfg = Config()
@@ -301,7 +301,7 @@ class TestFetchOmdb:
 
     def test_omdb_constructor_exception_sets_failed(self, mocker: MockerFixture) -> None:
         mock_omdb = mocker.MagicMock()
-        mock_omdb.OMDB.side_effect = RuntimeError("no connection")
+        mock_omdb.OMDBClient.side_effect = RuntimeError("no connection")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
         result = _make_result()
         cfg = Config()
