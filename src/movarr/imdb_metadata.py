@@ -198,8 +198,10 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     languages = _convert_languages(_nona("language"))
 
     # Normalise year and rating to canonical numeric types.
+    # OMDb may return '2026–' for ongoing series — extract leading 4-digit year.
     raw_year = _nona("year")
-    year: int | None = int(raw_year) if raw_year else None
+    year_digits = "".join(re.findall(r"\d+", raw_year))[:4] if raw_year else ""
+    year: int | None = int(year_digits) if len(year_digits) == 4 else None
 
     raw_rating = _nona("imdb_rating")
     rating: float | None = float(raw_rating) if raw_rating else None

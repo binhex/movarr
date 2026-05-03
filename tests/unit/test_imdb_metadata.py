@@ -321,6 +321,17 @@ class TestFetchOmdb:
         if votes:
             assert isinstance(votes, int)
 
+    def test_year_with_trailing_dash_parsed(self, mocker: MockerFixture) -> None:
+        """OMDb returns '2026–' for ongoing series; must extract the 4-digit year."""
+        self._setup_omdb_mock(
+            mocker,
+            {"title": "Big Mistakes", "year": "2026\u2013"},
+        )
+        result = _make_result()
+        cfg = Config()
+        out = _fetch_omdb(result, cfg)
+        assert out.get("imdb_year") == 2026
+
     def test_genres_split_by_comma(self, mocker: MockerFixture) -> None:
         self._setup_omdb_mock(
             mocker,
