@@ -143,9 +143,14 @@ class JackettClient:
             return None
 
         magnet_url = self._attr(item, "magneturl")
+        tracker_elem = item.get("jackettindexer")
+        if isinstance(tracker_elem, dict):
+            tracker = tracker_elem.get("#text", "")
+        else:
+            tracker = str(tracker_elem) if tracker_elem else ""
         result: ResultDict = {
             "index_title": index_title,
-            "index_tracker": self._attr(item, "jackettindexer"),
+            "index_tracker": tracker,
             "index_pubdate": item.get("pubDate", ""),
             "index_details": item.get("comments", ""),
             "index_seeders": self._attr(item, "seeders"),
