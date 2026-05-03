@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Database", "HistoryRecord"]
 
-_DB_VERSION = 8
+_DB_VERSION = 9
 
 
 def _encode_field(value: object) -> str | None:
@@ -75,6 +76,7 @@ class HistoryRecord(Base):
     imdb_country_list = Column(String)
     imdb_certification = Column(String)
     imdb_cert_source = Column(String)
+    stalled_at = Column(String)
 
 
 class Database:
@@ -147,6 +149,12 @@ class Database:
             if from_version < 8:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_history_index_title ON history (index_title)"))
                 conn.commit()
+            if from_version < 9:
+                cursor = conn.execute(text("PRAGMA table_info(history)"))
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if "stalled_at" not in existing_cols:
+                    conn.execute(text("ALTER TABLE history ADD COLUMN stalled_at TEXT"))
+                conn.commit()
         self._set_user_version(_DB_VERSION)
 
     # ------------------------------------------------------------------
@@ -211,6 +219,64 @@ class Database:
             session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).update({"verified": "true"})
             session.commit()
 
+    def mark_stalled(self, torrent_tag: str) -> None:
+        """Mark a torrent as stalled (deleted by queue manager with no seeds/peers).
+
+        Sets ``result="Stalled"`` and records the UTC timestamp of detection.
+
+        Args:
+            torrent_tag: The UUID tag that identifies the torrent.
+        """
+        now = datetime.datetime.now(tz=datetime.UTC).isoformat()
+        with Session(self._engine) as session:
+            session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).update(
+                {"result": "Stalled", "stalled_at": now}
+            )
+            session.commit()
+
+    def mark_completed(self, torrent_tag: str) -> None:
+        """Mark a torrent as completed after successful post-processing.
+
+        Sets ``result="Completed"`` and ``verified="true"``.
+
+        Args:
+            torrent_tag: The UUID tag that identifies the torrent.
+        """
+        with Session(self._engine) as session:
+            session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).update(
+                {"result": "Completed", "verified": "true"}
+            )
+            session.commit()
+
+    def expire_stalled(self, days: int) -> int:
+        """Delete stalled history records older than *days* days.
+
+        Called at the start of each search run to allow retry of titles whose
+        stalled record has expired.  A *days* value of 0 disables expiry (no
+        records deleted).
+
+        Args:
+            days: Retention window in days.  0 = no expiry.
+
+        Returns:
+            Number of records deleted.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
+        with Session(self._engine) as session:
+            deleted = (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.result == "Stalled",
+                    HistoryRecord.stalled_at.isnot(None),
+                    HistoryRecord.stalled_at < cutoff,
+                )
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+        return int(deleted)
+
     # ------------------------------------------------------------------
     # Read / deduplication
     # ------------------------------------------------------------------
@@ -225,17 +291,26 @@ class Database:
             return session.query(HistoryRecord).filter_by(index_title=index_title).first() is not None
 
     def has_passed(self, index_title: str) -> bool:
-        """Return True if *index_title* has a ``Passed`` result in history.
+        """Return True if *index_title* should be skipped by the search pipeline.
 
-        Only ``Passed`` rows represent torrents that were actually submitted to
-        qBittorrent.  Failed rows may have been caused by transient errors and
-        should be re-evaluated on subsequent runs.
+        Skips titles with result ``Passed`` (submitted, awaiting outcome),
+        ``Completed`` (successfully downloaded), or ``Stalled`` (pending expiry).
+        Expired stalled rows are removed by :meth:`expire_stalled` before this
+        is called, so no timestamp check is needed here.
 
         Args:
             index_title: The raw index torrent title.
         """
         with Session(self._engine) as session:
-            return session.query(HistoryRecord).filter_by(index_title=index_title, result="Passed").first() is not None
+            return (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.index_title == index_title,
+                    HistoryRecord.result.in_(["Passed", "Completed", "Stalled"]),
+                )
+                .first()
+                is not None
+            )
 
     def is_duplicate_fuzzy(self, pattern: str) -> bool:
         """Return True if *pattern* matches any existing history title (LIKE match).

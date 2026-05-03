@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "load_config"]
 
-_CONFIG_VERSION = "2.0.0"
+_CONFIG_VERSION = "2.1.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -27,8 +27,16 @@ def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v2_to_v21(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.0.0 → v2.1.0: add database.stalled_expiry_days."""
+    raw.setdefault("database", {}).setdefault("stalled_expiry_days", 7)
+    raw.setdefault("general", {})["config_version"] = "2.1.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
+    "2.0.0": _migrate_v2_to_v21,
 }
 
 
@@ -233,6 +241,12 @@ class PostProcessConfig(BaseModel):
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
 
 
+class DatabaseConfig(BaseModel):
+    """Database settings."""
+
+    stalled_expiry_days: int = 7
+
+
 class Config(BaseModel):
     """Root configuration model for movarr."""
 
@@ -246,6 +260,7 @@ class Config(BaseModel):
     index_site: IndexSiteConfig = Field(default_factory=IndexSiteConfig)
     queue_management: QueueManagementConfig = Field(default_factory=QueueManagementConfig)
     post_process: PostProcessConfig = Field(default_factory=PostProcessConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
 
 
 # ---------------------------------------------------------------------------

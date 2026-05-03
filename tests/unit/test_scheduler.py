@@ -204,23 +204,24 @@ class TestTaskQueueManagement:
         mock_qm = mocker.patch("movarr.scheduler.run_queue_management")
         config = Config()
         qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
 
-        _task_queue_management(config, qbt)
+        _task_queue_management(config, qbt, db)
 
-        mock_qm.assert_called_once_with(config, qbt)
+        mock_qm.assert_called_once_with(config, qbt, db)
 
     def test_exception_is_swallowed(self, mocker: MockerFixture) -> None:
         mocker.patch("movarr.scheduler.run_queue_management", side_effect=RuntimeError("timeout"))
         config = Config()
 
         # Must not raise
-        _task_queue_management(config, mocker.MagicMock())
+        _task_queue_management(config, mocker.MagicMock(), mocker.MagicMock())
 
     def test_connection_error_is_swallowed(self, mocker: MockerFixture) -> None:
         mocker.patch("movarr.scheduler.run_queue_management", side_effect=ConnectionError("refused"))
         config = Config()
 
-        _task_queue_management(config, mocker.MagicMock())
+        _task_queue_management(config, mocker.MagicMock(), mocker.MagicMock())
 
 
 # ---------------------------------------------------------------------------

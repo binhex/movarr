@@ -761,7 +761,7 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(), qbt, db)
 
-        db.set_verified.assert_not_called()
+        db.mark_completed.assert_not_called()
 
     def test_no_files_to_copy_returns_early(self, mocker: MockerFixture) -> None:
         """When _build_copy_list returns empty, processing is skipped."""
@@ -772,7 +772,7 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(), qbt, db)
 
-        db.set_verified.assert_not_called()
+        db.mark_completed.assert_not_called()
 
     def test_no_destination_returns_early(self, mocker: MockerFixture) -> None:
         """When _resolve_destination returns None, files are not copied."""
@@ -784,7 +784,7 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(), qbt, db)
 
-        db.set_verified.assert_not_called()
+        db.mark_completed.assert_not_called()
 
     def test_make_directory_fails_returns_early(self, mocker: MockerFixture) -> None:
         """When make_directory returns False, copy is not attempted."""
@@ -797,10 +797,10 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(), qbt, db)
 
-        db.set_verified.assert_not_called()
+        db.mark_completed.assert_not_called()
 
     def test_copy_verify_fails_does_not_set_verified(self, mocker: MockerFixture) -> None:
-        """When copy_with_verify returns False, set_verified is not called."""
+        """When copy_with_verify returns False, mark_completed is not called."""
         db = mocker.MagicMock()
         db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
@@ -811,11 +811,11 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(), qbt, db)
 
-        db.set_verified.assert_not_called()
+        db.mark_completed.assert_not_called()
         qbt.delete_torrent.assert_not_called()
 
     def test_full_happy_path_sets_verified_and_deletes_torrent(self, mocker: MockerFixture) -> None:
-        """All steps succeed: set_verified called and torrent deleted (remove_completed=True)."""
+        """All steps succeed: mark_completed called and torrent deleted (remove_completed=True)."""
         db = mocker.MagicMock()
         db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
@@ -828,11 +828,11 @@ class TestProcessOne:
 
         _process_one(torrent, cfg, qbt, db)
 
-        db.set_verified.assert_called_once_with("tag1")
+        db.mark_completed.assert_called_once_with("tag1")
         qbt.delete_torrent.assert_called_once_with("deadbeef", delete_data=True, state="completed")
 
     def test_copy_succeeds_without_remove_completed(self, mocker: MockerFixture) -> None:
-        """All steps succeed but remove_completed=False: set_verified but no torrent deletion."""
+        """All steps succeed but remove_completed=False: mark_completed but no torrent deletion."""
         db = mocker.MagicMock()
         db.find_by_tag.return_value = self._db_record(mocker)
         mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
@@ -843,7 +843,7 @@ class TestProcessOne:
 
         _process_one(self._torrent(), self._config(remove_completed=False), qbt, db)
 
-        db.set_verified.assert_called_once()
+        db.mark_completed.assert_called_once()
         qbt.delete_torrent.assert_not_called()
 
     def test_title_with_only_dots_uses_unknown(self, mocker: MockerFixture) -> None:

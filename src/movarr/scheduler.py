@@ -65,7 +65,7 @@ def run_once(config: Config) -> None:
     qbt = _connect_qbt(config)
 
     _task_search(config, qbt, db)
-    _task_queue_management(config, qbt)
+    _task_queue_management(config, qbt, db)
     _task_post_processing(config, qbt, db)
 
     logger.info("Single-pass complete.")
@@ -98,9 +98,8 @@ def _run_daemon(config: Config) -> None:
         _task_queue_management,
         trigger="interval",
         minutes=qm_mins,
-        args=(config, qbt),
+        args=(config, qbt, db),
         id="queue_management",
-        name="Queue management (delete stuck torrents)",
         max_instances=1,
         coalesce=True,
     )
@@ -146,14 +145,15 @@ def _run_daemon(config: Config) -> None:
 
 def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     try:
+        db.expire_stalled(config.database.stalled_expiry_days)
         run_search(config, qbt, db)
     except Exception:
         logger.exception("Search task failed.")
 
 
-def _task_queue_management(config: Config, qbt: QBittorrentClient) -> None:
+def _task_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     try:
-        run_queue_management(config, qbt)
+        run_queue_management(config, qbt, db)
     except Exception:
         logger.exception("Queue management task failed.")
 

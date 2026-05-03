@@ -130,8 +130,8 @@ def _process_one(
             break
 
     if all_ok:
-        db.set_verified(tag)
-        logger.info("Marked tag '{}' as verified.", tag)
+        db.mark_completed(tag)
+        logger.info("Marked tag '{}' as completed.", tag)
 
     # Remove source torrent if configured (we're already processing completed torrents).
     if all_ok and config.post_process.remove_completed:

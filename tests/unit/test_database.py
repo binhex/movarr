@@ -214,7 +214,7 @@ class TestDatabaseVacuum:
 
 
 class TestHasPassed:
-    """Database.has_passed() returns True only when a Passed row exists."""
+    """Database.has_passed() returns True only when a Passed/Completed/Stalled row exists."""
 
     def test_returns_true_when_passed_row_exists(self, db: Database) -> None:
         db.write(_minimal_result(result="Passed"))
@@ -226,6 +226,16 @@ class TestHasPassed:
 
     def test_returns_false_when_no_row_exists(self, db: Database) -> None:
         assert db.has_passed("Unknown Movie 2099") is False
+
+    def test_returns_true_when_completed_row_exists(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-comp-hp"))
+        db.mark_completed("movarr-comp-hp")
+        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
+
+    def test_returns_true_when_stalled_row_exists(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-stall-hp"))
+        db.mark_stalled("movarr-stall-hp")
+        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
 
     def test_upgrade_from_version_7_creates_index_title_index(self, tmp_path: Path) -> None:
         import sqlite3
@@ -283,3 +293,141 @@ class TestHasPassed:
         con2.close()
         assert "ix_history_index_title" in index_names
         del db
+
+    def test_upgrade_from_version_8_adds_stalled_at_column(self, tmp_path: Path) -> None:
+        """Migrating a v8 DB adds the stalled_at column."""
+        import sqlite3
+
+        old_path = str(tmp_path / "v8.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                result TEXT,
+                result_details TEXT
+            )
+            """
+        )
+        con.execute("PRAGMA user_version = 8")
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        con2 = sqlite3.connect(old_path)
+        cursor = con2.execute("PRAGMA table_info(history)")
+        columns = [row[1] for row in cursor.fetchall()]
+        con2.close()
+        assert "stalled_at" in columns
+        del db
+
+
+# ---------------------------------------------------------------------------
+# mark_stalled
+# ---------------------------------------------------------------------------
+
+
+class TestMarkStalled:
+    """Database.mark_stalled() sets result='Stalled' and stalled_at."""
+
+    def test_sets_result_and_stalled_at(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-abc"))
+        db.mark_stalled("movarr-abc")
+        record = db.find_by_tag("movarr-abc")
+        assert record is not None
+        assert record.result == "Stalled"
+        assert record.stalled_at is not None
+
+    def test_unknown_tag_is_noop(self, db: Database) -> None:
+        db.mark_stalled("movarr-unknown")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# mark_completed
+# ---------------------------------------------------------------------------
+
+
+class TestMarkCompleted:
+    """Database.mark_completed() sets result='Completed' and verified='true'."""
+
+    def test_sets_result_and_verified(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-xyz"))
+        db.mark_completed("movarr-xyz")
+        record = db.find_by_tag("movarr-xyz")
+        assert record is not None
+        assert record.result == "Completed"
+        assert record.verified == "true"
+
+    def test_unknown_tag_is_noop(self, db: Database) -> None:
+        db.mark_completed("movarr-unknown")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# expire_stalled
+# ---------------------------------------------------------------------------
+
+
+class TestExpireStalled:
+    """Database.expire_stalled() deletes rows older than N days."""
+
+    def _backdate(self, db: Database, torrent_tag: str, days_ago: int) -> None:
+        """Force stalled_at to *days_ago* days in the past."""
+        import datetime
+
+        from sqlalchemy.orm import Session as _Session
+
+        from movarr.database import HistoryRecord
+
+        old_ts = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days_ago)).isoformat()
+        with _Session(db._engine) as s:
+            s.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).update({"stalled_at": old_ts})
+            s.commit()
+
+    def test_deletes_old_stalled_rows(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-old"))
+        db.mark_stalled("movarr-old")
+        self._backdate(db, "movarr-old", days_ago=10)
+
+        count = db.expire_stalled(days=7)
+
+        assert count == 1
+        assert db.find_by_tag("movarr-old") is None
+
+    def test_retains_recent_stalled_rows(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-new"))
+        db.mark_stalled("movarr-new")
+
+        count = db.expire_stalled(days=7)
+
+        assert count == 0
+        assert db.find_by_tag("movarr-new") is not None
+
+    def test_zero_days_is_noop(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-any"))
+        db.mark_stalled("movarr-any")
+        self._backdate(db, "movarr-any", days_ago=100)
+
+        count = db.expire_stalled(days=0)
+
+        assert count == 0
+        assert db.find_by_tag("movarr-any") is not None
+
+    def test_returns_count_deleted(self, db: Database) -> None:
+        for tag in ["movarr-a", "movarr-b"]:
+            db.write(_minimal_result(index_title=f"Movie {tag}", torrent_tag=tag))
+            db.mark_stalled(tag)
+            self._backdate(db, tag, days_ago=10)
+
+        count = db.expire_stalled(days=7)
+
+        assert count == 2
+
+    def test_does_not_delete_completed_rows(self, db: Database) -> None:
+        db.write(_minimal_result(torrent_tag="movarr-comp"))
+        db.mark_completed("movarr-comp")
+
+        count = db.expire_stalled(days=1)
+
+        assert count == 0
+        assert db.find_by_tag("movarr-comp") is not None
