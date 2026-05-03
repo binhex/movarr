@@ -1,6 +1,7 @@
 """Command-line interface for movarr."""
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import click
 
@@ -51,10 +52,10 @@ _PROJECT_ROOT = get_project_root()
 @click.option(
     "--pid-path",
     type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default=f"{_PROJECT_ROOT}/movarr.pid",
-    show_default=True,
+    default=None,
+    show_default=False,
     metavar="<path>",
-    help="Path to PID file (daemon mode).",
+    help="Path to PID file (daemon mode). Defaults to movarr.pid in the config directory.",
 )
 @click.option(
     "--ffprobe-path",
@@ -82,7 +83,7 @@ def cli(
     db_path: str,
     log_path: str,
     log_level: str,
-    pid_path: str,
+    pid_path: str | None,
     ffprobe_path: str,
     daemon: bool,
     test: bool,
@@ -95,6 +96,9 @@ def cli(
     """
     log_format = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
     create_logger(log_format=log_format, log_level=log_level, log_path=log_path)
+
+    if pid_path is None:
+        pid_path = str(Path(config_path).parent / "movarr.pid")
 
     from movarr.config import load_config
 

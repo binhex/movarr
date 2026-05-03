@@ -254,3 +254,46 @@ class TestCliSchedulerRun:
         result = CliRunner().invoke(cli, [])
         assert result.exit_code == 0
         mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# --pid-path default behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestCliPidPath:
+    """PID path defaults to movarr.pid in the config directory."""
+
+    def test_pid_path_defaults_to_config_dir(self, mocker: MockerFixture) -> None:
+        """When --pid-path is omitted, scheduler.run is called with a path
+        inside the same directory as the config file."""
+        mocker.patch("movarr.cli.create_logger")
+        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
+        mock_run = mocker.patch("movarr.scheduler.run")
+
+        CliRunner().invoke(cli, ["--config-path", "/some/config/movarr.yml"])
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["pid_path"] == "/some/config/movarr.pid"
+
+    def test_pid_path_explicit_overrides_default(self, mocker: MockerFixture) -> None:
+        """When --pid-path is supplied, scheduler.run uses the given path."""
+        mocker.patch("movarr.cli.create_logger")
+        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
+        mock_run = mocker.patch("movarr.scheduler.run")
+
+        CliRunner().invoke(cli, ["--pid-path", "/run/movarr/movarr.pid"])
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["pid_path"] == "/run/movarr/movarr.pid"
+
+    def test_pid_path_contains_movarr_pid_filename(self, mocker: MockerFixture) -> None:
+        """Default PID filename is always movarr.pid."""
+        mocker.patch("movarr.cli.create_logger")
+        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
+        mock_run = mocker.patch("movarr.scheduler.run")
+
+        CliRunner().invoke(cli, [])
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["pid_path"].endswith("movarr.pid")
