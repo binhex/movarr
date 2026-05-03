@@ -115,48 +115,49 @@ def _process_criteria(
 
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
-        if session.db.has_passed(index_title):
-            logger.info("[{}] '{}' already in DB; skipping.", tracker, index_title)
-            continue
+        with logger.contextualize(tracker=tracker):
+            if session.db.has_passed(index_title):
+                logger.info("'{}' already in DB; skipping.", index_title)
+                continue
 
-        if not result.get("movie_title"):
-            logger.debug("[{}] No movie title from '{}'; skipping.", tracker, result.get("index_title"))
-            continue
+            if not result.get("movie_title"):
+                logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
+                continue
 
-        if not result.get("movie_title_year"):
-            logger.debug("[{}] No year from '{}'; skipping.", tracker, result.get("index_title"))
-            continue
+            if not result.get("movie_title_year"):
+                logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+                continue
 
-        result = filter_by_index(result, site_dict, session.config, session.library_walk)
-        if result.get("result") != "Passed":
+            result = filter_by_index(result, site_dict, session.config, session.library_walk)
+            if result.get("result") != "Passed":
+                session.db.write(result)
+                continue
+
+            # Resolve IMDb ID if not supplied by the index.
+            if not result.get("imdb_id"):
+                result = search_for_imdb_id(result, session.config)
+            if result.get("result") != "Passed" or not result.get("imdb_id"):
+                session.db.write(result)
+                continue
+
+            result = fetch_metadata(result, session.config)
+            if result.get("result") != "Passed":
+                session.db.write(result)
+                continue
+
+            result = filter_by_imdb(result, session.config, session.library_walk)
+            if result.get("result") != "Passed":
+                session.db.write(result)
+                continue
+
+            logger.success("'{}' passed all filters.", result.get("index_title"))
+
+            send_queued_notification(result, session.config)
+
+            updated = session.qbt.add_torrent(result)
+            if updated is not None:
+                result = updated
             session.db.write(result)
-            continue
-
-        # Resolve IMDb ID if not supplied by the index.
-        if not result.get("imdb_id"):
-            result = search_for_imdb_id(result, session.config)
-        if result.get("result") != "Passed" or not result.get("imdb_id"):
-            session.db.write(result)
-            continue
-
-        result = fetch_metadata(result, session.config)
-        if result.get("result") != "Passed":
-            session.db.write(result)
-            continue
-
-        result = filter_by_imdb(result, session.config, session.library_walk)
-        if result.get("result") != "Passed":
-            session.db.write(result)
-            continue
-
-        logger.success("[{}] '{}' passed all filters.", tracker, result.get("index_title"))
-
-        send_queued_notification(result, session.config)
-
-        updated = session.qbt.add_torrent(result)
-        if updated is not None:
-            result = updated
-        session.db.write(result)
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:

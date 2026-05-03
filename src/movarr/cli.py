@@ -94,8 +94,17 @@ def cli(
     torrents to qBittorrent, post-processes completed downloads, and sends
     email notifications.
     """
-    log_format = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
-    create_logger(log_format=log_format, log_level=log_level, log_path=log_path)
+
+    def _log_format(record: dict) -> str:  # type: ignore[type-arg]
+        tracker = record["extra"].get("tracker", "")
+        prefix = f"[{tracker}] " if tracker else ""
+        return (
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            f"<level>{prefix}{{message}}</level>\n"
+        )
+
+    create_logger(log_format=_log_format, log_level=log_level, log_path=log_path)
 
     if pid_path is None:
         pid_path = str(Path(config_path).parent / "movarr.pid")
