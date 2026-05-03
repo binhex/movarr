@@ -228,6 +228,18 @@ class DefaultCopyLibraryConfig(BaseModel):
     uhd_path: str | None = None
 
 
+class PathRemappingConfig(BaseModel):
+    """A single remote→local path prefix replacement.
+
+    Useful when qBittorrent runs in a container and reports paths that differ
+    from those visible to movarr (e.g. '/downloads' inside qbt container
+    maps to '/mnt/storage/downloads' from movarr's perspective).
+    """
+
+    from_path: str = ""
+    to_path: str = ""
+
+
 class PostProcessConfig(BaseModel):
     """Post-processing settings for copying completed downloads."""
 
@@ -239,6 +251,7 @@ class PostProcessConfig(BaseModel):
     exclude_folder_regex_list: list[str] = Field(default_factory=list)
     copy_library_rules: list[CopyLibraryRuleConfig] = Field(default_factory=list)
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
+    path_remapping: list[PathRemappingConfig] = Field(default_factory=list)
 
 
 class DatabaseConfig(BaseModel):

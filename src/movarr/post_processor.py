@@ -26,7 +26,7 @@ from movarr.file_utils import copy_with_verify, make_directory
 from movarr.parsing import extract_resolution, sanitise
 
 if TYPE_CHECKING:
-    from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
+    from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
     from movarr.database import Database, HistoryRecord
     from movarr.qbittorrent import QBittorrentClient
 
@@ -40,6 +40,24 @@ _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 def _safe_path_component(value: str) -> str:
     """Strip characters that are unsafe in a filesystem path component."""
     return _RE_PATH_UNSAFE.sub("", value).strip()
+
+
+def _apply_path_remapping(path: str, remappings: list[PathRemappingConfig]) -> str:
+    """Replace the first matching from_path prefix with its to_path counterpart.
+
+    Handles both forward-slash and OS-native separators so mappings work
+    whether the qBittorrent host is Linux or Windows.
+    """
+    for remap in remappings:
+        src = remap.from_path.rstrip("/\\")
+        dst = remap.to_path.rstrip("/\\")
+        if not src:
+            continue
+        if path.startswith(src + "/") or path.startswith(src + "\\") or path == src:
+            remapped = dst + path[len(src) :]
+            logger.debug("Path remapped: '{}' → '{}'.", path, remapped)
+            return remapped
+    return path
 
 
 def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -146,7 +164,8 @@ def _process_one(
 def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     """Return absolute paths for files that should be copied to the library."""
     pp = config.post_process
-    save_path = torrent.get("torrent_save_path") or ""
+    raw_save_path = torrent.get("torrent_save_path") or ""
+    save_path = _apply_path_remapping(raw_save_path, pp.path_remapping)
     file_list = torrent.get("torrent_file_list") or []
 
     exclude_min_kb = pp.exclude_file_min_kb or 0
