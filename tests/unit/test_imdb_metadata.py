@@ -231,6 +231,45 @@ class TestFetchImdbpie:
         # The canonical ID must be propagated into the result dict.
         assert out.get("imdb_id") == "tt9999999"
 
+    def test_eight_digit_id_not_flagged_as_redirect(self, mocker: MockerFixture) -> None:
+        """8-digit IMDb IDs (e.g. tt31193180) must not be misidentified as redirects.
+
+        IMDbPie's internal regex uses tt\\d{7} (exactly 7 digits) so it extracts
+        the wrong ID from an 8-digit tconst and falsely raises LookupError.
+        _patch_imdbpie_redirect_check replaces the method with tt\\d{7,}.
+        """
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.region = "en-US"
+        # API returns the same 8-digit ID → not a redirect.
+        fake_client._get.return_value = {"id": "/title/tt31193180/"}
+        fake_client.validate_imdb_id = mocker.MagicMock()
+
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("tt31193180") is False
+
+    def test_eight_digit_id_redirect_returns_different_id(self, mocker: MockerFixture) -> None:
+        """If the API genuinely returns a different 8-digit ID, it IS a redirect."""
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.region = "en-US"
+        # API says the canonical ID is different from the requested one.
+        fake_client._get.return_value = {"id": "/title/tt99999999/"}
+        fake_client.validate_imdb_id = mocker.MagicMock()
+
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("tt31193180") is True
+
 
 # ---------------------------------------------------------------------------
 # _fetch_omdb

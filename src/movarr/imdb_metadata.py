@@ -94,6 +94,53 @@ def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
     return imdb_id
 
 
+def _patch_imdbpie_redirect_check(client: Any) -> None:
+    """Fix IMDbPie's broken 8-digit IMDb ID handling.
+
+    IMDbPie's ``is_redirection_title`` uses ``re.search(r'tt\\d{7}', ...)``
+    which only matches exactly 7 digits.  IDs with 8+ digits (e.g. tt31193180)
+    are therefore incorrectly classified as redirects and raise LookupError
+    before any data is fetched.  We replace the method with a corrected version
+    that uses ``tt\\d{7,}`` (7 or more digits).
+    """
+    import types
+    from datetime import date
+    from urllib.parse import urljoin
+
+    def _is_redirection_title(self: Any, imdb_id: str) -> bool:  # noqa: ANN001
+        self.validate_imdb_id(imdb_id)
+        try:
+            if imdb_id.startswith("nm"):
+                resource = self._get_resource(f"/name/{imdb_id}/fulldetails")
+                returned_id = resource["base"].get("id", "")
+                if returned_id:
+                    match = re.search(r"nm\d{7,}", returned_id)
+                    if match:
+                        return match.group() != imdb_id
+            else:
+                from imdbpie.constants import BASE_URI  # noqa: PLC0415
+
+                path = "/template/imdb-ios-writable/title-auxiliary-v31.jstl/render"
+                resource = self._get(
+                    url=urljoin(BASE_URI, path),
+                    params={
+                        "tconst": imdb_id,
+                        "today": date.today().strftime("%Y-%m-%d"),
+                        "region": self.region,
+                    },
+                )
+                returned_id = (resource or {}).get("id", "")
+                if returned_id:
+                    match = re.search(r"tt\d{7,}", returned_id)
+                    if match:
+                        return match.group() != imdb_id
+            return False
+        except (LookupError, ImportError):
+            return False
+
+    client.is_redirection_title = types.MethodType(_is_redirection_title, client)
+
+
 def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     imdb_id = result.get("imdb_id", "")
     details: list[str] = result.get("result_details") or []
@@ -102,6 +149,7 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
         import imdbpie
 
         client = imdbpie.Imdb()
+        _patch_imdbpie_redirect_check(client)
     except Exception as exc:  # noqa: BLE001
         msg = f"Cannot connect to IMDb via IMDbPie: {exc}"
         _logger.warning(msg)
