@@ -142,6 +142,7 @@ class JackettClient:
         if not index_title:
             return None
 
+        magnet_url = self._attr(item, "magneturl")
         result: ResultDict = {
             "index_title": index_title,
             "index_pubdate": item.get("pubDate", ""),
@@ -150,8 +151,8 @@ class JackettClient:
             "index_peers": self._attr(item, "peers"),
             "index_size": item.get("size", ""),
             "index_size_mb": self._to_mb(item.get("size", "")),
-            "torrent_url": item.get("link", ""),
-            "magnet_url": self._attr(item, "magneturl"),
+            "torrent_url": self._torrent_url(item),
+            "magnet_url": magnet_url or self._enclosure_magnet(item),
             "category": self._attr(item, "category"),
             "result": "Passed",
             "result_details": [],
@@ -163,6 +164,40 @@ class JackettClient:
             result["imdb_id"] = imdb_id
 
         return result
+
+    @staticmethod
+    def _torrent_url(item: dict[str, Any]) -> str:
+        """Return the torrent download URL from an item dict.
+
+        Prefers ``<enclosure url="..."/>`` (the standard .torrent container
+        element) over ``<link>`` (which many indexers use for the detail page).
+        Falls back to ``<link>`` when no enclosure is present or its ``@url``
+        is empty (malformed feed).  Returns empty string if the enclosure URL
+        is a magnet URI — the caller should use ``magnet_url`` in that case.
+        """
+        enclosure = item.get("enclosure")
+        if isinstance(enclosure, dict):
+            url = enclosure.get("@url", "")
+            if not url:
+                return str(item.get("link", ""))  # malformed enclosure — use link
+            if url.startswith("magnet:"):
+                return ""  # magnet-only release; magnet_url is populated separately
+            return str(url)
+        return str(item.get("link", ""))
+
+    @staticmethod
+    def _enclosure_magnet(item: dict[str, Any]) -> str:
+        """Return the magnet URI from ``<enclosure>`` if present, else empty string.
+
+        Used as a fallback when ``torznab:attr name="magneturl"`` is absent but
+        the enclosure element carries a magnet URI directly.
+        """
+        enclosure = item.get("enclosure")
+        if isinstance(enclosure, dict):
+            url = enclosure.get("@url", "")
+            if url.startswith("magnet:"):
+                return str(url)
+        return ""
 
     @staticmethod
     def _attr(item: dict[str, Any], name: str) -> str:

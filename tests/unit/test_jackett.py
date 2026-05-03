@@ -240,13 +240,86 @@ class TestParseItem:
         assert result["index_size"] == ""
         assert result["index_size_mb"] == "0"
 
+    def test_torrent_url_prefers_enclosure_over_link(self, mocker: MockerFixture) -> None:
+        """torrent_url uses enclosure[@url] when present (more reliable than link)."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023",
+            "link": "https://example.com/details/123",  # page URL
+            "enclosure": {
+                "@url": "https://example.com/dl/123.torrent",
+                "@length": "1000",
+                "@type": "application/x-bittorrent",
+            },
+            "size": "1000",
+            _NS_ATTR: [],
+        }
+        result = client._parse_item(item)
 
-# ---------------------------------------------------------------------------
-# _fetch_page
-# ---------------------------------------------------------------------------
+        assert result is not None
+        assert result["torrent_url"] == "https://example.com/dl/123.torrent"
 
+    def test_torrent_url_falls_back_to_link_when_no_enclosure(self, mocker: MockerFixture) -> None:
+        """torrent_url falls back to link when enclosure is absent."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023",
+            "link": "https://example.com/dl/123.torrent",
+            "size": "1000",
+            _NS_ATTR: [],
+        }
+        result = client._parse_item(item)
 
-class TestFetchPage:
+        assert result is not None
+        assert result["torrent_url"] == "https://example.com/dl/123.torrent"
+
+    def test_torrent_url_empty_when_enclosure_is_magnet(self, mocker: MockerFixture) -> None:
+        """torrent_url is empty when enclosure url is a magnet link (not a torrent)."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023",
+            "link": "https://example.com/details/123",
+            "enclosure": {"@url": "magnet:?xt=urn:btih:abc123", "@length": "0", "@type": "application/x-bittorrent"},
+            "size": "1000",
+            _NS_ATTR: [{"@name": "magneturl", "@value": "magnet:?xt=urn:btih:abc123"}],
+        }
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["torrent_url"] == ""
+        assert result["magnet_url"] == "magnet:?xt=urn:btih:abc123"
+
+    def test_torrent_url_falls_back_to_link_when_enclosure_url_empty(self, mocker: MockerFixture) -> None:
+        """torrent_url falls back to link when enclosure dict has empty @url (malformed feed)."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023",
+            "link": "https://example.com/dl/123.torrent",
+            "enclosure": {"@length": "1000", "@type": "application/x-bittorrent"},  # no @url
+            "size": "1000",
+            _NS_ATTR: [],
+        }
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["torrent_url"] == "https://example.com/dl/123.torrent"
+
+    def test_magnet_url_falls_back_to_enclosure_when_torznab_attr_absent(self, mocker: MockerFixture) -> None:
+        """magnet_url is populated from enclosure when torznab:attr magneturl is absent."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023",
+            "link": "https://example.com/details/123",
+            "enclosure": {"@url": "magnet:?xt=urn:btih:def456", "@length": "0", "@type": "application/x-bittorrent"},
+            "size": "1000",
+            _NS_ATTR: [],  # no magneturl attr
+        }
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["torrent_url"] == ""
+        assert result["magnet_url"] == "magnet:?xt=urn:btih:def456"
+
     """Tests for JackettClient._fetch_page."""
 
     def test_parses_valid_xml_response(self, mocker: MockerFixture) -> None:
