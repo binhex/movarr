@@ -113,6 +113,11 @@ def _process_criteria(
     for result in session.jackett.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(result)
 
+        index_title = result.get("index_title", "")
+        if session.db.has_passed(index_title):
+            logger.debug("'{}' already passed; skipping.", index_title)
+            continue
+
         if not result.get("movie_title"):
             logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
             continue

@@ -1,15 +1,15 @@
-"""Unit tests for movarr.search."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger as _loguru_logger
-
 if TYPE_CHECKING:
+    from unittest.mock import MagicMock
+
     from pytest_mock import MockerFixture
 
     from movarr.models import ResultDict
+
+from loguru import logger as _loguru_logger
 
 from movarr.config import Config, SearchCriteriaConfig
 from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, run_search
@@ -224,6 +224,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -246,6 +247,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -267,6 +269,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -291,6 +294,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -319,6 +323,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -331,6 +336,7 @@ class TestProcessCriteria:
         jackett = mocker.MagicMock()
         jackett.search.return_value = iter([{"index_title": ""}])
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
         qbt = mocker.MagicMock()
 
         self._call(mocker, jackett, qbt, db)
@@ -345,6 +351,7 @@ class TestProcessCriteria:
         # A title that sanitise() produces text from but extract_year() returns None for
         jackett.search.return_value = iter([{"index_title": "SomeTitle NoYearAtAll BluRay"}])
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
         qbt = mocker.MagicMock()
 
         self._call(mocker, jackett, qbt, db)
@@ -380,6 +387,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = updated_result
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -406,6 +414,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -439,6 +448,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
+        db.has_passed.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -525,6 +535,7 @@ class TestPassedAllFiltersLogLevel:
         mocker.patch("movarr.search.send_queued_notification")
 
         mock_db = mocker.MagicMock()
+        mock_db.has_passed.return_value = False
         mock_qbt = mocker.MagicMock()
         session = _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None)
 
@@ -538,3 +549,70 @@ class TestPassedAllFiltersLogLevel:
         )
         success_records = [r for r in records if r["level"].name == "SUCCESS"]
         assert success_records, "Expected at least one SUCCESS-level log when result passes all filters"
+
+
+# ---------------------------------------------------------------------------
+# DB deduplication — skip already-seen titles before any API call
+# ---------------------------------------------------------------------------
+
+
+class TestDbDeduplication:
+    """Already-seen index titles must be skipped before any filter/API work."""
+
+    def _make_session(self, mocker: MockerFixture, *, seen: bool) -> tuple[_SearchSession, MagicMock]:
+        cfg = Config()
+        mock_jackett = mocker.MagicMock()
+        mock_jackett.search.return_value = [{"index_title": "The Matrix 1999 1080p BluRay"}]
+        mock_db = mocker.MagicMock()
+        mock_db.has_passed.return_value = seen
+        mock_qbt = mocker.MagicMock()
+        return _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None), mock_db
+
+    def test_seen_title_skips_filter_by_index(self, mocker: MockerFixture) -> None:
+        """filter_by_index must NOT be called when the title is already in the DB."""
+        session, _ = self._make_session(mocker, seen=True)
+        mock_filter = mocker.patch("movarr.search.filter_by_index")
+
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="my-indexer",
+            session=session,
+        )
+
+        mock_filter.assert_not_called()
+
+    def test_seen_title_does_not_write_to_db(self, mocker: MockerFixture) -> None:
+        """db.write must NOT be called when skipping a duplicate title."""
+        session, mock_db = self._make_session(mocker, seen=True)
+        mocker.patch("movarr.search.filter_by_index")
+
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="my-indexer",
+            session=session,
+        )
+
+        mock_db.write.assert_not_called()
+
+    def test_new_title_proceeds_to_filter_by_index(self, mocker: MockerFixture) -> None:
+        """A title not in the DB must proceed through filter_by_index."""
+        session, _ = self._make_session(mocker, seen=False)
+        mock_filter = mocker.patch(
+            "movarr.search.filter_by_index",
+            return_value={
+                "result": "Failed",
+                "result_details": ["size too small"],
+                "index_title": "The Matrix 1999 1080p BluRay",
+            },
+        )
+
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="my-indexer",
+            session=session,
+        )
+
+        mock_filter.assert_called_once()

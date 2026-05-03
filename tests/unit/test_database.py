@@ -206,3 +206,80 @@ class TestDatabaseVacuum:
 
     def test_vacuum_runs_without_error(self, db: Database) -> None:
         db.vacuum()
+
+
+# ---------------------------------------------------------------------------
+# has_passed
+# ---------------------------------------------------------------------------
+
+
+class TestHasPassed:
+    """Database.has_passed() returns True only when a Passed row exists."""
+
+    def test_returns_true_when_passed_row_exists(self, db: Database) -> None:
+        db.write(_minimal_result(result="Passed"))
+        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
+
+    def test_returns_false_when_only_failed_row_exists(self, db: Database) -> None:
+        db.write(_minimal_result(result="Failed"))
+        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is False
+
+    def test_returns_false_when_no_row_exists(self, db: Database) -> None:
+        assert db.has_passed("Unknown Movie 2099") is False
+
+    def test_upgrade_from_version_7_creates_index_title_index(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        old_path = str(tmp_path / "v7.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                result TEXT,
+                result_details TEXT
+            )
+            """
+        )
+        con.execute("PRAGMA user_version = 7")
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        con2 = sqlite3.connect(old_path)
+        cursor = con2.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='history'")
+        index_names = [row[0] for row in cursor.fetchall()]
+        con2.close()
+        assert "ix_history_index_title" in index_names
+        del db
+
+    def test_unversioned_legacy_db_gets_index_created(self, tmp_path: Path) -> None:
+        """A pre-versioning DB (user_version=0, history table exists) must get the index."""
+        import sqlite3
+
+        old_path = str(tmp_path / "legacy.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                result TEXT,
+                result_details TEXT,
+                imdb_certification TEXT,
+                imdb_cert_source TEXT
+            )
+            """
+        )
+        # user_version stays 0 — simulates a DB created before schema versioning
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        con2 = sqlite3.connect(old_path)
+        cursor = con2.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='history'")
+        index_names = [row[0] for row in cursor.fetchall()]
+        con2.close()
+        assert "ix_history_index_title" in index_names
+        del db

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Database", "HistoryRecord"]
 
-_DB_VERSION = 7
+_DB_VERSION = 8
 
 
 def _encode_field(value: object) -> str | None:
@@ -41,7 +41,7 @@ class HistoryRecord(Base):
     __tablename__ = "history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    index_title = Column(String)
+    index_title = Column(String, index=True)
     result = Column(String)
     result_details = Column(String)
     index_details = Column(String)
@@ -111,13 +111,24 @@ class Database:
             conn.execute(text(f"PRAGMA user_version = {version}"))
             conn.commit()
 
+    def _history_table_exists(self) -> bool:
+        """Return True if the history table already exists in the database."""
+        with self._engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='history'"))
+            return result.fetchone() is not None
+
     def _ensure_schema(self) -> None:
         """Create tables if absent; run migrations if version mismatches."""
+        table_existed = self._history_table_exists()
         Base.metadata.create_all(self._engine)
         current = self._get_user_version()
         if current == 0:
-            _logger.info("New database — setting schema version to %d.", _DB_VERSION)
-            self._set_user_version(_DB_VERSION)
+            if table_existed:
+                _logger.info("Unversioned legacy database — applying all migrations.")
+                self._upgrade(0)
+            else:
+                _logger.info("New database — setting schema version to %d.", _DB_VERSION)
+                self._set_user_version(_DB_VERSION)
         elif current < _DB_VERSION:
             _logger.info("Upgrading database from v%d to v%d.", current, _DB_VERSION)
             self._upgrade(current)
@@ -126,8 +137,15 @@ class Database:
         """Apply incremental schema migrations."""
         with self._engine.connect() as conn:
             if from_version < 7:
-                conn.execute(text("ALTER TABLE history ADD COLUMN imdb_certification TEXT"))
-                conn.execute(text("ALTER TABLE history ADD COLUMN imdb_cert_source TEXT"))
+                cursor = conn.execute(text("PRAGMA table_info(history)"))
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if "imdb_certification" not in existing_cols:
+                    conn.execute(text("ALTER TABLE history ADD COLUMN imdb_certification TEXT"))
+                if "imdb_cert_source" not in existing_cols:
+                    conn.execute(text("ALTER TABLE history ADD COLUMN imdb_cert_source TEXT"))
+                conn.commit()
+            if from_version < 8:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_history_index_title ON history (index_title)"))
                 conn.commit()
         self._set_user_version(_DB_VERSION)
 
@@ -205,6 +223,19 @@ class Database:
         """
         with Session(self._engine) as session:
             return session.query(HistoryRecord).filter_by(index_title=index_title).first() is not None
+
+    def has_passed(self, index_title: str) -> bool:
+        """Return True if *index_title* has a ``Passed`` result in history.
+
+        Only ``Passed`` rows represent torrents that were actually submitted to
+        qBittorrent.  Failed rows may have been caused by transient errors and
+        should be re-evaluated on subsequent runs.
+
+        Args:
+            index_title: The raw index torrent title.
+        """
+        with Session(self._engine) as session:
+            return session.query(HistoryRecord).filter_by(index_title=index_title, result="Passed").first() is not None
 
     def is_duplicate_fuzzy(self, pattern: str) -> bool:
         """Return True if *pattern* matches any existing history title (LIKE match).
