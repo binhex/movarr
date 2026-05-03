@@ -145,6 +145,7 @@ class JackettClient:
         magnet_url = self._attr(item, "magneturl")
         result: ResultDict = {
             "index_title": index_title,
+            "index_tracker": self._attr(item, "jackettindexer"),
             "index_pubdate": item.get("pubDate", ""),
             "index_details": item.get("comments", ""),
             "index_seeders": self._attr(item, "seeders"),

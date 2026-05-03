@@ -16,6 +16,7 @@ class ResultDict(TypedDict, total=False):
 
     # --- Index metadata ---
     index_title: str
+    index_tracker: str
     index_size: str
     index_size_mb: str
     index_seeders: str

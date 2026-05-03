@@ -114,16 +114,17 @@ def _process_criteria(
         result = _enrich_index_metadata(result)
 
         index_title = result.get("index_title", "")
+        tracker = result.get("index_tracker") or indexer
         if session.db.has_passed(index_title):
-            logger.info("'{}' already in DB; skipping.", index_title)
+            logger.info("[{}] '{}' already in DB; skipping.", tracker, index_title)
             continue
 
         if not result.get("movie_title"):
-            logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
+            logger.debug("[{}] No movie title from '{}'; skipping.", tracker, result.get("index_title"))
             continue
 
         if not result.get("movie_title_year"):
-            logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+            logger.debug("[{}] No year from '{}'; skipping.", tracker, result.get("index_title"))
             continue
 
         result = filter_by_index(result, site_dict, session.config, session.library_walk)
@@ -148,7 +149,7 @@ def _process_criteria(
             session.db.write(result)
             continue
 
-        logger.success("'{}' passed all filters.", result.get("index_title"))
+        logger.success("[{}] '{}' passed all filters.", tracker, result.get("index_title"))
 
         send_queued_notification(result, session.config)
 
