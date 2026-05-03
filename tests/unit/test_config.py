@@ -13,6 +13,7 @@ from movarr.config import (
     DatabaseConfig,
     GeneralConfig,
     QueueManagementConfig,
+    ScheduleTaskConfig,
     load_config,
 )
 
@@ -344,3 +345,29 @@ class TestCreateDefaultConfigExists:
         config_path.write_text(original)
         create_default_config(config_path)
         assert config_path.read_text() == original
+
+
+# ---------------------------------------------------------------------------
+# ScheduleTaskConfig.run_on_start
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleTaskConfigRunOnStart:
+    """ScheduleTaskConfig must expose a run_on_start boolean defaulting to False."""
+
+    def test_run_on_start_defaults_to_false(self) -> None:
+        """run_on_start must default to False so existing configs behave unchanged."""
+        cfg = ScheduleTaskConfig()
+        assert cfg.run_on_start is False
+
+    def test_run_on_start_can_be_set_true(self) -> None:
+        """run_on_start can be set to True to fire the task immediately on startup."""
+        cfg = ScheduleTaskConfig(run_on_start=True)
+        assert cfg.run_on_start is True
+
+    def test_all_three_schedule_tasks_default_false(self) -> None:
+        """All three tasks inside ScheduleConfig default to run_on_start=False."""
+        cfg = Config()
+        assert cfg.schedule.acquisition.run_on_start is False
+        assert cfg.schedule.queue_management.run_on_start is False
+        assert cfg.schedule.post_processing.run_on_start is False

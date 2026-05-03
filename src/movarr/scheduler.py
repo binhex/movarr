@@ -16,6 +16,7 @@ import os
 import signal
 import sys
 import time
+import datetime
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -71,6 +72,13 @@ def run_once(config: Config) -> None:
     logger.info("Single-pass complete.")
 
 
+def _next_run_kwargs(run_on_start: bool) -> dict:
+    """Return ``next_run_time`` kwarg dict when *run_on_start* is True, else empty dict."""
+    if run_on_start:
+        return {"next_run_time": datetime.datetime.now()}
+    return {}
+
+
 def _run_daemon(config: Config) -> None:
     """Run all three tasks on repeat using APScheduler BackgroundScheduler."""
     logger.info("movarr starting in daemon mode.")
@@ -93,6 +101,7 @@ def _run_daemon(config: Config) -> None:
         name="Jackett search + filter + add",
         max_instances=1,
         coalesce=True,
+        **_next_run_kwargs(config.schedule.acquisition.run_on_start),
     )
     scheduler.add_job(
         _task_queue_management,
@@ -102,6 +111,7 @@ def _run_daemon(config: Config) -> None:
         id="queue_management",
         max_instances=1,
         coalesce=True,
+        **_next_run_kwargs(config.schedule.queue_management.run_on_start),
     )
     scheduler.add_job(
         _task_post_processing,
@@ -112,6 +122,7 @@ def _run_daemon(config: Config) -> None:
         name="Post-processing (copy to library)",
         max_instances=1,
         coalesce=True,
+        **_next_run_kwargs(config.schedule.post_processing.run_on_start),
     )
 
     scheduler.start()

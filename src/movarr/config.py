@@ -88,6 +88,7 @@ class ScheduleTaskConfig(BaseModel):
     enabled: bool = True
     schedule_time_units: str = "minutes"
     schedule_time_mins: int = 30
+    run_on_start: bool = False
 
 
 class ScheduleConfig(BaseModel):

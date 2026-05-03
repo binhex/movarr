@@ -400,3 +400,105 @@ class TestRunDaemonSignalHandler:
 
         mock_sched.shutdown.assert_called()
         mock_sys_exit.assert_called_with(0)
+
+
+# ---------------------------------------------------------------------------
+# _run_daemon — run_on_start
+# ---------------------------------------------------------------------------
+
+
+class TestRunDaemonRunOnStart:
+    """run_on_start=True must pass next_run_time to add_job; False must not."""
+
+    def _kwargs_by_id(self, mock_sched, job_id: str) -> dict:
+        for call in mock_sched.add_job.call_args_list:
+            if call.kwargs.get("id") == job_id:
+                return call.kwargs
+        raise AssertionError(f"No add_job call with id={job_id!r}")
+
+    def test_run_on_start_false_does_not_pass_next_run_time(self, mocker: MockerFixture) -> None:
+        """Default run_on_start=False: no next_run_time kwarg on any add_job call."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+
+        _run_daemon(Config())
+
+        for job_id in ("search", "queue_management", "post_processing"):
+            assert "next_run_time" not in self._kwargs_by_id(mock_sched, job_id)
+
+    def test_acquisition_run_on_start_sets_datetime_on_search_job(self, mocker: MockerFixture) -> None:
+        """acquisition.run_on_start=True: search add_job gets a datetime next_run_time."""
+        import datetime
+
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+
+        config = Config()
+        config.schedule.acquisition.run_on_start = True
+
+        _run_daemon(config)
+
+        kwargs = self._kwargs_by_id(mock_sched, "search")
+        assert "next_run_time" in kwargs
+        assert isinstance(kwargs["next_run_time"], datetime.datetime)
+
+    def test_queue_management_run_on_start_sets_datetime_on_qm_job(self, mocker: MockerFixture) -> None:
+        """queue_management.run_on_start=True: qm add_job gets a datetime next_run_time."""
+        import datetime
+
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+
+        config = Config()
+        config.schedule.queue_management.run_on_start = True
+
+        _run_daemon(config)
+
+        kwargs = self._kwargs_by_id(mock_sched, "queue_management")
+        assert "next_run_time" in kwargs
+        assert isinstance(kwargs["next_run_time"], datetime.datetime)
+
+    def test_post_processing_run_on_start_sets_datetime_on_pp_job(self, mocker: MockerFixture) -> None:
+        """post_processing.run_on_start=True: pp add_job gets a datetime next_run_time."""
+        import datetime
+
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+
+        config = Config()
+        config.schedule.post_processing.run_on_start = True
+
+        _run_daemon(config)
+
+        kwargs = self._kwargs_by_id(mock_sched, "post_processing")
+        assert "next_run_time" in kwargs
+        assert isinstance(kwargs["next_run_time"], datetime.datetime)
+
+    def test_run_on_start_is_independent_per_task(self, mocker: MockerFixture) -> None:
+        """Only the task with run_on_start=True gets next_run_time; others do not."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+
+        config = Config()
+        config.schedule.acquisition.run_on_start = True  # only acquisition
+
+        _run_daemon(config)
+
+        assert "next_run_time" in self._kwargs_by_id(mock_sched, "search")
+        assert "next_run_time" not in self._kwargs_by_id(mock_sched, "queue_management")
+        assert "next_run_time" not in self._kwargs_by_id(mock_sched, "post_processing")
