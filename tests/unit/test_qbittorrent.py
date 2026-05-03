@@ -58,10 +58,16 @@ class TestIsConnected:
         mock_api.sync_maindata.return_value.server_state.connection_status = "connected"
         assert client.is_connected() is True
 
-    def test_returns_false_when_status_is_not_connected(self, mocker: MockerFixture) -> None:
-        """Returns False for non-'connected' status values."""
+    def test_returns_true_when_status_is_firewalled(self, mocker: MockerFixture) -> None:
+        """Returns True when firewalled — internet is up, just behind NAT."""
         client, mock_api = _make_client(mocker)
         mock_api.sync_maindata.return_value.server_state.connection_status = "firewalled"
+        assert client.is_connected() is True
+
+    def test_returns_false_when_status_is_disconnected(self, mocker: MockerFixture) -> None:
+        """Returns False when disconnected — internet is down, skip queue management."""
+        client, mock_api = _make_client(mocker)
+        mock_api.sync_maindata.return_value.server_state.connection_status = "disconnected"
         assert client.is_connected() is False
 
     def test_returns_false_on_api_error(self, mocker: MockerFixture) -> None:

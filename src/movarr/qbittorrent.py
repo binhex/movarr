@@ -50,11 +50,19 @@ class QBittorrentClient:
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
-        """Return True if qBittorrent reports ``connected`` status."""
+        """Return True if qBittorrent has internet access (connected or firewalled).
+
+        qBittorrent reports three states: ``"connected"`` (internet up, port
+        forwarded), ``"firewalled"`` (internet up, behind NAT — the common home
+        setup), and ``"disconnected"`` (no internet).  Both ``connected`` and
+        ``firewalled`` mean the internet is available, so queue management
+        should run for both.  Only ``disconnected`` should cause a skip —
+        otherwise stalled torrents could be incorrectly deleted during an outage.
+        """
         try:
             status = self._client.sync_maindata().server_state.connection_status
             _logger.debug("qBittorrent connection status: {}.", status)
-            return bool(status == "connected")
+            return status in {"connected", "firewalled"}
         except qbittorrentapi.APIError as exc:
             _logger.warning("qBittorrent connectivity check failed: {}.", exc)
             return False
