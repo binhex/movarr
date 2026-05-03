@@ -172,10 +172,16 @@ def _enrich_index_metadata(result: ResultDict) -> ResultDict:
     result["index_title_after_year_to_end"] = after_year
     result["index_title_resolution"] = resolution
 
-    # Build compare strings used by duplicate/bad-title checks.
+    # index_title_compare: normalised sanitised title, used by all IMDb search
+    # strategies to verify that a candidate title matches this index entry.
+    result["index_title_compare"] = normalise_for_compare(san)
+
+    # Build compare/search strings used by duplicate/bad-title checks and
+    # IMDb search strategies.
     if title and year:
         result["movie_title_compare"] = normalise_for_compare(title)
         result["movie_title_and_year_compare"] = normalise_for_compare(f"{title} {year}")
+        result["movie_title_and_year_search"] = f"{title} {year}"
 
     result["result"] = "Passed"
     result["result_details"] = []

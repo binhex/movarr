@@ -48,6 +48,22 @@ class TestEnrichIndexMetadata:
         assert "movie_title_compare" in result
         assert "movie_title_and_year_compare" in result
 
+    def test_movie_title_and_year_search_set(self) -> None:
+        """movie_title_and_year_search must be set — it's the query string for IMDb search."""
+        result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
+        assert result.get("movie_title_and_year_search") == "The Matrix 1999"
+
+    def test_index_title_compare_set(self) -> None:
+        """index_title_compare must be set — all IMDb strategies use it to verify matches."""
+        result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
+        assert result.get("index_title_compare") is not None
+        assert len(result["index_title_compare"]) > 0  # type: ignore[arg-type]
+
+    def test_index_title_compare_set_even_without_year(self) -> None:
+        """index_title_compare is always set from the sanitised title, regardless of year."""
+        result = _enrich_index_metadata(_base_result("SomeTitle NoYear BluRay"))
+        assert result.get("index_title_compare") is not None
+
     def test_result_set_to_passed(self) -> None:
         result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
         assert result["result"] == "Passed"
