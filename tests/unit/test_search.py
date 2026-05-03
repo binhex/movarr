@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger as _loguru_logger
+
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
@@ -441,3 +443,98 @@ class TestProcessCriteria:
         self._call(mocker, jackett, qbt, db)
 
         assert db.write.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Log-level behaviour — "passed all filters" must emit SUCCESS
+# ---------------------------------------------------------------------------
+
+
+class TestPassedAllFiltersLogLevel:
+    """When a result passes every filter, the summary must log at SUCCESS."""
+
+    def _capture_records(self, fn: Any) -> list[Any]:
+        records: list[Any] = []
+
+        def sink(msg: Any) -> None:
+            records.append(msg.record)
+
+        sink_id = _loguru_logger.add(sink, level=0)
+        try:
+            fn()
+        finally:
+            _loguru_logger.remove(sink_id)
+        return records
+
+    def test_passed_all_filters_logs_at_success(self, mocker: MockerFixture) -> None:
+        """The 'passed all filters' summary must log at SUCCESS level."""
+        from movarr.search import _process_criteria
+
+        cfg = Config()
+        criteria_cfg = SearchCriteriaConfig(criteria="1080p")
+
+        # Jackett search returns already-mapped result dicts with index_title key.
+        jackett_result: dict = {
+            "index_title": "The Matrix 1999 1080p BluRay",
+            "index_size": str(8_000_000_000),
+            "link": "http://example.com/torrent.torrent",
+            "magnet_uri": None,
+            "imdb_id": "",
+        }
+
+        mock_jackett = mocker.MagicMock()
+        mock_jackett.search.return_value = [jackett_result]
+
+        mocker.patch(
+            "movarr.search.filter_by_index",
+            return_value={
+                "result": "Passed",
+                "result_details": [],
+                "index_title": "The Matrix 1999 1080p BluRay",
+                "index_title_sanitised": "The Matrix 1999 1080p BluRay",
+                "index_title_resolution": "1080p",
+                "index_size": str(8_000_000_000),
+                "movie_title": "The Matrix",
+                "movie_title_year": "1999",
+                "index_title_compare": "the matrix 1999",
+                "movie_title_and_year_search": "The Matrix 1999",
+                "imdb_id": "tt0133093",
+                "link": "http://example.com/torrent.torrent",
+            },
+        )
+        mocker.patch(
+            "movarr.search.fetch_metadata",
+            return_value={
+                "result": "Passed",
+                "result_details": [],
+                "index_title": "The Matrix 1999 1080p BluRay",
+                "imdb_id": "tt0133093",
+                "link": "http://example.com/torrent.torrent",
+            },
+        )
+        mocker.patch(
+            "movarr.search.filter_by_imdb",
+            return_value={
+                "result": "Passed",
+                "result_details": [],
+                "index_title": "The Matrix 1999 1080p BluRay",
+                "imdb_id": "tt0133093",
+                "link": "http://example.com/torrent.torrent",
+            },
+        )
+        mocker.patch("movarr.search.send_queued_notification")
+
+        mock_db = mocker.MagicMock()
+        mock_qbt = mocker.MagicMock()
+        session = _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None)
+
+        records = self._capture_records(
+            lambda: _process_criteria(
+                criteria_cfg=criteria_cfg,
+                category="2000",
+                indexer="my-indexer",
+                session=session,
+            )
+        )
+        success_records = [r for r in records if r["level"].name == "SUCCESS"]
+        assert success_records, "Expected at least one SUCCESS-level log when result passes all filters"

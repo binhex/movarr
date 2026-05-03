@@ -143,7 +143,7 @@ def _process_criteria(
             session.db.write(result)
             continue
 
-        logger.info("'{}' passed all filters.", result.get("index_title"))
+        logger.success("'{}' passed all filters.", result.get("index_title"))
 
         send_queued_notification(result, session.config)
 

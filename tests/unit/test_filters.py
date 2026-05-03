@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger as _loguru_logger
+
 from movarr.config import Config
 from movarr.filters import filter_by_imdb, filter_by_index
 
@@ -1089,3 +1091,38 @@ class TestGroupAndEditionBonus:
             "The Dark Knight Extended 2008 720p BluRay",
         )
         assert bonus == 0
+
+
+# ---------------------------------------------------------------------------
+# Log-level behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestLogLevels:
+    """_fail() must log at WARNING; _pass() must log at INFO."""
+
+    def _capture_records(self, fn: Any) -> list[Any]:
+        """Run fn() while capturing loguru records; return the list."""
+        records: list[Any] = []
+
+        def sink(msg: Any) -> None:
+            records.append(msg.record)
+
+        sink_id = _loguru_logger.add(sink, level=0)
+        try:
+            fn()
+        finally:
+            _loguru_logger.remove(sink_id)
+        return records
+
+    def test_fail_logs_at_warning_level(self) -> None:
+        from movarr.filters import _fail
+
+        records = self._capture_records(lambda: _fail({"result": "Passed", "result_details": []}, "bad thing"))
+        assert any(r["level"].name == "WARNING" for r in records), "_fail() must log at WARNING, not INFO"
+
+    def test_pass_logs_at_info_level(self) -> None:
+        from movarr.filters import _pass
+
+        records = self._capture_records(lambda: _pass({"result": "Passed", "result_details": []}, "good thing"))
+        assert any(r["level"].name == "INFO" for r in records), "_pass() must log at INFO"

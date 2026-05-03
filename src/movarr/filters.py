@@ -583,7 +583,7 @@ def _pass(result: ResultDict, message: str) -> ResultDict:
 
 
 def _fail(result: ResultDict, message: str) -> ResultDict:
-    _logger.info(message)
+    _logger.warning(message)
     details: list[str] = result.get("result_details") or []
     details.append(f"Failed: {message}")
     result["result"] = "Failed"
