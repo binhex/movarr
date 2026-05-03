@@ -95,7 +95,7 @@ def cli(
     email notifications.
     """
 
-    def _log_format(record: dict) -> str:  # type: ignore[type-arg]
+    def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")
         prefix = f"[{tracker}] " if tracker else ""
         return (

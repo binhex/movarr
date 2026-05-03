@@ -10,7 +10,7 @@ from loguru import logger as _logger
 
 
 def create_logger(
-    log_format: str | Callable,  # type: ignore[type-arg]
+    log_format: str | Callable,
     log_level: str = "INFO",
     log_path: str | None = None,
 ) -> Any:
