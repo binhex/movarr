@@ -417,14 +417,19 @@ class TestRunDaemonRunOnStart:
         raise AssertionError(f"No add_job call with id={job_id!r}")
 
     def test_run_on_start_false_does_not_pass_next_run_time(self, mocker: MockerFixture) -> None:
-        """Default run_on_start=False: no next_run_time kwarg on any add_job call."""
+        """Explicit run_on_start=False: no next_run_time kwarg on any add_job call."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
         mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
 
-        _run_daemon(Config())
+        config = Config()
+        config.schedule.acquisition.run_on_start = False
+        config.schedule.queue_management.run_on_start = False
+        config.schedule.post_processing.run_on_start = False
+
+        _run_daemon(config)
 
         for job_id in ("search", "queue_management", "post_processing"):
             assert "next_run_time" not in self._kwargs_by_id(mock_sched, job_id)
@@ -495,7 +500,9 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
 
         config = Config()
-        config.schedule.acquisition.run_on_start = True  # only acquisition
+        config.schedule.acquisition.run_on_start = True
+        config.schedule.queue_management.run_on_start = False
+        config.schedule.post_processing.run_on_start = False
 
         _run_daemon(config)
 

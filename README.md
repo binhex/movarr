@@ -110,7 +110,7 @@ Each of the three background tasks has its own schedule block with the same keys
 | `enabled` | Enable or disable this task. | `true` |
 | `schedule_time_units` | Unit for the interval. Always `minutes`. | `minutes` |
 | `schedule_time_mins` | Interval in minutes between runs. | `30` (acquisition), `5` (queue_management / post_processing) |
-| `run_on_start` | Run this task immediately when movarr starts, before the first interval elapses. | `false` |
+| `run_on_start` | Run this task immediately when movarr starts, before the first interval elapses. | `true` |
 
 Tasks: `acquisition`, `queue_management`, `post_processing`.
 

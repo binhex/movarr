@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "load_config"]
 
-_CONFIG_VERSION = "2.3.0"
+_CONFIG_VERSION = "2.4.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -48,11 +48,21 @@ def _migrate_v22_to_v23(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.3.0 → v2.4.0: add run_on_start: true to all schedule tasks."""
+    schedule = raw.setdefault("schedule", {})
+    for task in ("acquisition", "queue_management", "post_processing"):
+        schedule.setdefault(task, {}).setdefault("run_on_start", True)
+    raw.setdefault("general", {})["config_version"] = "2.4.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
     "2.1.0": _migrate_v21_to_v22,
     "2.2.0": _migrate_v22_to_v23,
+    "2.3.0": _migrate_v23_to_v24,
 }
 
 
@@ -88,7 +98,7 @@ class ScheduleTaskConfig(BaseModel):
     enabled: bool = True
     schedule_time_units: str = "minutes"
     schedule_time_mins: int = 30
-    run_on_start: bool = False
+    run_on_start: bool = True
 
 
 class ScheduleConfig(BaseModel):

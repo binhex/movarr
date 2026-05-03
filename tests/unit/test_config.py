@@ -163,7 +163,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -188,21 +188,21 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
 
     def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated through to the latest version."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v2_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -221,7 +221,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v21_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -236,14 +236,14 @@ class TestConfigMigration:
         assert backup.exists()
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
-        """A v2.2.0 config is migrated to v2.3.0, adding database.passed_expiry_days."""
+        """A v2.2.0 config is migrated all the way to the latest version."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text(
             "general:\n  config_version: '2.2.0'\nnotification:\n  apprise_urls: []\n"
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.3.0"
+        assert cfg.general.config_version == "2.4.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v22_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -256,6 +256,41 @@ class TestConfigMigration:
         load_config(str(cfg_file))
         backup = tmp_path / "config.yml.bak.2.2.0"
         assert backup.exists()
+
+    def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
+        """A v2.3.0 config is migrated to v2.4.0, adding run_on_start: true to all tasks."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n"
+            "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
+        )
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.4.0"
+        assert cfg.schedule.acquisition.run_on_start is True
+        assert cfg.schedule.queue_management.run_on_start is True
+        assert cfg.schedule.post_processing.run_on_start is True
+
+    def test_v23_migration_creates_backup(self, tmp_path: Path) -> None:
+        """A backup file config.yml.bak.2.3.0 is created before v2.3→v2.4 migration."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n"
+        )
+        load_config(str(cfg_file))
+        backup = tmp_path / "config.yml.bak.2.3.0"
+        assert backup.exists()
+
+    def test_v23_migration_writes_run_on_start_to_disk(self, tmp_path: Path) -> None:
+        """After migration the on-disk YAML contains run_on_start: true for all tasks."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n"
+        )
+        load_config(str(cfg_file))
+        raw = yaml.safe_load(cfg_file.read_text())
+        schedule = raw.get("schedule", {})
+        for task in ("acquisition", "queue_management", "post_processing"):
+            assert schedule.get(task, {}).get("run_on_start") is True
 
 
 # ---------------------------------------------------------------------------
@@ -355,19 +390,19 @@ class TestCreateDefaultConfigExists:
 class TestScheduleTaskConfigRunOnStart:
     """ScheduleTaskConfig must expose a run_on_start boolean defaulting to False."""
 
-    def test_run_on_start_defaults_to_false(self) -> None:
-        """run_on_start must default to False so existing configs behave unchanged."""
+    def test_run_on_start_defaults_to_true(self) -> None:
+        """run_on_start must default to True so tasks fire immediately on first start."""
         cfg = ScheduleTaskConfig()
-        assert cfg.run_on_start is False
-
-    def test_run_on_start_can_be_set_true(self) -> None:
-        """run_on_start can be set to True to fire the task immediately on startup."""
-        cfg = ScheduleTaskConfig(run_on_start=True)
         assert cfg.run_on_start is True
 
-    def test_all_three_schedule_tasks_default_false(self) -> None:
-        """All three tasks inside ScheduleConfig default to run_on_start=False."""
+    def test_run_on_start_can_be_set_false(self) -> None:
+        """run_on_start can be set to False to wait for the first interval."""
+        cfg = ScheduleTaskConfig(run_on_start=False)
+        assert cfg.run_on_start is False
+
+    def test_all_three_schedule_tasks_default_true(self) -> None:
+        """All three tasks inside ScheduleConfig default to run_on_start=True."""
         cfg = Config()
-        assert cfg.schedule.acquisition.run_on_start is False
-        assert cfg.schedule.queue_management.run_on_start is False
-        assert cfg.schedule.post_processing.run_on_start is False
+        assert cfg.schedule.acquisition.run_on_start is True
+        assert cfg.schedule.queue_management.run_on_start is True
+        assert cfg.schedule.post_processing.run_on_start is True
