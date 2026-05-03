@@ -120,6 +120,13 @@ class TestDeleteFile:
         result = delete_file(f)
         assert result is False
 
+    def test_returns_false_on_is_a_directory_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        f = tmp_path / "notafile.txt"
+        f.write_text("data")
+        mocker.patch("pathlib.Path.unlink", side_effect=IsADirectoryError("is a directory"))
+        result = delete_file(f)
+        assert result is False
+
 
 class TestCopyWithVerify:
     """Tests for copy_with_verify()."""
@@ -185,6 +192,34 @@ class TestCopyWithVerify:
         result = copy_with_verify(src, dst)
         assert result is True
         assert dst.parent.is_dir()
+
+    def test_returns_false_when_delete_of_mismatched_dst_fails(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """When dst exists with wrong checksum but delete_file fails, return False."""
+        content_src = b"source data"
+        content_dst = b"different data"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content_src)
+        dst.write_bytes(content_dst)
+        mocker.patch("movarr.file_utils.delete_file", return_value=False)
+        result = copy_with_verify(src, dst)
+        assert result is False
+
+    def test_returns_false_on_permission_error_during_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst" / "dst.mkv"
+        src.write_bytes(b"data")
+        mocker.patch("shutil.copy2", side_effect=PermissionError("denied"))
+        result = copy_with_verify(src, dst)
+        assert result is False
+
+    def test_returns_false_on_os_error_during_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst" / "dst.mkv"
+        src.write_bytes(b"data")
+        mocker.patch("shutil.copy2", side_effect=OSError("disk full"))
+        result = copy_with_verify(src, dst)
+        assert result is False
 
 
 class TestResolutionFromFfprobe:

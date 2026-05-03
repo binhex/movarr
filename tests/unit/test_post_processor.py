@@ -9,8 +9,9 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
-from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
+from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
 from movarr.post_processor import (
+    _apply_path_remapping,
     _build_copy_list,
     _canonical_filename,
     _cert_acceptable,
@@ -860,3 +861,101 @@ class TestProcessOne:
 
         dst_dir_arg = mock_mkdir.call_args[0][0]
         assert "Unknown" in dst_dir_arg
+
+
+# ---------------------------------------------------------------------------
+# _apply_path_remapping
+# ---------------------------------------------------------------------------
+
+
+class TestApplyPathRemapping:
+    """Tests for _apply_path_remapping — prefix substitution."""
+
+    def _remap(self, from_path: str, to_path: str) -> PathRemappingConfig:
+        return PathRemappingConfig(from_path=from_path, to_path=to_path)
+
+    def test_exact_match_returns_to_path(self) -> None:
+        result = _apply_path_remapping("/downloads", [self._remap("/downloads", "/media")])
+        assert result == "/media"
+
+    def test_prefix_with_slash_is_replaced(self) -> None:
+        result = _apply_path_remapping("/downloads/movie.mkv", [self._remap("/downloads", "/media")])
+        assert result == "/media/movie.mkv"
+
+    def test_prefix_with_backslash_is_replaced(self) -> None:
+        result = _apply_path_remapping("C:\\downloads\\movie.mkv", [self._remap("C:\\downloads", "D:\\media")])
+        assert result == "D:\\media\\movie.mkv"
+
+    def test_no_match_returns_original_path(self) -> None:
+        result = _apply_path_remapping("/other/path", [self._remap("/downloads", "/media")])
+        assert result == "/other/path"
+
+    def test_empty_from_path_is_skipped(self) -> None:
+        result = _apply_path_remapping("/downloads/movie.mkv", [self._remap("", "/media")])
+        assert result == "/downloads/movie.mkv"
+
+    def test_empty_remappings_list_returns_original(self) -> None:
+        result = _apply_path_remapping("/downloads/movie.mkv", [])
+        assert result == "/downloads/movie.mkv"
+
+
+# ---------------------------------------------------------------------------
+# _process_one — non-largest-file branch (line 141)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessOneMultiFile:
+    """_process_one with multiple files — covers the else branch for non-largest files."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        cfg.post_process.remove_completed = False
+        return cfg
+
+    def _db_record(self, mocker: Any) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        rec.imdb_genres = '["Action"]'
+        rec.imdb_certification = "15"
+        rec.imdb_cert_source = "imdbpie"
+        rec.index_title_resolution = "1080p"
+        return rec
+
+    def test_secondary_file_uses_original_filename(self, mocker: MockerFixture) -> None:
+        """When src_files has two entries and only one matches largest_fname,
+        the other uses src_fname directly (covering line 141)."""
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        # Two files: largest is "movie.mkv", secondary is "movie.nfo"
+        mocker.patch(
+            "movarr.post_processor._build_copy_list",
+            return_value=["/dl/movie.mkv", "/dl/movie.nfo"],
+        )
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        # _largest_file returns "movie.mkv" as the largest
+        torrent = {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "content_path": "/dl",
+            "files": [
+                {"name": "movie.mkv", "size": 8_000_000_000},
+                {"name": "movie.nfo", "size": 1_000},
+            ],
+        }
+        mocker.patch(
+            "movarr.post_processor._largest_file",
+            return_value=("movie.mkv", "movie.mkv"),
+        )
+        mocker.patch(
+            "movarr.post_processor._canonical_filename",
+            return_value="The Matrix (1999).mkv",
+        )
+        qbt = mocker.MagicMock()
+
+        _process_one(torrent, self._config(), qbt, db)
+
+        db.mark_completed.assert_called_once_with("tag1")

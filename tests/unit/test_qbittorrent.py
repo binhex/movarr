@@ -361,3 +361,49 @@ class TestDeleteStalled:
         client.delete_stalled(stalled_map, state="stalledDL", delete_data=True)
 
         mock_api.torrents_delete.assert_called_once_with(delete_files=True, torrent_hashes="hash1")
+
+
+# ---------------------------------------------------------------------------
+# list_by_category
+# ---------------------------------------------------------------------------
+
+
+class TestListByCategory:
+    """Tests for QBittorrentClient.list_by_category."""
+
+    def test_returns_dict_keyed_by_hash(self, mocker: MockerFixture) -> None:
+        """list_by_category returns torrents keyed by their hash string."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_info.return_value = [
+            {"hash": "abc123", "name": "Movie A"},
+            {"hash": "def456", "name": "Movie B"},
+        ]
+        result = client.list_by_category()
+        assert result == {
+            "abc123": {"hash": "abc123", "name": "Movie A"},
+            "def456": {"hash": "def456", "name": "Movie B"},
+        }
+
+    def test_empty_category_returns_empty_dict(self, mocker: MockerFixture) -> None:
+        """list_by_category returns an empty dict when no torrents found."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_info.return_value = []
+        result = client.list_by_category()
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# delete_stalled — warning when delete_torrent returns False
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteStalledWarning:
+    """delete_stalled logs a warning when delete_torrent returns False."""
+
+    def test_logs_warning_when_delete_fails(self, mocker: MockerFixture) -> None:
+        client, _mock_api = _make_client(mocker)
+        mocker.patch.object(client, "delete_torrent", return_value=False)
+        mock_warning = mocker.patch("movarr.qbittorrent._logger.warning")
+        stalled_map = {"hash1": {"name": "Stuck Movie", "age_mins": 500, "state": "stalledDL"}}
+        client.delete_stalled(stalled_map, state="stalledDL", delete_data=False)
+        mock_warning.assert_called_once()

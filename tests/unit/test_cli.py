@@ -10,6 +10,8 @@ from click.testing import CliRunner
 from movarr.cli import cli
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from pytest_mock import MockerFixture
 
 
@@ -297,3 +299,55 @@ class TestCliPidPath:
 
         _, kwargs = mock_run.call_args
         assert kwargs["pid_path"].endswith("movarr.pid")
+
+
+# ---------------------------------------------------------------------------
+# _VERSION set to "unknown" when package metadata is not found
+# ---------------------------------------------------------------------------
+
+
+class TestVersionUnknown:
+    """_VERSION falls back to 'unknown' when importlib.metadata.version raises."""
+
+    def test_version_is_unknown_when_package_not_found(self, mocker: MockerFixture) -> None:
+        import importlib
+        from importlib.metadata import PackageNotFoundError
+
+        mocker.patch("importlib.metadata.version", side_effect=PackageNotFoundError("movarr"))
+        import movarr.cli as cli_mod
+
+        importlib.reload(cli_mod)
+        assert cli_mod._VERSION == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _log_format inner function — tracker prefix branch
+# ---------------------------------------------------------------------------
+
+
+class TestLogFormat:
+    """_log_format includes a tracker prefix when tracker is non-empty."""
+
+    def test_log_format_with_tracker_includes_prefix(self, mocker: MockerFixture) -> None:
+        runner = CliRunner()
+        captured_formatter: list = []
+
+        def fake_create_logger(**kwargs: Any) -> None:
+            captured_formatter.append(kwargs.get("log_format"))
+
+        mocker.patch("movarr.cli.create_logger", side_effect=fake_create_logger)
+        # load_config is imported lazily inside cli(); patch at its origin module
+        mocker.patch("movarr.config.load_config", return_value=MagicMock())
+
+        result = runner.invoke(cli, ["--test"])
+        assert result.exit_code == 0
+        assert len(captured_formatter) == 1, "create_logger was not called"
+
+        log_format_fn = captured_formatter[0]
+        record_with_tracker = {"extra": {"tracker": "FooTracker"}, "message": "hello"}
+        output = log_format_fn(record_with_tracker)
+        assert "[FooTracker]" in output
+
+        record_without_tracker = {"extra": {}, "message": "hello"}
+        output_no_prefix = log_format_fn(record_without_tracker)
+        assert "[" not in output_no_prefix.split("|")[-1].split("{")[0]

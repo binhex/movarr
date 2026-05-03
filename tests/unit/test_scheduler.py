@@ -328,3 +328,37 @@ class TestRunDaemon:
         # check via keyword args
         kwarg_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
         assert kwarg_ids == {"search", "queue_management", "post_processing"}
+
+
+class TestRunDaemonSignalHandler:
+    """Tests that _shutdown signal handler is properly invoked."""
+
+    def test_shutdown_handler_calls_sys_exit(self, mocker: MockerFixture) -> None:
+        """The _shutdown inner function calls scheduler.shutdown and sys.exit(0)."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mock_sys_exit = mocker.patch("movarr.scheduler.sys.exit")
+
+        captured_handlers: dict = {}
+
+        def capture_signal(sig, handler):
+            captured_handlers[sig] = handler
+
+        mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)
+        # After handlers are registered, raise SystemExit to stop the sleep loop.
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
+
+        _run_daemon(Config())
+
+        import signal as signal_mod
+
+        handler = captured_handlers.get(signal_mod.SIGTERM)
+        assert handler is not None
+
+        # Call the captured handler directly.
+        handler(signal_mod.SIGTERM, None)
+
+        mock_sched.shutdown.assert_called()
+        mock_sys_exit.assert_called_with(0)

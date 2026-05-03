@@ -459,3 +459,140 @@ class TestSearchForImdbId:
         out = search_for_imdb_id(result, cfg)
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
+
+
+# ---------------------------------------------------------------------------
+# _search_imdbpie — additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSearchImdbpieEdgeCases:
+    """Additional edge cases for _search_imdbpie."""
+
+    def _mock_imdbpie(self, mocker: MockerFixture, hits: list) -> None:
+        mock_imdbpie = mocker.MagicMock()
+        mock_client = mocker.MagicMock()
+        mock_imdbpie.Imdb.return_value = mock_client
+        mock_client.search_for_title.return_value = hits
+        mocker.patch.dict("sys.modules", {"imdbpie": mock_imdbpie})
+
+    def test_hit_with_no_title_is_skipped(self, mocker: MockerFixture) -> None:
+        """Hits without a 'title' key are skipped and the result fails."""
+        self._mock_imdbpie(mocker, [{"year": "1999", "imdb_id": "tt0133093"}])
+        out = _search_imdbpie(_make_result(), Config())
+        assert out["result"] == "Failed"
+
+    def test_hit_with_none_year_is_skipped(self, mocker: MockerFixture) -> None:
+        """Hits with year=None are skipped and the result fails."""
+        self._mock_imdbpie(mocker, [{"title": "The Matrix", "year": None, "imdb_id": "tt0133093"}])
+        out = _search_imdbpie(_make_result(), Config())
+        assert out["result"] == "Failed"
+
+    def test_hit_with_unparseable_year_is_skipped(self, mocker: MockerFixture) -> None:
+        """Hits where int(year) raises ValueError are skipped."""
+        self._mock_imdbpie(mocker, [{"title": "The Matrix", "year": "n/a", "imdb_id": "tt0133093"}])
+        out = _search_imdbpie(_make_result(), Config())
+        assert out["result"] == "Failed"
+
+
+# ---------------------------------------------------------------------------
+# _search_tmdb — additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSearchTmdbEdgeCases:
+    """Additional edge cases for _search_tmdb."""
+
+    def _cfg(self) -> Config:
+        cfg = Config()
+        cfg.credentials.tmdb.api_key = "test_key"
+        return cfg
+
+    def _mock_http(self, mocker: MockerFixture, search_hits: list) -> Any:
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        search_resp = mocker.MagicMock()
+        search_resp.content = json.dumps({"results": search_hits})
+        mock_http.get.return_value = search_resp
+        return mock_http
+
+    def test_invalid_release_date_format_skips_hit(self, mocker: MockerFixture) -> None:
+        """Hit with malformed release_date is skipped via ValueError."""
+        self._mock_http(mocker, [{"title": "The Matrix", "release_date": "not-a-date", "id": 603}])
+        out = _search_tmdb(_make_result(), self._cfg())
+        assert out["result"] == "Failed"
+
+    def test_none_tmdb_id_skips_hit(self, mocker: MockerFixture) -> None:
+        """Hit where 'id' is absent/None is skipped."""
+        self._mock_http(mocker, [{"title": "The Matrix", "release_date": "1999-03-31"}])
+        out = _search_tmdb(_make_result(), self._cfg())
+        assert out["result"] == "Failed"
+
+    def test_detail_request_failure_sets_failed(self, mocker: MockerFixture) -> None:
+        """When the second (detail) HTTP request fails, result is Failed."""
+        from movarr.downloader import HttpError
+
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        search_resp = mocker.MagicMock()
+        search_resp.content = json.dumps(
+            {"results": [{"title": "The Matrix", "release_date": "1999-03-31", "id": 603}]}
+        )
+        mock_http.get.side_effect = [search_resp, HttpError("detail failed")]
+        out = _search_tmdb(_make_result(), self._cfg())
+        assert out["result"] == "Failed"
+
+
+# ---------------------------------------------------------------------------
+# _search_omdb — unparseable year edge case
+# ---------------------------------------------------------------------------
+
+
+class TestSearchOmdbEdgeCases:
+    """Additional edge cases for _search_omdb."""
+
+    def test_unparseable_year_sets_failed(self, mocker: MockerFixture) -> None:
+        """OMDb response with Year containing no digits hits the ValueError except."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        # Year stripped of non-digits becomes "" → int("") raises ValueError
+        resp.content = json.dumps({"Title": "The Matrix", "Year": "N/A", "imdbID": "tt0133093"})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+
+
+# ---------------------------------------------------------------------------
+# _search_google — sanitise-returns-None and title-mismatch edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSearchGoogleEdgeCases:
+    """Additional edge cases for _search_google."""
+
+    def test_empty_title_cannot_be_sanitised_sets_failed(self, mocker: MockerFixture) -> None:
+        """Google hit with an empty title results in sanitise returning falsy."""
+        mock_gs = mocker.MagicMock()
+        mock_hit = mocker.MagicMock()
+        mock_hit.title = ""
+        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
+        mock_gs.search.return_value = iter([mock_hit])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        out = _search_google(_make_result(), Config())
+        assert out["result"] == "Failed"
+
+    def test_title_not_in_index_compare_sets_failed(self, mocker: MockerFixture) -> None:
+        """Google hit whose normalised title is not in index_title_compare fails."""
+        mock_gs = mocker.MagicMock()
+        mock_hit = mocker.MagicMock()
+        mock_hit.title = "Something Completely Different 1999"
+        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
+        mock_gs.search.return_value = iter([mock_hit])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        # index_title_compare does NOT contain "somethingcompletelydifferent"
+        result = _make_result(index_title_compare="thematrix1999")
+        out = _search_google(result, Config())
+        assert out["result"] == "Failed"

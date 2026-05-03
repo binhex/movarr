@@ -5,10 +5,10 @@ from __future__ import annotations
 import ast
 import datetime
 import json
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from loguru import logger as _logger
 from sqlalchemy import Column, Integer, String, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -27,9 +27,6 @@ def _encode_field(value: object) -> str | None:
     if isinstance(value, list):
         return json.dumps(value)
     return str(value)
-
-
-_logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -129,10 +126,10 @@ class Database:
                 _logger.info("Unversioned legacy database — applying all migrations.")
                 self._upgrade(0)
             else:
-                _logger.info("New database — setting schema version to %d.", _DB_VERSION)
+                _logger.info("New database — setting schema version to {}.", _DB_VERSION)
                 self._set_user_version(_DB_VERSION)
         elif current < _DB_VERSION:
-            _logger.info("Upgrading database from v%d to v%d.", current, _DB_VERSION)
+            _logger.info("Upgrading database from v{} to v{}.", current, _DB_VERSION)
             self._upgrade(current)
 
     def _upgrade(self, from_version: int) -> None:

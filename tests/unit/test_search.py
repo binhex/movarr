@@ -616,3 +616,82 @@ class TestDbDeduplication:
         )
 
         mock_filter.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# run_search — library_walk and override_search branches
+# ---------------------------------------------------------------------------
+
+
+class TestRunSearchLibraryWalkAndOverride:
+    """Tests for run_search covering library_walk population and override_search."""
+
+    def _make_base(self, mocker: MockerFixture) -> tuple[Config, Any, Any]:
+        cfg = Config()
+        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
+        mock_jackett_cls.return_value.is_reachable.return_value = True
+        mocker.patch("movarr.search._process_criteria")
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        return cfg, qbt, db
+
+    def test_walk_library_called_when_library_path_list_set(self, mocker: MockerFixture) -> None:
+        """walk_library is called when library_path_list is non-empty."""
+        cfg, qbt, db = self._make_base(mocker)
+        cfg.general.library_path_list = ["/media/movies"]
+        mock_walk = mocker.patch("movarr.search.walk_library", return_value=iter([("/", [], ["a.mkv"])]))
+        run_search(cfg, qbt, db)
+        mock_walk.assert_called_once_with(["/media/movies"])
+
+    def test_override_search_replaces_category(self, mocker: MockerFixture) -> None:
+        """When override_search sets a category, that category is forwarded to _process_criteria."""
+        cfg, qbt, db = self._make_base(mocker)
+        indexer = cfg.index_site.jackett_indexer
+        cfg.index_site.override_search = {indexer: {"category": "9999"}}
+        mock_process = mocker.patch("movarr.search._process_criteria")
+        mocker.patch("movarr.search.JackettClient").return_value.is_reachable.return_value = True
+        run_search(cfg, qbt, db)
+        called_categories = [call[1]["category"] for call in mock_process.call_args_list]
+        assert all(c == "9999" for c in called_categories)
+
+
+# ---------------------------------------------------------------------------
+# _process_criteria — no movie_title_year skips the result
+# ---------------------------------------------------------------------------
+
+
+class TestProcessCriteriaNoYear:
+    """result without movie_title_year is skipped (lines 127-129)."""
+
+    def _make_session(self, mocker: MockerFixture) -> _SearchSession:
+        cfg = Config()
+        mock_jackett = mocker.MagicMock()
+        # Return one hit so iteration enters the loop
+        mock_jackett.search.return_value = [
+            {"title": "The.Matrix.1999.1080p.BluRay", "size": 8_000_000_000, "imdb_id": ""}
+        ]
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_seen.return_value = False
+        return _SearchSession(config=cfg, jackett=mock_jackett, qbt=qbt, db=db, library_walk=None)
+
+    def test_no_year_result_is_skipped(self, mocker: MockerFixture) -> None:
+        """Result with movie_title but no movie_title_year is skipped without writing to db."""
+        session = self._make_session(mocker)
+        # _enrich_index_metadata returns no year
+        mocker.patch(
+            "movarr.search._enrich_index_metadata",
+            return_value={
+                "index_title": "The Matrix 1999 1080p",
+                "movie_title": "The Matrix",
+                "movie_title_year": "",
+                "result": "Passed",
+            },
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="my-indexer",
+            session=session,
+        )
+        session.db.write.assert_not_called()

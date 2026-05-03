@@ -396,3 +396,179 @@ class TestFetchOmdb:
         if genres:
             assert "Action" in genres
             assert "Sci-Fi" in genres
+
+
+# ---------------------------------------------------------------------------
+# _resolve_imdbpie_redirect (private helper — tested directly)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveImdbpieRedirect:
+    """Tests for _resolve_imdbpie_redirect()."""
+
+    def test_returns_canonical_id_when_api_returns_different_id(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_metadata import _resolve_imdbpie_redirect
+
+        mock_client = mocker.MagicMock()
+        mock_client.region = "en-US"
+        mock_client._get.return_value = {"id": "/title/tt9999999/"}
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+
+        result = _resolve_imdbpie_redirect(mock_client, "tt0133093")
+
+        assert result == "tt9999999"
+
+    def test_returns_original_id_when_no_id_in_response(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_metadata import _resolve_imdbpie_redirect
+
+        mock_client = mocker.MagicMock()
+        mock_client.region = "en-US"
+        mock_client._get.return_value = {}
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+
+        result = _resolve_imdbpie_redirect(mock_client, "tt0133093")
+
+        assert result == "tt0133093"
+
+    def test_returns_original_id_on_exception(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_metadata import _resolve_imdbpie_redirect
+
+        mock_client = mocker.MagicMock()
+        mock_client._get.side_effect = RuntimeError("network error")
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": None})
+
+        result = _resolve_imdbpie_redirect(mock_client, "tt0133093")
+
+        assert result == "tt0133093"
+
+
+# ---------------------------------------------------------------------------
+# _patch_imdbpie_redirect_check — nm-id branch and except path
+# ---------------------------------------------------------------------------
+
+
+class TestPatchImdbpieRedirectCheckExtra:
+    """Additional tests for _patch_imdbpie_redirect_check edge cases."""
+
+    def test_nm_id_with_matching_returned_id_is_not_redirect(self, mocker: MockerFixture) -> None:
+        """nm- prefixed IDs use _get_resource; same ID → not a redirect."""
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.validate_imdb_id = mocker.MagicMock()
+        fake_client._get_resource.return_value = {"base": {"id": "/name/nm0000001/"}}
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("nm0000001") is False
+
+    def test_nm_id_with_different_returned_id_is_redirect(self, mocker: MockerFixture) -> None:
+        """nm- prefixed IDs: different returned ID → is a redirect."""
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.validate_imdb_id = mocker.MagicMock()
+        fake_client._get_resource.return_value = {"base": {"id": "/name/nm9999999/"}}
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("nm0000001") is True
+
+    def test_lookup_error_returns_false(self, mocker: MockerFixture) -> None:
+        """LookupError inside the patched method is caught and returns False."""
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.validate_imdb_id = mocker.MagicMock()
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+        fake_client._get.side_effect = LookupError("not found")
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("tt0133093") is False
+
+
+# ---------------------------------------------------------------------------
+# _credits_names, _credits_characters, _get, _safe_val (exception paths)
+# ---------------------------------------------------------------------------
+
+
+class TestCreditsNamesException:
+    """_credits_names must return None on KeyError / TypeError."""
+
+    def test_returns_none_on_missing_credits_key(self) -> None:
+        from movarr.imdb_metadata import _credits_names
+
+        assert _credits_names({}, "director") is None
+
+    def test_returns_none_on_none_input(self) -> None:
+        from movarr.imdb_metadata import _credits_names
+
+        assert _credits_names(None, "director") is None  # type: ignore[arg-type]
+
+
+class TestCreditsCharactersException:
+    """_credits_characters must return None on KeyError / TypeError."""
+
+    def test_returns_none_on_missing_cast_key(self) -> None:
+        from movarr.imdb_metadata import _credits_characters
+
+        assert _credits_characters({}) is None
+
+    def test_returns_none_on_none_input(self) -> None:
+        from movarr.imdb_metadata import _credits_characters
+
+        assert _credits_characters(None) is None  # type: ignore[arg-type]
+
+
+class TestGetHelper:
+    """_get must return None on KeyError / TypeError."""
+
+    def test_returns_none_on_missing_key(self) -> None:
+        from movarr.imdb_metadata import _get
+
+        assert _get({}, "missing") is None
+
+    def test_returns_none_on_none_data(self) -> None:
+        from movarr.imdb_metadata import _get
+
+        assert _get(None, "key") is None  # type: ignore[arg-type]
+
+
+class TestSafeValException:
+    """_safe_val must return None on KeyError / IndexError / TypeError."""
+
+    def test_returns_none_on_missing_key(self) -> None:
+        from movarr.imdb_metadata import _safe_val
+
+        assert _safe_val({}, "missing") is None
+
+    def test_returns_none_on_none_data(self) -> None:
+        from movarr.imdb_metadata import _safe_val
+
+        assert _safe_val(None, "key") is None  # type: ignore[arg-type]
+
+    def test_returns_none_on_index_out_of_range(self) -> None:
+        from movarr.imdb_metadata import _safe_val
+
+        assert _safe_val({"items": []}, "items", 0) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_cert_imdbpie — second try exception path
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCertImdbpieException:
+    """_extract_cert_imdbpie second try block must return None on exception."""
+
+    def test_returns_none_when_certificates_raises_key_error(self) -> None:
+        from movarr.imdb_metadata import _extract_cert_imdbpie
+
+        # UK country entry exists but has no "certificate" key → KeyError in generator
+        aux = {"certificates": [{"country": "United Kingdom"}]}
+        result = _extract_cert_imdbpie(aux)
+        assert result is None

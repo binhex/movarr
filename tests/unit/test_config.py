@@ -19,6 +19,8 @@ from movarr.config import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pytest_mock import MockerFixture
+
 # ---------------------------------------------------------------------------
 # GeneralConfig defaults
 # ---------------------------------------------------------------------------
@@ -233,3 +235,46 @@ class TestDatabaseConfigDefaults:
         """Top-level Config has a database field with DatabaseConfig defaults."""
         cfg = Config()
         assert cfg.database.stalled_expiry_days == 7
+
+
+# ---------------------------------------------------------------------------
+# _migrate_config — OSError during backup
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateConfigBackupOsError:
+    """_run_migrations continues without backup when shutil.copy2 raises OSError."""
+
+    def test_migration_proceeds_when_backup_fails(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.config import MIGRATIONS, _run_migrations
+
+        config_path = tmp_path / "config.yml"
+        # Use a known migration key ("1.0.0")
+        first_key = next(iter(MIGRATIONS))
+        raw: dict = {"general": {"config_version": first_key}}
+        import yaml as _yaml
+
+        config_path.write_text(_yaml.dump(raw))
+        mocker.patch("movarr.config.shutil.copy2", side_effect=OSError("no space"))
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        result = _run_migrations(raw, config_path)
+        assert result is not None
+        mock_warning.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# create_default_config — early return when file already exists
+# ---------------------------------------------------------------------------
+
+
+class TestCreateDefaultConfigExists:
+    """create_default_config does nothing when the file already exists."""
+
+    def test_no_write_when_file_exists(self, tmp_path: Path) -> None:
+        from movarr.config import create_default_config
+
+        config_path = tmp_path / "config.yml"
+        original = "# existing config\n"
+        config_path.write_text(original)
+        create_default_config(config_path)
+        assert config_path.read_text() == original

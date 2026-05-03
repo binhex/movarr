@@ -1126,3 +1126,39 @@ class TestLogLevels:
 
         records = self._capture_records(lambda: _pass({"result": "Passed", "result_details": []}, "good thing"))
         assert any(r["level"].name == "INFO" for r in records), "_pass() must log at INFO"
+
+
+# ---------------------------------------------------------------------------
+# _check_size — ValueError/TypeError path
+# ---------------------------------------------------------------------------
+
+
+class TestCheckSizeEdgeCases:
+    """Edge cases for _check_size — unparseable index_size."""
+
+    def test_unparseable_size_sets_failed(self) -> None:
+        from movarr.filters import _check_size
+
+        result = _index_result(index_size="not-a-number")
+        site = _default_site_dict(minimum_size_mb=100)
+        out = _check_size(result, site, "minimum")
+        assert out["result"] == "Failed"
+
+
+# ---------------------------------------------------------------------------
+# _check_bitrate — ZeroDivisionError path
+# ---------------------------------------------------------------------------
+
+
+class TestCheckBitrateEdgeCases:
+    """Edge cases for _check_bitrate — zero runtime (ZeroDivisionError)."""
+
+    def test_zero_runtime_sets_failed(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result = _imdb_result(imdb_running_time_in_minutes=0)
+        # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
+        result["_filter_minimum_bitrate_mb"] = 50
+        result["index_size"] = 8_000_000_000
+        out = _check_bitrate(result, object())
+        assert out["result"] == "Failed"

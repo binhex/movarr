@@ -24,6 +24,7 @@ from loguru import logger as _logger
 
 from movarr.parsing import (
     bad_keyword_search,
+    extract_group,
     extract_movie_title,
     extract_resolution,
     extract_year,
@@ -552,8 +553,6 @@ def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
     if not preferred_groups:
         return 0
     preferred_lower = [g.lower() for g in preferred_groups]
-    from movarr.parsing import extract_group
-
     cand_group = (extract_group(candidate_san) or "").lower()
     other_group = (extract_group(other_san) or "").lower()
     if cand_group in preferred_lower and other_group not in preferred_lower:
