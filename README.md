@@ -1,25 +1,67 @@
 # movarr
 
-This software is under *HEAVY* development right now, expect lack of documentation, major bugs and missing functionality.
+Automated movie torrent acquisition, filtering, and post-processing daemon.
 
-## Description
+## Features
 
-WIP
+- **Jackett integration** — polls any Jackett-configured indexer (or all indexers at once) for movie torrents
+  across configurable quality tiers (1080p, 2160p, 2160p remux, etc.).
+- **Deep IMDb filtering** — every candidate is resolved to an IMDb ID and evaluated against rating, vote count,
+  year, runtime, language, country, title type, and genre before anything is queued.
+- **Override lists** — bypass the standard filters for specific directors, cast members, writers, movie titles, or
+  characters (e.g. force-accept all James Bond films regardless of rating).
+- **Genre threshold overrides** — relax rating and vote minimums on a per-genre basis (e.g. accept Animation
+  titles at a lower rating floor than live-action).
+- **Library deduplication** — resolves candidate titles to IMDb IDs and checks against all configured library
+  paths before queuing, preventing duplicate downloads.
+- **Database deduplication** — records every evaluated title in SQLite; previously passed, failed, or stalled
+  titles are skipped on subsequent runs.
+- **Configurable TTL expiry** — failed, stalled, and passed records are automatically pruned after configurable
+  retention windows so titles can be re-evaluated over time.
+- **Queue management** — monitors qBittorrent for torrents stuck in stalled or metadata-fetching states and
+  removes them after configurable grace periods.
+- **Internet-aware removal** — stalled torrent removal is paused when internet connectivity is unavailable,
+  preventing false positives from transient outages.
+- **Post-processing** — detects completed downloads in qBittorrent, copies qualifying files to your media
+  library, and removes source files if configured.
+- **Genre/certification routing** — routes completed movies to different library paths per viewer profile based
+  on genre and age-rating rules.
+- **Path remapping** — translates qBittorrent container paths to movarr-visible paths for Docker deployments.
+- **Notifications** — sends alerts via any [apprise](https://github.com/caronc/apprise)-compatible service
+  (ntfy, Discord, Telegram, email, and more).
+- **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
+  configurable interval.
+- **Daemon mode** — runs as a background process with PID file management, or in foreground mode for direct
+  invocation.
+- **Automatic config migration** — upgrades the YAML config schema automatically on startup, backing up the
+  previous version before applying changes.
 
 ## Prerequisites
 
 - [Python 3.12+](https://www.python.org/downloads/)
-- [Astral uv](https://github.com/astral-sh/uv#installation)
+- [Astral uv](https://github.com/astral-sh/uv#installation) (optional)
+- [Jackett](https://github.com/Jackett/Jackett) — torrent indexer proxy
+- [qBittorrent](https://www.qbittorrent.org/) with Web UI enabled
 
 ## Quick start
 
-### Installation
+### Installation using uv (recommended)
 
 ```bash
 git clone https://github.com/binhex/movarr
 cd movarr
 uv venv --quiet
 uv sync
+```
+
+### Installation using pip
+
+```bash
+git clone https://github.com/binhex/movarr
+cd movarr
+python -m venv .venv
+source .venv/bin/activate
+pip install .
 ```
 
 ### Usage
@@ -30,7 +72,254 @@ movarr --help
 
 ## Options
 
-WIP
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `--config-path <path>` | Path to the YAML configuration file. | `configs/movarr.yml` |
+| `--db-path <path>` | Path to the SQLite database file. | `db/movarr.db` |
+| `--log-path <path>` | Path to the log file. | `logs/movarr.log` |
+| `--log-level <level>` | Logging level for console output. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. | `INFO` |
+| `--pid-path <path>` | Path to PID file (daemon mode only). | `<config-dir>/movarr.pid` |
+| `--ffprobe-path <path>` | Path to the ffprobe binary. | `/usr/bin/ffprobe` |
+| `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
+| `--test` | Validate configuration and exit without running any tasks. | `false` |
+| `--version` | Print the version and exit. | — |
+
+## Configuration
+
+All behaviour is controlled by a YAML file (`configs/movarr.yml` by default). A default config is created
+automatically on first run. The file is divided into the sections below.
+
+### `general`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `config_version` | Schema version — managed automatically; do not edit. | *(current)* |
+| `daemon_mode` | `foreground` or `background`. Overridden by `--daemon` CLI flag. | `foreground` |
+| `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). | `info` |
+| `log_level_file` | File logging level. | `debug` |
+| `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. | `[]` |
+| `db_path` | Path to the SQLite history database. | `db/movarr.db` |
+| `ffprobe_path` | Path to the `ffprobe` binary used for bitrate analysis during post-processing. | `/usr/bin/ffprobe` |
+
+### `schedule`
+
+Each of the three background tasks has its own schedule block with the same keys:
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `enabled` | Enable or disable this task. | `true` |
+| `schedule_time_units` | Unit for the interval. Always `minutes`. | `minutes` |
+| `schedule_time_mins` | Interval in minutes between runs. | `30` (acquisition), `5` (queue_management / post_processing) |
+
+Tasks: `acquisition`, `queue_management`, `post_processing`.
+
+### `filters`
+
+Controls which torrents pass the IMDb quality gate.
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `minimum_year` | Reject movies released before this year. | `1970` |
+| `minimum_runtime_mins` | Reject movies shorter than this many minutes. | `60` |
+| `minimum_rating` | Minimum IMDb rating (0–10). | `7.0` |
+| `minimum_votes` | Minimum IMDb vote count. | `5000` |
+| `override_genre` | Map of genre → `{minimum_rating, minimum_votes}` to relax thresholds for specific genres. | `{}` |
+| `good_imdb_title_type_list` | Allowed IMDb title types. | `[movie, video, tvmovie]` |
+| `good_country_list` | Allowed production country codes (ISO 3166-1 alpha-2). Empty = allow all. | `[]` |
+| `good_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
+| `bad_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
+| `bad_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
+| `bad_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
+| `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing all other filters. | `[]` |
+| `override_writer_list` | Force-accept any movie written by one of these writers. | `[]` |
+| `override_director_list` | Force-accept any movie directed by one of these directors. | `[]` |
+| `override_movie_title_list` | Force-accept any movie whose title contains one of these strings. | `[]` |
+| `override_character_list` | Force-accept any movie featuring one of these characters. | `[]` |
+| `preferred_index_quality_list` | Keywords indicating a preferred quality edition (e.g. `remastered`, `directors cut`). Matching torrents sort higher. | `[]` |
+| `preferred_index_group_list` | Preferred release group names. Matching torrents sort higher. | `[]` |
+
+### `torrent_client`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `selected` | Torrent client to use. Currently only `qbittorrent` is supported. | `qbittorrent` |
+| `qbittorrent.host` | qBittorrent Web UI hostname or IP address. | `localhost` |
+| `qbittorrent.port` | qBittorrent Web UI port. | `8080` |
+| `qbittorrent.username` | Web UI username. | `admin` |
+| `qbittorrent.password` | Web UI password. | `adminadmin` |
+| `qbittorrent.add_paused` | Add torrents in paused state. | `false` |
+| `qbittorrent.category` | Category tag applied to all movarr-managed torrents. | `movies-movarr` |
+
+### `notification`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `apprise_urls` | List of [apprise](https://github.com/caronc/apprise) service URLs. Leave empty to disable. | `[]` |
+
+Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services. Example:
+`ntfy://my-topic`, `discord://webhook-id/webhook-token`.
+
+### `index_proxy`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `selected` | Index proxy to use. Currently only `jackett` is supported. | `jackett` |
+| `jackett.host` | Jackett hostname or IP address. | `localhost` |
+| `jackett.port` | Jackett port. | `9117` |
+| `jackett.api_key` | Jackett API key (found in the Jackett dashboard). | `""` |
+| `jackett.read_timeout` | HTTP read timeout in seconds. | `60.0` |
+| `jackett.limit` | Maximum number of results to request per search query. | `500` |
+| `jackett.offset` | Result offset for pagination. | `0` |
+
+### `credentials`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `tmdb.api_key` | [TMDb](https://www.themoviedb.org/settings/api) API key (IMDb ID resolution fallback). | `""` |
+| `omdb.api_key` | [OMDb](https://www.omdbapi.com/apikey.aspx) API key (IMDb ID resolution fallback). | `""` |
+
+### `index_site`
+
+Controls what is searched and which indexers are used.
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `jackett_indexer` | Jackett indexer to query. Use `all` to query every configured indexer simultaneously. | `all` |
+| `ignore_list` | Jackett indexer names to skip even when `jackett_indexer` is `all`. | `[]` |
+| `search` | List of search criteria blocks (see below). | *(1080p + 2160p)* |
+| `override_search` | Per-indexer overrides for search parameters, keyed by indexer name. | `{}` |
+
+Each entry in `search`:
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `criteria` | Search string passed to Jackett (e.g. `1080p`, `2160p remux`). | — |
+| `category` | Torrent category codes, comma-separated (Torznab format). | `2000,5000` |
+| `minimum_size_mb` | Minimum torrent size in MB. | `3000` |
+| `maximum_size_mb` | Maximum torrent size in MB. | `20000` |
+| `minimum_bitrate_mb` | Minimum video bitrate in Mb/s. Set `0` to disable. | `50` |
+
+### `queue_management`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `queue_management_enabled` | Master switch for the queue management pipeline. | `true` |
+| `stalled_monitor_enabled` | Remove torrents that have stalled (no peers, no download progress). | `true` |
+| `metadata_monitor_enabled` | Remove torrents stuck in metadata-fetching state. | `true` |
+| `stalled_delete_torrent_data` | Also delete downloaded data when removing a stalled torrent. | `false` |
+| `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `false` |
+| `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
+| `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
+| `connection_down_grace_mins` | If the internet has been unreachable for fewer than this many minutes, pause all stalled removal. | `30` |
+
+### `post_process`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `post_process_enabled` | Master switch for the post-processing pipeline. | `true` |
+| `copy_completed` | Copy completed files to the media library. | `true` |
+| `remove_completed` | Remove source files after a successful copy. | `true` |
+| `exclude_file_min_kb` | Files smaller than this size (kilobytes) are not copied (skips small extras and samples). | `1500000` |
+| `exclude_file_regex_list` | Regex patterns matched against file names — matching files are skipped. | `[]` |
+| `exclude_folder_regex_list` | Regex patterns matched against folder names — matching folders and their contents are skipped. | `[]` |
+| `copy_library_rules` | Ordered list of routing rules (see below). | `[]` |
+| `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches. | `""` |
+| `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches. | `""` |
+| `path_remapping` | List of path prefix substitutions for Docker deployments (see below). | `[]` |
+
+Each entry in `copy_library_rules`:
+
+| Key | Description |
+| --- | ----------- |
+| `name` | Human-readable label for this rule (e.g. a viewer's name). |
+| `genres` | List of IMDb genres that match this rule. |
+| `max_certification` | Optional age-rating ceiling (e.g. `12A`). Movies rated above this are skipped for this rule. |
+| `hd_path` | Destination directory for 1080p / HD movies. |
+| `uhd_path` | Destination directory for 2160p / UHD movies. |
+
+Each entry in `path_remapping`:
+
+| Key | Description |
+| --- | ----------- |
+| `from_path` | Path prefix as reported by qBittorrent (e.g. inside a Docker container). |
+| `to_path` | Equivalent path as visible to movarr on the host. |
+
+### `database`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `stalled_expiry_days` | Delete stalled history records older than this many days, allowing the title to be retried. | `7` |
+| `failed_expiry_days` | Delete failed history records older than this many days, allowing the title to be re-evaluated. | `7` |
+| `passed_expiry_days` | Delete passed history records older than this many days. Allows re-queuing if qBittorrent was reset externally. Set `0` to disable. | `30` |
+
+## How it works
+
+movarr runs three independent pipelines on configurable schedules.
+
+### Acquisition pipeline
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[Query Jackett for each search criteria]
+    B --> C[For each result]
+    C --> D{Bad keyword\nin title?}
+    D -- Yes --> SKIP1([⛔ Skip])
+    D -- No --> E{Size within\nlimits?}
+    E -- No --> SKIP2([⛔ Skip])
+    E -- Yes --> F{Already\nin library?}
+    F -- Yes --> SKIP3([⛔ Skip])
+    F -- No --> G{Already in\ndatabase?}
+    G -- Yes --> SKIP4([⛔ Skip])
+    G -- No --> H[Resolve IMDb ID]
+    H --> I{Title type\nallowed?}
+    I -- No --> FAIL1([❌ Fail])
+    I -- Yes --> J{Bad genre?}
+    J -- Yes --> FAIL2([❌ Fail])
+    J -- No --> K{Pass rating, votes,\nyear, runtime,\nlanguage, country?}
+    K -- No --> FAIL3([❌ Fail])
+    K -- Yes --> L{Override list\nmatch?}
+    L -- Yes --> PASS([✅ Add to qBittorrent])
+    L -- No --> M{All standard\nfilters pass?}
+    M -- No --> FAIL4([❌ Fail])
+    M -- Yes --> PASS
+```
+
+### Queue management pipeline
+
+Runs on its own interval and inspects all movarr-managed torrents in qBittorrent:
+
+- **Stalled torrents** — torrents with no peers and no download progress for longer than
+  `stalled_delete_torrent_max_mins` are removed. The history record is updated to `Stalled` and
+  `stalled_expiry_days` controls when the title can be retried.
+- **Metadata-stuck torrents** — torrents that have been fetching metadata for longer than
+  `metadata_delete_torrent_max_mins` are removed.
+- **Connectivity guard** — if the internet connection has been unreachable for fewer than
+  `connection_down_grace_mins` minutes, all removals are paused until connectivity returns.
+
+### Post-processing pipeline
+
+Runs on its own interval and inspects all movarr-managed torrents in qBittorrent:
+
+1. Detects torrents with a completed status.
+2. Scans the download directory, skipping files and folders that match the exclude rules.
+3. Applies `path_remapping` to translate qBittorrent container paths to locally-visible paths.
+4. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
+5. Falls back to `default_copy_library` if no rule matches.
+6. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
+7. Marks the history record as `Completed`.
+
+## Scheduler
+
+movarr runs three schedulers concurrently. Each uses a **run-then-sleep** strategy: the interval is measured
+from the *start* of the previous run, so drift does not accumulate over time.
+
+| Task | Default interval | Config key |
+| ---- | ---------------- | ---------- |
+| Acquisition | 30 min | `schedule.acquisition` |
+| Queue management | 5 min | `schedule.queue_management` |
+| Post-processing | 5 min | `schedule.post_processing` |
+
+Any task can be disabled independently by setting `enabled: false` in its schedule block.
 
 ## Development
 
@@ -41,9 +330,40 @@ uv venv --quiet
 uv sync --extra dev
 ```
 
-If you wish to perform linting on all files before committing (PR will nt be
+If you wish to perform linting on all files before committing (PR will not be
 accepted if it does not pass all linting) then run `pre-commit run --all-files`.
+
+### Running tests
+
+```bash
+uv run pytest
+```
 
 ## FAQ
 
-WIP
+**Q: movarr queued a movie I already have. Why?**
+
+Library matching works by resolving the torrent title to an IMDb ID and scanning your `library_path_list` for a
+file or folder whose name contains that IMDb ID in `{imdb-ttXXXXXXX}` format. Ensure your media files follow
+the Plex/Jellyfin naming convention and that all library roots are listed under `general.library_path_list`.
+
+**Q: How do I prevent movarr from downloading non-English movies?**
+
+Set `filters.good_language_list` to `[en]`. movarr will reject any title where the primary IMDb language is
+not English.
+
+**Q: Can I force-accept a specific director's entire filmography?**
+
+Yes — add the director's name to `filters.override_director_list`. All filter checks (rating, votes, genre,
+year, etc.) are bypassed for matching titles. The same pattern applies to `override_cast_list`,
+`override_writer_list`, `override_movie_title_list`, and `override_character_list`.
+
+**Q: What happens if qBittorrent is not reachable?**
+
+The acquisition and post-processing pipelines log a warning and exit cleanly for that cycle. The queue
+management pipeline also pauses stalled-torrent removal when internet connectivity is detected as unavailable.
+
+**Q: How do I disable passed record expiry?**
+
+Set `database.passed_expiry_days: 0`. This prevents movarr from ever re-queuing a title that was previously
+sent to qBittorrent, even if qBittorrent is reset externally.
