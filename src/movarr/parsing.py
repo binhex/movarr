@@ -283,16 +283,16 @@ _RESOLUTION_SCORES: dict[str, int] = {
     r"(4320p?)": 50,
 }
 _SOURCE_SCORES: dict[str, int] = {
-    r"(dvdrip|webrip)": 10,
-    r"(hdtv)": 20,
-    r"(webdl|web\sdl|hdrip)": 30,
-    r"(bd|bdrip|bluray|blu\sray)": 40,
     r"(remux|bdremux|bd\sremux)": 80,
+    r"(bd|bdrip|bluray|blu\sray)": 40,
+    r"(webdl|web\sdl|hdrip)": 30,
+    r"(hdtv)": 20,
+    r"(dvdrip|webrip)": 10,
 }
 _AUDIO_SCORES: dict[str, int] = {
-    r"(dts)": 10,
-    r"(dtshd|dts\shd|truehd|true\shd|ddp)": 20,
     r"(dtsx|dts\sx|atmos)": 30,
+    r"(dtshd|dts\shd|truehd|true\shd|ddp)": 20,
+    r"(dts)": 10,
 }
 
 

@@ -284,3 +284,14 @@ class TestQualityScore:
         score_remux = quality_score("Movie 2020 1080p REMUX DTS")
         score_encode = quality_score("Movie 2020 1080p BluRay x264 DTS")
         assert score_remux >= score_encode
+
+    def test_bluray_remux_scores_same_as_remux(self) -> None:
+        # "BluRay REMUX" must score at the REMUX tier, not the BluRay tier.
+        score_bluray_remux = quality_score("Movie 2020 1080p BluRay REMUX DTS")
+        score_remux = quality_score("Movie 2020 1080p REMUX DTS")
+        assert score_bluray_remux == score_remux
+
+    def test_atmos_scores_higher_than_plain_dts(self) -> None:
+        score_atmos = quality_score("Movie 2020 1080p BluRay DTS HD TrueHD Atmos")
+        score_dts = quality_score("Movie 2020 1080p BluRay DTS")
+        assert score_atmos > score_dts
