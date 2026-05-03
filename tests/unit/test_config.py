@@ -12,6 +12,7 @@ from movarr.config import (
     Config,
     DatabaseConfig,
     GeneralConfig,
+    ProwlarrConfig,
     QueueManagementConfig,
     ScheduleTaskConfig,
     load_config,
@@ -163,7 +164,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -188,21 +189,21 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
 
     def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated through to the latest version."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v2_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -221,7 +222,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v21_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -243,7 +244,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v22_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -265,7 +266,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.4.0"
+        assert cfg.general.config_version == "2.5.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -406,3 +407,143 @@ class TestScheduleTaskConfigRunOnStart:
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
+
+
+# ---------------------------------------------------------------------------
+# ProwlarrConfig defaults
+# ---------------------------------------------------------------------------
+
+
+class TestProwlarrConfigDefaults:
+    """ProwlarrConfig must have sane defaults."""
+
+    def test_default_host(self) -> None:
+        cfg = ProwlarrConfig()
+        assert cfg.host == "localhost"
+
+    def test_default_port(self) -> None:
+        cfg = ProwlarrConfig()
+        assert cfg.port == 9696
+
+    def test_default_api_key_is_empty(self) -> None:
+        cfg = ProwlarrConfig()
+        assert cfg.api_key == ""
+
+    def test_default_read_timeout(self) -> None:
+        cfg = ProwlarrConfig()
+        assert cfg.read_timeout == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Config migration v2.4.0 → v2.5.0
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationV24toV25:
+    """Migration v2.4.0 → v2.5.0 adds Prowlarr config and prowlarr_indexer."""
+
+    def _v24_config(self, tmp_path: Path) -> Path:
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.4.0'\n"
+            "notification:\n  apprise_urls: []\n"
+        )
+        return cfg_file
+
+    def test_v24_config_migrated_to_v25(self, tmp_path: Path) -> None:
+        """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
+        cfg_file = self._v24_config(tmp_path)
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.5.0"
+        assert cfg.index_proxy.prowlarr.host == "localhost"
+        assert cfg.index_proxy.prowlarr.port == 9696
+        assert cfg.index_site.prowlarr_indexer == "all"
+
+    def test_v24_migration_creates_backup(self, tmp_path: Path) -> None:
+        """A backup file config.yml.bak.2.4.0 is created before migration."""
+        cfg_file = self._v24_config(tmp_path)
+        load_config(str(cfg_file))
+        assert (tmp_path / "config.yml.bak.2.4.0").exists()
+
+    def test_v24_migration_writes_prowlarr_block_to_disk(self, tmp_path: Path) -> None:
+        """After migration the on-disk YAML contains the prowlarr block."""
+        cfg_file = self._v24_config(tmp_path)
+        load_config(str(cfg_file))
+        raw = yaml.safe_load(cfg_file.read_text())
+        assert "prowlarr" in raw.get("index_proxy", {})
+        assert raw["index_proxy"]["prowlarr"]["port"] == 9696
+
+    def test_v24_migration_writes_prowlarr_indexer_to_disk(self, tmp_path: Path) -> None:
+        """After migration the on-disk YAML contains prowlarr_indexer: all."""
+        cfg_file = self._v24_config(tmp_path)
+        load_config(str(cfg_file))
+        raw = yaml.safe_load(cfg_file.read_text())
+        assert raw.get("index_site", {}).get("prowlarr_indexer") == "all"
+
+    def test_v24_migration_preserves_existing_jackett_config(self, tmp_path: Path) -> None:
+        """Existing jackett config values are not overwritten by migration."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.4.0'\n"
+            "index_proxy:\n"
+            "  selected: jackett\n"
+            "  jackett:\n"
+            "    host: myjackett\n"
+            "    port: 9117\n"
+        )
+        cfg = load_config(str(cfg_file))
+        assert cfg.index_proxy.jackett.host == "myjackett"
+
+    def test_existing_config_at_v25_needs_no_migration(self, tmp_path: Path) -> None:
+        """A config already at v2.5.0 is not re-migrated."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.5.0'\n"
+        )
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.5.0"
+        backup = tmp_path / "config.yml.bak.2.5.0"
+        assert not backup.exists()
+
+
+# ---------------------------------------------------------------------------
+# IndexSiteConfig — prowlarr_indexer default
+# ---------------------------------------------------------------------------
+
+
+class TestIndexSiteConfigProwlarrIndexer:
+    """IndexSiteConfig must expose prowlarr_indexer defaulting to 'all'."""
+
+    def test_default_prowlarr_indexer_is_all(self) -> None:
+        cfg = Config()
+        assert cfg.index_site.prowlarr_indexer == "all"
+
+    def test_numeric_prowlarr_indexer_accepted(self) -> None:
+        cfg = Config.model_validate({"index_site": {"prowlarr_indexer": "7"}})
+        assert cfg.index_site.prowlarr_indexer == "7"
+
+    def test_invalid_prowlarr_indexer_raises(self) -> None:
+        """A non-numeric, non-'all' value raises ValidationError at config construction."""
+        with pytest.raises(ValidationError, match="prowlarr_indexer"):
+            Config.model_validate({"index_site": {"prowlarr_indexer": "my-tracker"}})
+
+
+# ---------------------------------------------------------------------------
+# IndexProxyConfig — selected validator
+# ---------------------------------------------------------------------------
+
+
+class TestIndexProxySelectedValidator:
+    """index_proxy.selected must be validated at load time."""
+
+    def test_valid_jackett_accepted(self) -> None:
+        cfg = Config()
+        cfg.index_proxy.selected = "jackett"
+        assert cfg.index_proxy.selected == "jackett"
+
+    def test_invalid_selected_raises_on_construction(self) -> None:
+        """An unknown proxy name raises ValidationError at config construction time."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="index_proxy.selected"):
+            Config.model_validate({"index_proxy": {"selected": "notaproxy"}})

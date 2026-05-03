@@ -1,7 +1,7 @@
 """Top-level search pipeline for movarr.
 
 For each configured search criteria tier:
-  1. Fetch Jackett results (paginated).
+  1. Fetch indexer proxy results (paginated).
   2. Enrich each result with parsed index metadata.
   3. Run index-level filters.
   4. Resolve IMDb ID (if not supplied by the index).
@@ -22,7 +22,7 @@ from movarr.file_utils import walk_library
 from movarr.filters import filter_by_imdb, filter_by_index
 from movarr.imdb_metadata import fetch_metadata
 from movarr.imdb_search import search_for_imdb_id
-from movarr.jackett import JackettClient
+from movarr.indexer import IndexProxyProtocol, get_indexer_client
 from movarr.notifications import send_queued_notification
 from movarr.parsing import (
     extract_after_year,
@@ -47,7 +47,7 @@ class _SearchSession:
     """Immutable session-level dependencies shared across all criteria tiers."""
 
     config: Config
-    jackett: JackettClient
+    indexer: IndexProxyProtocol
     qbt: QBittorrentClient
     db: Database
     library_walk: list | None
@@ -66,9 +66,12 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         logger.info("No search criteria configured; skipping search.")
         return
 
-    jackett = JackettClient(config)
-    if not jackett.is_reachable():
-        logger.warning("Jackett is not reachable; skipping search.")
+    indexer_client = get_indexer_client(config)
+    if not indexer_client.is_reachable():
+        logger.warning(
+            "{} is not reachable; skipping search.",
+            config.index_proxy.selected.capitalize(),
+        )
         return
 
     library_walk: list[tuple[str, list[str], list[str]]] | None = None
@@ -77,28 +80,32 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
 
     session = _SearchSession(
         config=config,
-        jackett=jackett,
+        indexer=indexer_client,
         qbt=qbt,
         db=db,
         library_walk=library_walk,
     )
 
     for criteria_cfg in site_cfg.search:
-        # Apply any per-indexer category override.
-        indexer = site_cfg.jackett_indexer
+        # Select the indexer slug/id based on the configured proxy.
+        index_site = (
+            site_cfg.jackett_indexer
+            if config.index_proxy.selected == "jackett"
+            else site_cfg.prowlarr_indexer
+        )
         category = criteria_cfg.category
-        if indexer in site_cfg.override_search:
-            overrides = site_cfg.override_search[indexer]
+        if index_site in site_cfg.override_search:
+            overrides = site_cfg.override_search[index_site]
             if "category" in overrides:
                 category = overrides["category"]
 
         logger.info(
             "Searching indexer '{}' for '{}' (category '{}').",
-            indexer,
+            index_site,
             criteria_cfg.criteria,
             category,
         )
-        _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=indexer, session=session)
+        _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session)
 
 
 def _process_criteria(
@@ -107,10 +114,10 @@ def _process_criteria(
     indexer: str,
     session: _SearchSession,
 ) -> None:
-    """Fetch and process all Jackett results for one criteria tier."""
+    """Fetch and process all indexer results for one criteria tier."""
     site_dict = criteria_cfg.model_dump()
 
-    for result in session.jackett.search(indexer, criteria_cfg.criteria, category):
+    for result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(result)
 
         index_title = result.get("index_title", "")

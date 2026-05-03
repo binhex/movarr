@@ -121,18 +121,18 @@ class TestRunSearch:
     def test_no_search_criteria_skips_jackett(self, mocker: MockerFixture) -> None:
         cfg = Config()
         cfg.index_site.search = []
-        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
 
         run_search(cfg, qbt, db)
 
-        mock_jackett_cls.assert_not_called()
+        mock_factory.assert_not_called()
 
     def test_jackett_not_reachable_skips_criteria_processing(self, mocker: MockerFixture) -> None:
         cfg = Config()
-        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
-        mock_jackett_cls.return_value.is_reachable.return_value = False
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_factory.return_value.is_reachable.return_value = False
         mocker.patch("movarr.search._process_criteria")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
@@ -143,8 +143,8 @@ class TestRunSearch:
 
     def test_processes_each_criteria_tier(self, mocker: MockerFixture) -> None:
         cfg = Config()
-        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
-        mock_jackett_cls.return_value.is_reachable.return_value = True
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_factory.return_value.is_reachable.return_value = True
         mock_process = mocker.patch("movarr.search._process_criteria")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
@@ -155,8 +155,8 @@ class TestRunSearch:
 
     def test_passes_jackett_instance_to_process_criteria(self, mocker: MockerFixture) -> None:
         cfg = Config()
-        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
-        mock_jackett_cls.return_value.is_reachable.return_value = True
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_factory.return_value.is_reachable.return_value = True
         mock_process = mocker.patch("movarr.search._process_criteria")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
@@ -164,7 +164,7 @@ class TestRunSearch:
         run_search(cfg, qbt, db)
 
         call_kwargs = mock_process.call_args_list[0][1]
-        assert call_kwargs["session"].jackett is mock_jackett_cls.return_value
+        assert call_kwargs["session"].indexer is mock_factory.return_value
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ class TestProcessCriteria:
     ) -> None:
         session = _SearchSession(
             config=config or Config(),
-            jackett=jackett,
+            indexer=jackett,
             qbt=qbt,
             db=db,
             library_walk=None,
@@ -537,7 +537,7 @@ class TestPassedAllFiltersLogLevel:
         mock_db = mocker.MagicMock()
         mock_db.is_duplicate_exact.return_value = False
         mock_qbt = mocker.MagicMock()
-        session = _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None)
+        session = _SearchSession(config=cfg, indexer=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None)
 
         records = self._capture_records(
             lambda: _process_criteria(
@@ -566,7 +566,7 @@ class TestDbDeduplication:
         mock_db = mocker.MagicMock()
         mock_db.is_duplicate_exact.return_value = seen
         mock_qbt = mocker.MagicMock()
-        return _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None), mock_db
+        return _SearchSession(config=cfg, indexer=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None), mock_db
 
     def test_seen_title_skips_filter_by_index(self, mocker: MockerFixture) -> None:
         """filter_by_index must NOT be called when the title is already in the DB."""
@@ -628,8 +628,8 @@ class TestRunSearchLibraryWalkAndOverride:
 
     def _make_base(self, mocker: MockerFixture) -> tuple[Config, Any, Any]:
         cfg = Config()
-        mock_jackett_cls = mocker.patch("movarr.search.JackettClient")
-        mock_jackett_cls.return_value.is_reachable.return_value = True
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_factory.return_value.is_reachable.return_value = True
         mocker.patch("movarr.search._process_criteria")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
@@ -649,7 +649,7 @@ class TestRunSearchLibraryWalkAndOverride:
         indexer = cfg.index_site.jackett_indexer
         cfg.index_site.override_search = {indexer: {"category": "9999"}}
         mock_process = mocker.patch("movarr.search._process_criteria")
-        mocker.patch("movarr.search.JackettClient").return_value.is_reachable.return_value = True
+        mocker.patch("movarr.search.get_indexer_client").return_value.is_reachable.return_value = True
         run_search(cfg, qbt, db)
         called_categories = [call[1]["category"] for call in mock_process.call_args_list]
         assert all(c == "9999" for c in called_categories)
@@ -674,7 +674,7 @@ class TestProcessCriteriaNoYear:
         db = mocker.MagicMock()
         db.is_seen.return_value = False
         db.is_duplicate_exact.return_value = False
-        return _SearchSession(config=cfg, jackett=mock_jackett, qbt=qbt, db=db, library_walk=None)
+        return _SearchSession(config=cfg, indexer=mock_jackett, qbt=qbt, db=db, library_walk=None)
 
     def test_no_year_result_is_skipped(self, mocker: MockerFixture) -> None:
         """Result with movie_title but no movie_title_year is skipped without writing to db."""

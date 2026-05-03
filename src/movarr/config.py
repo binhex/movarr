@@ -13,9 +13,9 @@ from pydantic import BaseModel, Field, field_validator
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["Config", "load_config"]
+__all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.4.0"
+_CONFIG_VERSION = "2.5.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -57,12 +57,24 @@ def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v24_to_v25(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.4.0 → v2.5.0: add Prowlarr config block and prowlarr_indexer."""
+    raw.setdefault("index_proxy", {}).setdefault(
+        "prowlarr",
+        {"host": "localhost", "port": 9696, "api_key": "", "read_timeout": 60.0},
+    )
+    raw.setdefault("index_site", {}).setdefault("prowlarr_indexer", "all")
+    raw.setdefault("general", {})["config_version"] = "2.5.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
     "2.1.0": _migrate_v21_to_v22,
     "2.2.0": _migrate_v22_to_v23,
     "2.3.0": _migrate_v23_to_v24,
+    "2.4.0": _migrate_v24_to_v25,
 }
 
 
@@ -179,11 +191,30 @@ class JackettConfig(BaseModel):
     offset: int = 0
 
 
+class ProwlarrConfig(BaseModel):
+    """Prowlarr indexer proxy settings."""
+
+    host: str = "localhost"
+    port: int = 9696
+    api_key: str = ""
+    read_timeout: float = 60.0
+
+
 class IndexProxyConfig(BaseModel):
     """Index proxy selection and settings."""
 
     selected: str = "jackett"
     jackett: JackettConfig = Field(default_factory=JackettConfig)
+    prowlarr: ProwlarrConfig = Field(default_factory=ProwlarrConfig)
+
+    @field_validator("selected")
+    @classmethod
+    def validate_selected(cls, value: str) -> str:
+        """Ensure selected is a supported index proxy name."""
+        allowed = {"jackett", "prowlarr"}
+        if value not in allowed:
+            raise ValueError(f"index_proxy.selected must be one of {allowed!r}, got {value!r}")
+        return value
 
 
 class CredentialSetConfig(BaseModel):
@@ -213,6 +244,7 @@ class IndexSiteConfig(BaseModel):
     """Per-indexer search configuration."""
 
     jackett_indexer: str = "all"
+    prowlarr_indexer: str = "all"
     ignore_list: list[str] = Field(default_factory=list)
     search: list[SearchCriteriaConfig] = Field(
         default_factory=lambda: [
@@ -223,6 +255,20 @@ class IndexSiteConfig(BaseModel):
         ]
     )
     override_search: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+    @field_validator("prowlarr_indexer")
+    @classmethod
+    def validate_prowlarr_indexer(cls, value: str) -> str:
+        """Ensure prowlarr_indexer is 'all' or a numeric indexer ID string."""
+        if value == "all":
+            return value
+        try:
+            int(value)
+        except ValueError:
+            raise ValueError(
+                f"index_site.prowlarr_indexer must be 'all' or a numeric ID, got {value!r}"
+            )
+        return value
 
 
 class QueueManagementConfig(BaseModel):

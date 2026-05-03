@@ -164,13 +164,17 @@ Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services.
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
-| `selected` | Index proxy to use. Currently only `jackett` is supported. | `jackett` |
+| `selected` | Index proxy to use: `jackett` or `prowlarr`. | `jackett` |
 | `jackett.host` | Jackett hostname or IP address. | `localhost` |
 | `jackett.port` | Jackett port. | `9117` |
 | `jackett.api_key` | Jackett API key (found in the Jackett dashboard). | `""` |
 | `jackett.read_timeout` | HTTP read timeout in seconds. | `60.0` |
 | `jackett.limit` | Maximum number of results to request per search query. | `500` |
 | `jackett.offset` | Result offset for pagination. | `0` |
+| `prowlarr.host` | Prowlarr hostname or IP address. | `localhost` |
+| `prowlarr.port` | Prowlarr port. | `9696` |
+| `prowlarr.api_key` | Prowlarr API key (found in *Settings → General*). | `""` |
+| `prowlarr.read_timeout` | HTTP read timeout in seconds. | `60.0` |
 
 ### `credentials`
 
@@ -186,6 +190,7 @@ Controls what is searched and which indexers are used.
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `jackett_indexer` | Jackett indexer to query. Use `all` to query every configured indexer simultaneously. | `all` |
+| `prowlarr_indexer` | Prowlarr indexer ID to query. Use `all` (maps to `-1`) or a numeric indexer ID from Prowlarr. | `all` |
 | `ignore_list` | Jackett indexer names to skip even when `jackett_indexer` is `all`. | `[]` |
 | `search` | List of search criteria blocks (see below). | *(1080p + 2160p)* |
 | `override_search` | Per-indexer overrides for search parameters, keyed by indexer name. | `{}` |
@@ -194,7 +199,7 @@ Each entry in `search`:
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
-| `criteria` | Search string passed to Jackett (e.g. `1080p`, `2160p remux`). | — |
+| `criteria` | Search string passed to the index proxy (e.g. `1080p`, `2160p remux`). | — |
 | `category` | Torrent category codes, comma-separated (Torznab format). | `2000,5000` |
 | `minimum_size_mb` | Minimum torrent size in MB. | `3000` |
 | `maximum_size_mb` | Maximum torrent size in MB. | `20000` |
