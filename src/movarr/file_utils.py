@@ -108,6 +108,7 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
         return False
 
     if dst_path.is_file():
+        _logger.info("Verifying existing destination '{}' checksum.", dst_path)
         src_hash = _sha256(src_path)
         dst_hash = _sha256(dst_path)
         if src_hash == dst_hash:
@@ -139,6 +140,7 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
         _logger.warning("OS error copying '{}' → '{}': {}.", src_path, dst_path, exc)
         return False
 
+    _logger.info("Verifying copy integrity for '{}'.", dst_path)
     src_hash = _sha256(src_path)
     dst_hash = _sha256(dst_path)
     if src_hash != dst_hash:

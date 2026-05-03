@@ -221,6 +221,38 @@ class TestCopyWithVerify:
         result = copy_with_verify(src, dst)
         assert result is False
 
+    def test_logs_checksum_verification_in_progress(self, tmp_path: Path) -> None:
+        """INFO log is emitted before post-copy SHA-256 so user knows it's not stuck."""
+        from loguru import logger as _loguru_logger
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            src = tmp_path / "src.mkv"
+            dst = tmp_path / "dst" / "dst.mkv"
+            src.write_bytes(b"video data")
+            copy_with_verify(src, dst)
+        finally:
+            _loguru_logger.remove(sink_id)
+        assert any("erifying" in r["message"] for r in records)
+
+    def test_logs_pre_copy_checksum_check_when_dst_exists(self, tmp_path: Path) -> None:
+        """INFO log is emitted before pre-copy SHA-256 when destination already exists."""
+        from loguru import logger as _loguru_logger
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            content = b"identical content"
+            src = tmp_path / "src.mkv"
+            dst = tmp_path / "dst.mkv"
+            src.write_bytes(content)
+            dst.write_bytes(content)
+            copy_with_verify(src, dst)
+        finally:
+            _loguru_logger.remove(sink_id)
+        assert any("erifying" in r["message"] for r in records)
+
 
 class TestResolutionFromFfprobe:
     """Tests for resolution_from_ffprobe()."""
