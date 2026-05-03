@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Database", "HistoryRecord"]
 
-_DB_VERSION = 9
+_DB_VERSION = 10
 
 
 def _encode_field(value: object) -> str | None:
@@ -74,6 +74,7 @@ class HistoryRecord(Base):
     imdb_certification = Column(String)
     imdb_cert_source = Column(String)
     stalled_at = Column(String)
+    created_at = Column(String)
 
 
 class Database:
@@ -152,6 +153,12 @@ class Database:
                 if "stalled_at" not in existing_cols:
                     conn.execute(text("ALTER TABLE history ADD COLUMN stalled_at TEXT"))
                 conn.commit()
+            if from_version < 10:
+                cursor = conn.execute(text("PRAGMA table_info(history)"))
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if "created_at" not in existing_cols:
+                    conn.execute(text("ALTER TABLE history ADD COLUMN created_at TEXT"))
+                conn.commit()
         self._set_user_version(_DB_VERSION)
 
     # ------------------------------------------------------------------
@@ -201,6 +208,7 @@ class Database:
             imdb_country_list=_encode_field(result.get("imdb_country_list")),
             imdb_certification=result.get("imdb_certification"),
             imdb_cert_source=result.get("imdb_cert_source"),
+            created_at=datetime.datetime.now(tz=datetime.UTC).isoformat(),
         )
         with Session(self._engine) as session:
             session.add(record)
@@ -268,6 +276,35 @@ class Database:
                     HistoryRecord.result == "Stalled",
                     HistoryRecord.stalled_at.isnot(None),
                     HistoryRecord.stalled_at < cutoff,
+                )
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+        return int(deleted)
+
+    def expire_failed(self, days: int) -> int:
+        """Delete failed history records older than *days* days.
+
+        Called at the start of each search run to allow retry of titles whose
+        failed record has expired (e.g. transient IMDb outage, changed criteria).
+        A *days* value of 0 disables expiry (no records deleted).
+
+        Args:
+            days: Retention window in days.  0 = no expiry.
+
+        Returns:
+            Number of records deleted.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
+        with Session(self._engine) as session:
+            deleted = (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.result == "Failed",
+                    HistoryRecord.created_at.isnot(None),
+                    HistoryRecord.created_at < cutoff,
                 )
                 .delete(synchronize_session=False)
             )

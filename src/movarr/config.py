@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "load_config"]
 
-_CONFIG_VERSION = "2.1.0"
+_CONFIG_VERSION = "2.2.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -34,9 +34,17 @@ def _migrate_v2_to_v21(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v21_to_v22(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.1.0 → v2.2.0: add database.failed_expiry_days."""
+    raw.setdefault("database", {}).setdefault("failed_expiry_days", 7)
+    raw.setdefault("general", {})["config_version"] = "2.2.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
+    "2.1.0": _migrate_v21_to_v22,
 }
 
 
@@ -258,6 +266,7 @@ class DatabaseConfig(BaseModel):
     """Database settings."""
 
     stalled_expiry_days: int = 7
+    failed_expiry_days: int = 7
 
 
 class Config(BaseModel):

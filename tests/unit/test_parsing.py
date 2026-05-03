@@ -7,6 +7,7 @@ from movarr.parsing import (
     bad_keyword_search,
     build_sqlite_pattern,
     extract_after_year,
+    extract_group,
     extract_movie_title,
     extract_resolution,
     extract_year,
@@ -68,6 +69,9 @@ class TestExtractMovieTitle:
         result = extract_movie_title("Inception 2010 1080p")
         assert result == "Inception"
 
+    def test_empty_string_returns_none(self) -> None:
+        assert extract_movie_title("") is None
+
 
 # ---------------------------------------------------------------------------
 # extract_year
@@ -82,6 +86,9 @@ class TestExtractYear:
 
     def test_returns_none_when_no_year(self) -> None:
         assert extract_year("Movie Title noYear") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert extract_year("") is None
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +121,9 @@ class TestExtractResolution:
         # Without a year, _after_year returns None and extract returns None
         assert extract_resolution("NoYearTitle") is None
 
+    def test_empty_string_returns_none(self) -> None:
+        assert extract_resolution("") is None
+
 
 # ---------------------------------------------------------------------------
 # extract_after_year
@@ -130,6 +140,9 @@ class TestExtractAfterYear:
 
     def test_returns_none_when_no_year(self) -> None:
         assert extract_after_year("NoYearTitle") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert extract_after_year("") is None
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +173,9 @@ class TestNormaliseForCompare:
         assert with_article is not None
         assert without is not None
 
+    def test_empty_string_returns_none(self) -> None:
+        assert normalise_for_compare("") is None
+
 
 # ---------------------------------------------------------------------------
 # build_sqlite_pattern
@@ -179,6 +195,17 @@ class TestBuildSqlitePattern:
     def test_non_empty_returns_non_empty(self) -> None:
         pattern = build_sqlite_pattern("Test Movie 2020")
         assert pattern not in ("", None)
+
+    def test_empty_string_returns_none(self) -> None:
+        assert build_sqlite_pattern("") is None
+
+    def test_no_title_before_year_returns_none(self) -> None:
+        # No recognisable title before year → extract_movie_title returns None
+        assert build_sqlite_pattern("") is None
+
+    def test_no_year_in_sanitised_returns_none(self) -> None:
+        # No year in string → extract_movie_title returns None → line 245
+        assert build_sqlite_pattern("NoYearOrTitle") is None
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +266,28 @@ class TestKeywordSearch:
 
     def test_no_content_after_year_returns_false(self) -> None:
         assert keyword_search("NoYearTitle HDR", "HDR") is False
+
+    def test_empty_string_returns_false(self) -> None:
+        assert keyword_search("", "HDR") is False
+
+
+# ---------------------------------------------------------------------------
+# extract_group
+# ---------------------------------------------------------------------------
+
+
+class TestExtractGroup:
+    """Tests for extract_group()."""
+
+    def test_extracts_release_group(self) -> None:
+        result = extract_group("Movie 2020 1080p BluRay x264-GROUP")
+        assert result == "group"
+
+    def test_returns_none_when_no_year(self) -> None:
+        assert extract_group("NoYearTitle") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert extract_group("") is None
 
 
 # ---------------------------------------------------------------------------

@@ -175,6 +175,31 @@ class TestTaskSearch:
 
         mock_run_search.assert_called_once_with(config, qbt, db)
 
+    def test_expire_stalled_and_failed_called_before_search(self, mocker: MockerFixture) -> None:
+        """expire_stalled and expire_failed must be called before run_search."""
+        call_order: list[str] = []
+        mocker.patch("movarr.scheduler.run_search", side_effect=lambda *_: call_order.append("search"))
+        config = Config()
+        db = mocker.MagicMock()
+        db.expire_stalled.side_effect = lambda _: call_order.append("expire_stalled")
+        db.expire_failed.side_effect = lambda _: call_order.append("expire_failed")
+
+        _task_search(config, mocker.MagicMock(), db)
+
+        assert call_order.index("expire_stalled") < call_order.index("search")
+        assert call_order.index("expire_failed") < call_order.index("search")
+
+    def test_expire_failed_called_with_config_days(self, mocker: MockerFixture) -> None:
+        """expire_failed receives the failed_expiry_days from config."""
+        mocker.patch("movarr.scheduler.run_search")
+        config = Config()
+        config.database.failed_expiry_days = 14
+        db = mocker.MagicMock()
+
+        _task_search(config, mocker.MagicMock(), db)
+
+        db.expire_failed.assert_called_once_with(14)
+
     def test_exception_is_swallowed(self, mocker: MockerFixture) -> None:
         """run_search raising must not propagate out of _task_search."""
         mocker.patch("movarr.scheduler.run_search", side_effect=RuntimeError("network error"))

@@ -162,7 +162,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.1.0"
+        assert cfg.general.config_version == "2.2.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -187,21 +187,21 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.1.0"
+        assert cfg.general.config_version == "2.2.0"
 
     def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
-        """A v2.0.0 config is migrated to v2.1.0 (next version)."""
+        """A v2.0.0 config is migrated through to the latest version."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.1.0"
+        assert cfg.general.config_version == "2.2.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
-        """A v2.0.0 config is migrated to v2.1.0, adding database.stalled_expiry_days."""
+        """A v2.0.0 config is migrated to v2.2.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.1.0"
+        assert cfg.general.config_version == "2.2.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v2_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -210,6 +210,28 @@ class TestConfigMigration:
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         load_config(str(cfg_file))
         backup = tmp_path / "config.yml.bak.2.0.0"
+        assert backup.exists()
+
+    def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
+        """A v2.1.0 config is migrated to v2.2.0, adding database.failed_expiry_days."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.1.0'\nnotification:\n  apprise_urls: []\n"
+            "database:\n  stalled_expiry_days: 7\n"
+        )
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.2.0"
+        assert cfg.database.failed_expiry_days == 7
+
+    def test_v21_migration_creates_backup(self, tmp_path: Path) -> None:
+        """A backup file config.yml.bak.2.1.0 is created before v2.1→v2.2 migration."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.1.0'\nnotification:\n  apprise_urls: []\n"
+            "database:\n  stalled_expiry_days: 7\n"
+        )
+        load_config(str(cfg_file))
+        backup = tmp_path / "config.yml.bak.2.1.0"
         assert backup.exists()
 
 
@@ -231,10 +253,21 @@ class TestDatabaseConfigDefaults:
         cfg = DatabaseConfig(stalled_expiry_days=0)
         assert cfg.stalled_expiry_days == 0
 
+    def test_failed_expiry_days_defaults_to_7(self) -> None:
+        """failed_expiry_days defaults to 7 when not specified."""
+        cfg = DatabaseConfig()
+        assert cfg.failed_expiry_days == 7
+
+    def test_failed_expiry_days_zero_allowed(self) -> None:
+        """failed_expiry_days of 0 (disable expiry) is valid."""
+        cfg = DatabaseConfig(failed_expiry_days=0)
+        assert cfg.failed_expiry_days == 0
+
     def test_config_database_field_present(self) -> None:
         """Top-level Config has a database field with DatabaseConfig defaults."""
         cfg = Config()
         assert cfg.database.stalled_expiry_days == 7
+        assert cfg.database.failed_expiry_days == 7
 
 
 # ---------------------------------------------------------------------------

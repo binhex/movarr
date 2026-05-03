@@ -224,7 +224,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -247,7 +247,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -269,7 +269,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -294,7 +294,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -323,7 +323,7 @@ class TestProcessCriteria:
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -336,7 +336,7 @@ class TestProcessCriteria:
         jackett = mocker.MagicMock()
         jackett.search.return_value = iter([{"index_title": ""}])
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
         qbt = mocker.MagicMock()
 
         self._call(mocker, jackett, qbt, db)
@@ -351,7 +351,7 @@ class TestProcessCriteria:
         # A title that sanitise() produces text from but extract_year() returns None for
         jackett.search.return_value = iter([{"index_title": "SomeTitle NoYearAtAll BluRay"}])
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
         qbt = mocker.MagicMock()
 
         self._call(mocker, jackett, qbt, db)
@@ -387,7 +387,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = updated_result
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -414,7 +414,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -448,7 +448,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
-        db.has_passed.return_value = False
+        db.is_duplicate_exact.return_value = False
 
         self._call(mocker, jackett, qbt, db)
 
@@ -535,7 +535,7 @@ class TestPassedAllFiltersLogLevel:
         mocker.patch("movarr.search.send_queued_notification")
 
         mock_db = mocker.MagicMock()
-        mock_db.has_passed.return_value = False
+        mock_db.is_duplicate_exact.return_value = False
         mock_qbt = mocker.MagicMock()
         session = _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None)
 
@@ -564,7 +564,7 @@ class TestDbDeduplication:
         mock_jackett = mocker.MagicMock()
         mock_jackett.search.return_value = [{"index_title": "The Matrix 1999 1080p BluRay"}]
         mock_db = mocker.MagicMock()
-        mock_db.has_passed.return_value = seen
+        mock_db.is_duplicate_exact.return_value = seen
         mock_qbt = mocker.MagicMock()
         return _SearchSession(config=cfg, jackett=mock_jackett, qbt=mock_qbt, db=mock_db, library_walk=None), mock_db
 
@@ -673,6 +673,7 @@ class TestProcessCriteriaNoYear:
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         db.is_seen.return_value = False
+        db.is_duplicate_exact.return_value = False
         return _SearchSession(config=cfg, jackett=mock_jackett, qbt=qbt, db=db, library_walk=None)
 
     def test_no_year_result_is_skipped(self, mocker: MockerFixture) -> None:

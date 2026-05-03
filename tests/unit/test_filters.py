@@ -1156,7 +1156,7 @@ class TestCheckBitrateEdgeCases:
     def test_zero_runtime_sets_failed(self) -> None:
         from movarr.filters import _check_bitrate
 
-        result = _imdb_result(imdb_running_time_in_minutes=0)
+        result = _imdb_result(imdb_running_time_in_minutes="0")
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
         result["_filter_minimum_bitrate_mb"] = 50
         result["index_size"] = 8_000_000_000

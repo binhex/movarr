@@ -116,8 +116,8 @@ def _process_criteria(
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
         with logger.contextualize(tracker=tracker):
-            if session.db.has_passed(index_title):
-                logger.info("'{}' already in DB; skipping.", index_title)
+            if session.db.is_duplicate_exact(index_title):
+                logger.debug("'{}' already in DB; skipping.", index_title)
                 continue
 
             if not result.get("movie_title"):

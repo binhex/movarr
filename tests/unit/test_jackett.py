@@ -320,6 +320,20 @@ class TestParseItem:
         assert result["torrent_url"] == ""
         assert result["magnet_url"] == "magnet:?xt=urn:btih:def456"
 
+    def test_tracker_plain_string_used_directly(self, mocker: MockerFixture) -> None:
+        """jackettindexer as a dict uses the #text key as tracker name."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023 1080p",
+            "link": "https://example.com/dl/123.torrent",
+            "jackettindexer": {"#text": "BitMagnet"},
+            _NS_ATTR: [],
+        }
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert result["index_tracker"] == "BitMagnet"
+
     """Tests for JackettClient._fetch_page."""
 
     def test_parses_valid_xml_response(self, mocker: MockerFixture) -> None:

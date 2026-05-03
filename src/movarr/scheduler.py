@@ -146,6 +146,7 @@ def _run_daemon(config: Config) -> None:
 def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     try:
         db.expire_stalled(config.database.stalled_expiry_days)
+        db.expire_failed(config.database.failed_expiry_days)
         run_search(config, qbt, db)
     except Exception:
         logger.exception("Search task failed.")

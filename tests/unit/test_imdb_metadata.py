@@ -490,6 +490,20 @@ class TestPatchImdbpieRedirectCheckExtra:
         _patch_imdbpie_redirect_check(fake_client)
         assert fake_client.is_redirection_title("tt0133093") is False
 
+    def test_returns_false_when_no_id_in_response(self, mocker: MockerFixture) -> None:
+        """Returns False when _get() returns a resource with no usable id field."""
+        from movarr.imdb_metadata import _patch_imdbpie_redirect_check
+
+        fake_client = mocker.MagicMock()
+        fake_client.validate_imdb_id = mocker.MagicMock()
+        mock_constants = mocker.MagicMock()
+        mock_constants.BASE_URI = "https://app.imdb.com"
+        mocker.patch.dict("sys.modules", {"imdbpie.constants": mock_constants})
+        fake_client._get.return_value = {}  # no "id" key → returned_id == ""
+
+        _patch_imdbpie_redirect_check(fake_client)
+        assert fake_client.is_redirection_title("tt0133093") is False
+
 
 # ---------------------------------------------------------------------------
 # _credits_names, _credits_characters, _get, _safe_val (exception paths)

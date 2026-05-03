@@ -431,3 +431,73 @@ class TestExpireStalled:
 
         assert count == 0
         assert db.find_by_tag("movarr-comp") is not None
+
+
+class TestExpireFailed:
+    """Database.expire_failed() deletes Failed rows older than N days."""
+
+    def _backdate_created(self, db: Database, index_title: str, days_ago: int) -> None:
+        """Force created_at to *days_ago* days in the past."""
+        import datetime
+
+        from sqlalchemy.orm import Session as _Session
+
+        from movarr.database import HistoryRecord
+
+        old_ts = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days_ago)).isoformat()
+        with _Session(db._engine) as s:
+            s.query(HistoryRecord).filter_by(index_title=index_title).update({"created_at": old_ts})
+            s.commit()
+
+    def test_deletes_old_failed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Failed", "index_title": "Old Failed Movie"})
+        self._backdate_created(db, "Old Failed Movie", days_ago=10)
+
+        count = db.expire_failed(days=7)
+
+        assert count == 1
+
+    def test_retains_recent_failed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Failed", "index_title": "Recent Failed Movie"})
+
+        count = db.expire_failed(days=7)
+
+        assert count == 0
+
+    def test_zero_days_is_noop(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Failed", "index_title": "Any Failed Movie"})
+        self._backdate_created(db, "Any Failed Movie", days_ago=100)
+
+        count = db.expire_failed(days=0)
+
+        assert count == 0
+
+    def test_does_not_delete_passed_rows(self, db: Database) -> None:
+        db.write({**_minimal_result(), "result": "Passed", "index_title": "Passed Movie"})
+        self._backdate_created(db, "Passed Movie", days_ago=10)
+
+        count = db.expire_failed(days=7)
+
+        assert count == 0
+
+    def test_returns_count_deleted(self, db: Database) -> None:
+        for title in ["Failed Alpha", "Failed Beta"]:
+            db.write({**_minimal_result(), "result": "Failed", "index_title": title})
+            self._backdate_created(db, title, days_ago=10)
+
+        count = db.expire_failed(days=7)
+
+        assert count == 2
+
+    def test_created_at_set_on_write(self, db: Database) -> None:
+        """write() should populate created_at with an ISO timestamp."""
+        from sqlalchemy.orm import Session as _Session
+
+        from movarr.database import HistoryRecord
+
+        db.write({**_minimal_result(), "index_title": "TimestampTest"})
+        with _Session(db._engine) as s:
+            record = s.query(HistoryRecord).filter_by(index_title="TimestampTest").first()
+        assert record is not None
+        assert record.created_at is not None
+        assert "T" in record.created_at  # ISO 8601 format
