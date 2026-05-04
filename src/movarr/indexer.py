@@ -45,6 +45,4 @@ def get_indexer_client(config: Config) -> IndexProxyProtocol:
         from movarr.prowlarr import ProwlarrClient
 
         return ProwlarrClient(config)
-    raise ValueError(
-        f"Unknown index proxy '{selected}'. Supported values: 'jackett', 'prowlarr'."
-    )
+    raise ValueError(f"Unknown index proxy '{selected}'. Supported values: 'jackett', 'prowlarr'.")

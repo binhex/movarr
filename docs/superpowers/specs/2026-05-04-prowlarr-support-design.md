@@ -1,7 +1,7 @@
 # Prowlarr Support Design
 
-**Date:** 2026-05-04  
-**Status:** Approved  
+**Date:** 2026-05-04
+**Status:** Approved
 **Scope:** Add Prowlarr as an alternative index proxy alongside the existing Jackett support.
 
 ---

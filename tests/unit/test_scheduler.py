@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -429,9 +429,7 @@ class TestRunDaemonSignalHandler:
         mock_sched.shutdown.assert_called()
         mock_sys_exit.assert_called_with(0)
 
-    def test_signal_handler_when_scheduler_already_stopped_does_not_raise(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_signal_handler_when_scheduler_already_stopped_does_not_raise(self, mocker: MockerFixture) -> None:
         """If _shutdown is called a second time (double signal) after the scheduler
         is already stopped, it must not raise SchedulerNotRunningError."""
         mocker.patch("movarr.scheduler.Database")
@@ -462,9 +460,7 @@ class TestRunDaemonSignalHandler:
         handler(signal_mod.SIGINT, None)
         mock_sys_exit.assert_called_with(0)
 
-    def test_clean_exit_does_not_raise(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_clean_exit_does_not_raise(self, mocker: MockerFixture) -> None:
         """When SystemExit escapes time.sleep (from _shutdown's sys.exit call)
         and the scheduler is already stopped, the except block must not raise
         SchedulerNotRunningError — _run_daemon returns normally."""
@@ -488,10 +484,10 @@ class TestRunDaemonSignalHandler:
 class TestRunDaemonRunOnStart:
     """run_on_start=True must pass next_run_time to add_job; False must not."""
 
-    def _kwargs_by_id(self, mock_sched, job_id: str) -> dict:
+    def _kwargs_by_id(self, mock_sched: Any, job_id: str) -> dict[str, Any]:
         for call in mock_sched.add_job.call_args_list:
             if call.kwargs.get("id") == job_id:
-                return call.kwargs
+                return call.kwargs  # type: ignore[no-any-return]
         raise AssertionError(f"No add_job call with id={job_id!r}")
 
     def test_run_on_start_false_does_not_pass_next_run_time(self, mocker: MockerFixture) -> None:
@@ -716,7 +712,7 @@ class TestLogNextRun:
 
         mock_log_next_run.assert_called_once_with(mock_sched, "post_processing")
 
-    def _get_job_callable(self, mock_sched, job_id: str):
+    def _get_job_callable(self, mock_sched: Any, job_id: str) -> Any:
         for call in mock_sched.add_job.call_args_list:
             if call.kwargs.get("id") == job_id:
                 return call.args[0]

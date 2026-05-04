@@ -708,4 +708,4 @@ class TestProcessCriteriaNoYear:
             indexer="my-indexer",
             session=session,
         )
-        session.db.write.assert_not_called()
+        session.db.write.assert_not_called()  # type: ignore[attr-defined]

@@ -12,11 +12,11 @@ The scheduler can run in:
 
 from __future__ import annotations
 
+import datetime
 import os
 import signal
 import sys
 import time
-import datetime
 from contextlib import suppress
 from typing import TYPE_CHECKING
 

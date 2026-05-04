@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
 from movarr.config import Config
 from movarr.downloader import HttpError
 from movarr.prowlarr import ProwlarrClient

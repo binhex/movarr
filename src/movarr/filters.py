@@ -550,11 +550,11 @@ def _evaluate_library_files(
         lib_score += _special_edition_bonus(lib_san, index_san)
 
         if lib_score >= idx_score:
-            return _fail(result, f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score}).")
+            return _fail(
+                result, f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
+            )
 
-        best_reason = (
-            f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
-        )
+        best_reason = f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
 
     if best_reason:
         return _pass(result, f"Index title '{index_title}' passes library check — {best_reason}.")

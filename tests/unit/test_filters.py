@@ -1053,9 +1053,7 @@ class TestEvaluateLibraryFilesEdgeCases:
             index_title_sanitised="Test Film 2008 1080p BluRay REMUX UNRATED",
             index_title_resolution="1080",
         )
-        out = _evaluate_library_files(
-            result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "1080", Config()
-        )
+        out = _evaluate_library_files(result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "1080", Config())
         assert out["result"] == "Passed"
         assert "lib score:" in (out.get("result_details") or [""])[-1]
 
@@ -1068,9 +1066,7 @@ class TestEvaluateLibraryFilesEdgeCases:
             index_title_sanitised="Test Film 2008 2160p BluRay",
             index_title_resolution="2160",
         )
-        out = _evaluate_library_files(
-            result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "2160", Config()
-        )
+        out = _evaluate_library_files(result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "2160", Config())
         assert out["result"] == "Passed"
         assert "lower resolution" in (out.get("result_details") or [""])[-1]
 
@@ -1189,7 +1185,7 @@ class TestCheckBitrateEdgeCases:
 
         result = _imdb_result(imdb_running_time_in_minutes="0")
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
-        result["_filter_minimum_bitrate_mb"] = 50
-        result["index_size"] = 8_000_000_000
+        result["_filter_minimum_bitrate_mb"] = "50"
+        result["index_size"] = "8000000000"
         out = _check_bitrate(result, object())
         assert out["result"] == "Failed"

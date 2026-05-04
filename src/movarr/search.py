@@ -92,11 +92,7 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
 
     for criteria_cfg in site_cfg.search:
         # Select the indexer slug/id based on the configured proxy.
-        index_site = (
-            site_cfg.jackett_indexer
-            if config.index_proxy.selected == "jackett"
-            else site_cfg.prowlarr_indexer
-        )
+        index_site = site_cfg.jackett_indexer if config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
         category = criteria_cfg.category
         if index_site in site_cfg.override_search:
             overrides = site_cfg.override_search[index_site]

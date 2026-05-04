@@ -274,9 +274,7 @@ class TestConfigMigration:
     def test_v23_migration_creates_backup(self, tmp_path: Path) -> None:
         """A backup file config.yml.bak.2.3.0 is created before v2.3→v2.4 migration."""
         cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n"
-        )
+        cfg_file.write_text("general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n")
         load_config(str(cfg_file))
         backup = tmp_path / "config.yml.bak.2.3.0"
         assert backup.exists()
@@ -284,9 +282,7 @@ class TestConfigMigration:
     def test_v23_migration_writes_run_on_start_to_disk(self, tmp_path: Path) -> None:
         """After migration the on-disk YAML contains run_on_start: true for all tasks."""
         cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n"
-        )
+        cfg_file.write_text("general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n")
         load_config(str(cfg_file))
         raw = yaml.safe_load(cfg_file.read_text())
         schedule = raw.get("schedule", {})
@@ -444,10 +440,7 @@ class TestMigrationV24toV25:
 
     def _v24_config(self, tmp_path: Path) -> Path:
         cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.4.0'\n"
-            "notification:\n  apprise_urls: []\n"
-        )
+        cfg_file.write_text("general:\n  config_version: '2.4.0'\nnotification:\n  apprise_urls: []\n")
         return cfg_file
 
     def test_v24_config_migrated_to_v25(self, tmp_path: Path) -> None:
@@ -497,9 +490,7 @@ class TestMigrationV24toV25:
     def test_existing_config_at_v25_needs_no_migration(self, tmp_path: Path) -> None:
         """A config already at v2.5.0 is not re-migrated."""
         cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.5.0'\n"
-        )
+        cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
         assert cfg.general.config_version == "2.5.0"
         backup = tmp_path / "config.yml.bak.2.5.0"

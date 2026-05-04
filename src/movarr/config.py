@@ -264,10 +264,8 @@ class IndexSiteConfig(BaseModel):
             return value
         try:
             int(value)
-        except ValueError:
-            raise ValueError(
-                f"index_site.prowlarr_indexer must be 'all' or a numeric ID, got {value!r}"
-            )
+        except ValueError as exc:
+            raise ValueError(f"index_site.prowlarr_indexer must be 'all' or a numeric ID, got {value!r}") from exc
         return value
 
 

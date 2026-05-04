@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -161,10 +162,8 @@ class ProwlarrClient:
 
         imdb_id_raw = item.get("imdbId")
         if imdb_id_raw:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 result["imdb_id"] = f"tt{int(imdb_id_raw):07d}"
-            except (ValueError, TypeError):
-                pass
 
         return result
 
