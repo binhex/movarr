@@ -78,9 +78,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Pydantic sub-models
-# ---------------------------------------------------------------------------
 
 
 class GeneralConfig(BaseModel):
@@ -349,9 +347,7 @@ class Config(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
 
 
-# ---------------------------------------------------------------------------
 # Public helpers
-# ---------------------------------------------------------------------------
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

@@ -13,9 +13,7 @@ if TYPE_CHECKING:
 
     from movarr.models import ResultDict
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -38,9 +36,7 @@ def _minimal_result(**overrides: object) -> ResultDict:
     return base
 
 
-# ---------------------------------------------------------------------------
 # write + is_duplicate
-# ---------------------------------------------------------------------------
 
 
 class TestWrite:
@@ -64,9 +60,7 @@ class TestWrite:
         assert db.is_duplicate_fuzzy("%UnknownXYZ%") is False
 
 
-# ---------------------------------------------------------------------------
 # read_by_tag / find_by_tag
-# ---------------------------------------------------------------------------
 
 
 class TestFindByTag:
@@ -83,9 +77,7 @@ class TestFindByTag:
         assert db.find_by_tag("no-such-tag") is None
 
 
-# ---------------------------------------------------------------------------
 # set_verified / is_verified
-# ---------------------------------------------------------------------------
 
 
 class TestVerification:
@@ -104,9 +96,7 @@ class TestVerification:
         db.set_verified("no-such-tag")  # must not raise
 
 
-# ---------------------------------------------------------------------------
 # genres_for_tag — JSON and legacy Python-repr formats
-# ---------------------------------------------------------------------------
 
 
 class TestGenresForTag:
@@ -156,9 +146,7 @@ class TestGenresForTag:
         assert db2.genres_for_tag("bad-genre-tag") == []
 
 
-# ---------------------------------------------------------------------------
 # Database upgrade path
-# ---------------------------------------------------------------------------
 
 
 class TestDatabaseUpgrade:
@@ -196,9 +184,7 @@ class TestDatabaseUpgrade:
         del db  # ensure object is not garbage collected before assertion
 
 
-# ---------------------------------------------------------------------------
 # Database vacuum
-# ---------------------------------------------------------------------------
 
 
 class TestDatabaseVacuum:
@@ -208,9 +194,7 @@ class TestDatabaseVacuum:
         db.vacuum()
 
 
-# ---------------------------------------------------------------------------
 # has_passed
-# ---------------------------------------------------------------------------
 
 
 class TestHasPassed:
@@ -323,9 +307,7 @@ class TestHasPassed:
         del db
 
 
-# ---------------------------------------------------------------------------
 # mark_stalled
-# ---------------------------------------------------------------------------
 
 
 class TestMarkStalled:
@@ -343,9 +325,7 @@ class TestMarkStalled:
         db.mark_stalled("movarr-unknown")  # must not raise
 
 
-# ---------------------------------------------------------------------------
 # mark_completed
-# ---------------------------------------------------------------------------
 
 
 class TestMarkCompleted:
@@ -363,9 +343,7 @@ class TestMarkCompleted:
         db.mark_completed("movarr-unknown")  # must not raise
 
 
-# ---------------------------------------------------------------------------
 # expire_stalled
-# ---------------------------------------------------------------------------
 
 
 class TestExpireStalled:

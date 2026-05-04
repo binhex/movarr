@@ -15,9 +15,7 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 
-# ---------------------------------------------------------------------------
 # Shared fixture helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_config_mock() -> MagicMock:
@@ -29,9 +27,7 @@ def _make_config_mock() -> MagicMock:
     return cfg
 
 
-# ---------------------------------------------------------------------------
 # --version
-# ---------------------------------------------------------------------------
 
 
 class TestCliVersion:
@@ -54,9 +50,7 @@ class TestCliVersion:
         assert any(char.isdigit() for char in result.output) or "unknown" in result.output
 
 
-# ---------------------------------------------------------------------------
 # --help
-# ---------------------------------------------------------------------------
 
 
 class TestCliHelp:
@@ -87,9 +81,7 @@ class TestCliHelp:
         assert "--test" in result.output
 
 
-# ---------------------------------------------------------------------------
 # --test (config-validation / dry-run mode)
-# ---------------------------------------------------------------------------
 
 
 class TestCliTestMode:
@@ -191,9 +183,7 @@ class TestCliTestMode:
         assert kwargs.get("log_level") == "DEBUG"
 
 
-# ---------------------------------------------------------------------------
 # --log-level validation
-# ---------------------------------------------------------------------------
 
 
 class TestCliLogLevel:
@@ -241,9 +231,7 @@ class TestCliLogLevel:
         assert CliRunner().invoke(cli, ["--log-level", "debug", "--test"]).exit_code == 0
 
 
-# ---------------------------------------------------------------------------
 # Scheduler run path (no --test flag)
-# ---------------------------------------------------------------------------
 
 
 class TestCliSchedulerRun:
@@ -258,9 +246,7 @@ class TestCliSchedulerRun:
         mock_run.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # --pid-path default behaviour
-# ---------------------------------------------------------------------------
 
 
 class TestCliPidPath:
@@ -301,9 +287,7 @@ class TestCliPidPath:
         assert kwargs["pid_path"].endswith("movarr.pid")
 
 
-# ---------------------------------------------------------------------------
 # _VERSION set to "unknown" when package metadata is not found
-# ---------------------------------------------------------------------------
 
 
 class TestVersionUnknown:
@@ -320,9 +304,7 @@ class TestVersionUnknown:
         assert cli_mod._VERSION == "unknown"
 
 
-# ---------------------------------------------------------------------------
 # _log_format inner function — tracker prefix branch
-# ---------------------------------------------------------------------------
 
 
 class TestLogFormat:

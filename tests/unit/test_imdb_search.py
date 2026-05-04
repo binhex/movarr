@@ -22,9 +22,7 @@ from movarr.imdb_search import (
     search_for_imdb_id,
 )
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_result(**overrides: Any) -> ResultDict:
@@ -41,9 +39,7 @@ def _make_result(**overrides: Any) -> ResultDict:
     return base
 
 
-# ---------------------------------------------------------------------------
 # _fail and _pass helpers
-# ---------------------------------------------------------------------------
 
 
 class TestFailHelper:
@@ -90,9 +86,7 @@ class TestPassHelper:
         assert "result_details" in result
 
 
-# ---------------------------------------------------------------------------
 # _search_imdbpie
-# ---------------------------------------------------------------------------
 
 
 class TestSearchImdbpie:
@@ -170,9 +164,7 @@ class TestSearchImdbpie:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _search_tmdb
-# ---------------------------------------------------------------------------
 
 
 class TestSearchTmdb:
@@ -254,9 +246,7 @@ class TestSearchTmdb:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _search_omdb
-# ---------------------------------------------------------------------------
 
 
 class TestSearchOmdb:
@@ -330,9 +320,7 @@ class TestSearchOmdb:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _search_google
-# ---------------------------------------------------------------------------
 
 
 class TestSearchGoogle:
@@ -485,9 +473,7 @@ class TestSearchGoogle:
         assert out["imdb_id"] == "tt8579674"
 
 
-# ---------------------------------------------------------------------------
 # search_for_imdb_id (orchestrator)
-# ---------------------------------------------------------------------------
 
 
 class TestSearchForImdbId:
@@ -554,9 +540,7 @@ class TestSearchForImdbId:
         assert out["imdb_id"] == "tt0133093"
 
 
-# ---------------------------------------------------------------------------
 # _search_imdbpie — additional edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestSearchImdbpieEdgeCases:
@@ -588,9 +572,7 @@ class TestSearchImdbpieEdgeCases:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _search_tmdb — additional edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestSearchTmdbEdgeCases:
@@ -636,9 +618,7 @@ class TestSearchTmdbEdgeCases:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _search_omdb — unparseable year edge case
-# ---------------------------------------------------------------------------
 
 
 class TestSearchOmdbEdgeCases:
@@ -734,9 +714,7 @@ class TestSearchOmdbEdgeCases:
         assert "The Matrix" in details
 
 
-# ---------------------------------------------------------------------------
 # _search_google — sanitise-returns-None and title-mismatch edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestSearchGoogleEdgeCases:

@@ -50,9 +50,7 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Strategy 1 — IMDbPie
-# ---------------------------------------------------------------------------
 
 
 def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
@@ -100,9 +98,7 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Strategy 2 — TMDb
-# ---------------------------------------------------------------------------
 
 
 def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
@@ -165,9 +161,7 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Strategy 3 — OMDb
-# ---------------------------------------------------------------------------
 
 
 def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
@@ -221,9 +215,7 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Strategy 4 — Google (last resort; may be slow / unreliable)
-# ---------------------------------------------------------------------------
 
 
 def _search_google(result: ResultDict, _config: Config) -> ResultDict:
@@ -281,9 +273,7 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _fail(result: ResultDict, message: str) -> None:

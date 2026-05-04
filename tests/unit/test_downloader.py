@@ -13,9 +13,7 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_session_mock(mocker: MockerFixture, *, status_code: int = 200, content: bytes = b"ok") -> Any:
@@ -38,9 +36,7 @@ def _make_session_mock(mocker: MockerFixture, *, status_code: int = 200, content
     return mock_response
 
 
-# ---------------------------------------------------------------------------
 # Constructor
-# ---------------------------------------------------------------------------
 
 
 class TestHttpClientInit:
@@ -71,9 +67,7 @@ class TestHttpClientInit:
         assert HttpClient()._user_agent  # non-empty
 
 
-# ---------------------------------------------------------------------------
 # get()
-# ---------------------------------------------------------------------------
 
 
 class TestHttpClientGet:
@@ -150,15 +144,11 @@ class TestHttpClientGet:
         mock_req.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # post()
-# ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
 # _request() — tested directly because its session/header wiring cannot be
 # fully observed through the public API's return value alone.
-# ---------------------------------------------------------------------------
 
 
 class TestHttpClientRequest:

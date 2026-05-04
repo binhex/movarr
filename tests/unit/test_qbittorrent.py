@@ -16,9 +16,7 @@ if TYPE_CHECKING:
 
     from movarr.models import ResultDict
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_client(mocker: MockerFixture) -> tuple[QBittorrentClient, Any]:
@@ -44,9 +42,7 @@ def _make_torrent(mocker: MockerFixture, *, tag: str = "movarr-abc123", amount_l
     return torrent
 
 
-# ---------------------------------------------------------------------------
 # is_connected
-# ---------------------------------------------------------------------------
 
 
 class TestIsConnected:
@@ -77,9 +73,7 @@ class TestIsConnected:
         assert client.is_connected() is False
 
 
-# ---------------------------------------------------------------------------
 # add_torrent
-# ---------------------------------------------------------------------------
 
 
 class TestAddTorrent:
@@ -147,9 +141,7 @@ class TestAddTorrent:
         assert re.match(r"^movarr-[0-9a-f-]{36}$", tag)
 
 
-# ---------------------------------------------------------------------------
 # list_completed
-# ---------------------------------------------------------------------------
 
 
 class TestListCompleted:
@@ -214,9 +206,7 @@ class TestListCompleted:
         assert client.list_completed() == []
 
 
-# ---------------------------------------------------------------------------
 # identify_for_deletion
-# ---------------------------------------------------------------------------
 
 
 class TestIdentifyForDeletion:
@@ -298,9 +288,7 @@ class TestIdentifyForDeletion:
         assert result == {}
 
 
-# ---------------------------------------------------------------------------
 # delete_torrent
-# ---------------------------------------------------------------------------
 
 
 class TestDeleteTorrent:
@@ -328,9 +316,7 @@ class TestDeleteTorrent:
         assert client.delete_torrent("hash1", delete_data=False, state="stalledDL") is False
 
 
-# ---------------------------------------------------------------------------
 # delete_stalled
-# ---------------------------------------------------------------------------
 
 
 class TestDeleteStalled:
@@ -363,9 +349,7 @@ class TestDeleteStalled:
         mock_api.torrents_delete.assert_called_once_with(delete_files=True, torrent_hashes="hash1")
 
 
-# ---------------------------------------------------------------------------
 # list_by_category
-# ---------------------------------------------------------------------------
 
 
 class TestListByCategory:
@@ -392,9 +376,7 @@ class TestListByCategory:
         assert result == {}
 
 
-# ---------------------------------------------------------------------------
 # delete_stalled — warning when delete_torrent returns False
-# ---------------------------------------------------------------------------
 
 
 class TestDeleteStalledWarning:

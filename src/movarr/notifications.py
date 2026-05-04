@@ -58,9 +58,7 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
 # Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _build_subject(result: ResultDict) -> str:

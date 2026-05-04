@@ -12,9 +12,7 @@ from movarr.filters import filter_by_imdb, filter_by_index
 if TYPE_CHECKING:
     from movarr.models import ResultDict
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_config(**filter_overrides: Any) -> Config:
@@ -82,9 +80,7 @@ def _default_site_dict(
     }
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: size checks
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexSize:
@@ -112,9 +108,7 @@ class TestFilterByIndexSize:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: TV detection
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexTv:
@@ -131,9 +125,7 @@ class TestFilterByIndexTv:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: bad keywords
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexBadKeywords:
@@ -153,9 +145,7 @@ class TestFilterByIndexBadKeywords:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: title type gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbTitleType:
@@ -180,9 +170,7 @@ class TestFilterByImdbTitleType:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: rating / votes gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbRatingVotes:
@@ -207,9 +195,7 @@ class TestFilterByImdbRatingVotes:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: year gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbYear:
@@ -228,9 +214,7 @@ class TestFilterByImdbYear:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: runtime gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbRuntime:
@@ -249,9 +233,7 @@ class TestFilterByImdbRuntime:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: bitrate gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexBitrate:
@@ -296,9 +278,7 @@ class TestFilterByIndexBitrate:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: library dedup (index-level)
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexLibraryDedup:
@@ -368,9 +348,7 @@ class TestFilterByIndexLibraryDedup:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: genre gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbGenre:
@@ -401,9 +379,7 @@ class TestFilterByImdbGenre:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: language gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbLanguage:
@@ -434,9 +410,7 @@ class TestFilterByImdbLanguage:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: country gate
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbCountry:
@@ -467,9 +441,7 @@ class TestFilterByImdbCountry:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: certification (not filtered; stored only)
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbCertification:
@@ -494,9 +466,7 @@ class TestFilterByImdbCertification:
         assert out.get("imdb_certification") == "15"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: library dedup (IMDb canonical title)
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbLibraryDedup:
@@ -559,9 +529,7 @@ class TestFilterByImdbLibraryDedup:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: overrides
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbOverrides:
@@ -674,9 +642,7 @@ class TestFilterByImdbOverrides:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: search criteria token miss
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexCriteria:
@@ -689,9 +655,7 @@ class TestFilterByIndexCriteria:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: size edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexSizeEdgeCases:
@@ -711,9 +675,7 @@ class TestFilterByIndexSizeEdgeCases:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: bad keyword no-match path
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexBadKeywordNoMatch:
@@ -726,9 +688,7 @@ class TestFilterByIndexBadKeywordNoMatch:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: bad movie title list
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexBadMovieTitles:
@@ -747,9 +707,7 @@ class TestFilterByIndexBadMovieTitles:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: empty good_imdb_title_type_list
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbTitleTypeEmptyList:
@@ -762,9 +720,7 @@ class TestFilterByImdbTitleTypeEmptyList:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: bitrate check needs runtime
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbBitrateNoRuntime:
@@ -777,9 +733,7 @@ class TestFilterByImdbBitrateNoRuntime:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: year edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbYearEdgeCases:
@@ -799,9 +753,7 @@ class TestFilterByImdbYearEdgeCases:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: runtime edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbRuntimeEdgeCases:
@@ -821,9 +773,7 @@ class TestFilterByImdbRuntimeEdgeCases:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: rating edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbRatingEdgeCases:
@@ -849,9 +799,7 @@ class TestFilterByImdbRatingEdgeCases:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: votes edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbVotesEdgeCases:
@@ -871,9 +819,7 @@ class TestFilterByImdbVotesEdgeCases:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: override returns False, falls through to rating/votes
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbOverrideFallthrough:
@@ -904,9 +850,7 @@ class TestFilterByImdbOverrideFallthrough:
         assert out["result"] != "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_imdb: canonical library walk edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByImdbCanonicalLibraryEdgeCases:
@@ -943,9 +887,7 @@ class TestFilterByImdbCanonicalLibraryEdgeCases:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # filter_by_index: library walk edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFilterByIndexLibraryWalkEdgeCases:
@@ -1002,9 +944,7 @@ class TestFilterByIndexLibraryWalkEdgeCases:
         assert out["result"] == "Passed"
 
 
-# ---------------------------------------------------------------------------
 # _evaluate_library_files: resolution edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateLibraryFilesEdgeCases:
@@ -1071,9 +1011,7 @@ class TestEvaluateLibraryFilesEdgeCases:
         assert "lower resolution" in (out.get("result_details") or [""])[-1]
 
 
-# ---------------------------------------------------------------------------
 # _group_bonus and _special_edition_bonus
-# ---------------------------------------------------------------------------
 
 
 class TestGroupAndEditionBonus:
@@ -1120,9 +1058,7 @@ class TestGroupAndEditionBonus:
         assert bonus == 0
 
 
-# ---------------------------------------------------------------------------
 # Log-level behaviour
-# ---------------------------------------------------------------------------
 
 
 class TestLogLevels:
@@ -1155,9 +1091,7 @@ class TestLogLevels:
         assert any(r["level"].name == "INFO" for r in records), "_pass() must log at INFO"
 
 
-# ---------------------------------------------------------------------------
 # _check_size — ValueError/TypeError path
-# ---------------------------------------------------------------------------
 
 
 class TestCheckMinimumSizeEdgeCases:
@@ -1172,9 +1106,7 @@ class TestCheckMinimumSizeEdgeCases:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _check_bitrate — ZeroDivisionError path
-# ---------------------------------------------------------------------------
 
 
 class TestCheckBitrateEdgeCases:
@@ -1187,5 +1119,5 @@ class TestCheckBitrateEdgeCases:
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
         result["_filter_minimum_bitrate_mb"] = "50"
         result["index_size"] = "8000000000"
-        out = _check_bitrate(result, object())
+        out = _check_bitrate(result)
         assert out["result"] == "Failed"

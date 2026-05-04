@@ -44,9 +44,7 @@ _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
 
 
-# ---------------------------------------------------------------------------
 # Public entry points
-# ---------------------------------------------------------------------------
 
 
 def filter_by_index(
@@ -101,7 +99,7 @@ def filter_by_imdb(
     checks = [
         lambda r: _check_good_title_type(r, config),
         lambda r: _check_bad_genre(r, config),
-        lambda r: _check_bitrate(r, result),
+        lambda r: _check_bitrate(r),
         lambda r: _check_year(r, config),
         lambda r: _check_runtime(r, config),
         lambda r: _check_language_country(r, config, "language"),
@@ -138,9 +136,7 @@ def filter_by_imdb(
     return result
 
 
-# ---------------------------------------------------------------------------
 # Stage 1 helpers
-# ---------------------------------------------------------------------------
 
 
 def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
@@ -237,9 +233,7 @@ def _check_library(
     return _evaluate_library_files(result, matches, index_resolution, config)
 
 
-# ---------------------------------------------------------------------------
 # Stage 2 helpers
-# ---------------------------------------------------------------------------
 
 
 def _check_good_title_type(result: ResultDict, config: Config) -> ResultDict:
@@ -271,7 +265,7 @@ def _check_bad_genre(result: ResultDict, config: Config) -> ResultDict:
     return _pass(result, f"Genres {genres_lower} pass bad genre check.")
 
 
-def _check_bitrate(result: ResultDict, _config: object) -> ResultDict:
+def _check_bitrate(result: ResultDict) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
     if not min_bitrate_mb:
@@ -453,9 +447,7 @@ def _check_library_canonical(
     return _evaluate_library_files(result, matches, index_resolution, config)
 
 
-# ---------------------------------------------------------------------------
 # Library walk helpers
-# ---------------------------------------------------------------------------
 
 
 def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
@@ -593,9 +585,7 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
 # Result helpers
-# ---------------------------------------------------------------------------
 
 
 def _pass(result: ResultDict, message: str) -> ResultDict:

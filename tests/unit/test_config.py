@@ -23,9 +23,7 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
-# ---------------------------------------------------------------------------
 # GeneralConfig defaults
-# ---------------------------------------------------------------------------
 
 
 class TestGeneralConfigDefaults:
@@ -48,9 +46,7 @@ class TestGeneralConfigDefaults:
             GeneralConfig(daemon_mode="invalid")
 
 
-# ---------------------------------------------------------------------------
 # QueueManagementConfig fields
-# ---------------------------------------------------------------------------
 
 
 class TestQueueManagementConfig:
@@ -72,9 +68,7 @@ class TestQueueManagementConfig:
         assert cfg.metadata_delete_torrent_data is False
 
 
-# ---------------------------------------------------------------------------
 # Config construction
-# ---------------------------------------------------------------------------
 
 
 class TestConfigConstruction:
@@ -104,9 +98,7 @@ class TestConfigConstruction:
         assert cfg.index_site.jackett_indexer == "all"
 
 
-# ---------------------------------------------------------------------------
 # load_config from file
-# ---------------------------------------------------------------------------
 
 
 class TestLoadConfig:
@@ -138,9 +130,7 @@ class TestLoadConfig:
             load_config(str(cfg_file))
 
 
-# ---------------------------------------------------------------------------
 # Config migration
-# ---------------------------------------------------------------------------
 
 
 class TestConfigMigration:
@@ -290,9 +280,7 @@ class TestConfigMigration:
             assert schedule.get(task, {}).get("run_on_start") is True
 
 
-# ---------------------------------------------------------------------------
 # DatabaseConfig defaults
-# ---------------------------------------------------------------------------
 
 
 class TestDatabaseConfigDefaults:
@@ -336,9 +324,7 @@ class TestDatabaseConfigDefaults:
         assert cfg.database.passed_expiry_days == 30
 
 
-# ---------------------------------------------------------------------------
 # _migrate_config — OSError during backup
-# ---------------------------------------------------------------------------
 
 
 class TestMigrateConfigBackupOsError:
@@ -361,9 +347,7 @@ class TestMigrateConfigBackupOsError:
         mock_warning.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # create_default_config — early return when file already exists
-# ---------------------------------------------------------------------------
 
 
 class TestCreateDefaultConfigExists:
@@ -379,9 +363,7 @@ class TestCreateDefaultConfigExists:
         assert config_path.read_text() == original
 
 
-# ---------------------------------------------------------------------------
 # ScheduleTaskConfig.run_on_start
-# ---------------------------------------------------------------------------
 
 
 class TestScheduleTaskConfigRunOnStart:
@@ -405,9 +387,7 @@ class TestScheduleTaskConfigRunOnStart:
         assert cfg.schedule.post_processing.run_on_start is True
 
 
-# ---------------------------------------------------------------------------
 # ProwlarrConfig defaults
-# ---------------------------------------------------------------------------
 
 
 class TestProwlarrConfigDefaults:
@@ -430,9 +410,7 @@ class TestProwlarrConfigDefaults:
         assert cfg.read_timeout == 60.0
 
 
-# ---------------------------------------------------------------------------
 # Config migration v2.4.0 → v2.5.0
-# ---------------------------------------------------------------------------
 
 
 class TestMigrationV24toV25:
@@ -497,9 +475,7 @@ class TestMigrationV24toV25:
         assert not backup.exists()
 
 
-# ---------------------------------------------------------------------------
 # IndexSiteConfig — prowlarr_indexer default
-# ---------------------------------------------------------------------------
 
 
 class TestIndexSiteConfigProwlarrIndexer:
@@ -519,9 +495,7 @@ class TestIndexSiteConfigProwlarrIndexer:
             Config.model_validate({"index_site": {"prowlarr_indexer": "my-tracker"}})
 
 
-# ---------------------------------------------------------------------------
 # IndexProxyConfig — selected validator
-# ---------------------------------------------------------------------------
 
 
 class TestIndexProxySelectedValidator:

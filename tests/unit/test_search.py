@@ -14,9 +14,7 @@ from loguru import logger as _loguru_logger
 from movarr.config import Config, SearchCriteriaConfig
 from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, run_search
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _base_result(index_title: str = "The Matrix 1999 1080p BluRay") -> ResultDict:
@@ -24,9 +22,7 @@ def _base_result(index_title: str = "The Matrix 1999 1080p BluRay") -> ResultDic
     return {"index_title": index_title}
 
 
-# ---------------------------------------------------------------------------
 # _enrich_index_metadata
-# ---------------------------------------------------------------------------
 
 
 class TestEnrichIndexMetadata:
@@ -110,9 +106,7 @@ class TestEnrichIndexMetadata:
         assert result["index_size"] == "8000000000"
 
 
-# ---------------------------------------------------------------------------
 # run_search
-# ---------------------------------------------------------------------------
 
 
 class TestRunSearch:
@@ -180,9 +174,7 @@ class TestRunSearch:
         assert call_kwargs["session"].indexer is mock_factory.return_value
 
 
-# ---------------------------------------------------------------------------
 # _process_criteria
-# ---------------------------------------------------------------------------
 
 
 class TestProcessCriteria:
@@ -468,9 +460,7 @@ class TestProcessCriteria:
         assert db.write.call_count == 2
 
 
-# ---------------------------------------------------------------------------
 # Log-level behaviour — "passed all filters" must emit SUCCESS
-# ---------------------------------------------------------------------------
 
 
 class TestPassedAllFiltersLogLevel:
@@ -564,9 +554,7 @@ class TestPassedAllFiltersLogLevel:
         assert success_records, "Expected at least one SUCCESS-level log when result passes all filters"
 
 
-# ---------------------------------------------------------------------------
 # DB deduplication — skip already-seen titles before any API call
-# ---------------------------------------------------------------------------
 
 
 class TestDbDeduplication:
@@ -631,9 +619,7 @@ class TestDbDeduplication:
         mock_filter.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # run_search — library_walk and override_search branches
-# ---------------------------------------------------------------------------
 
 
 class TestRunSearchLibraryWalkAndOverride:
@@ -668,9 +654,7 @@ class TestRunSearchLibraryWalkAndOverride:
         assert all(c == "9999" for c in called_categories)
 
 
-# ---------------------------------------------------------------------------
 # _process_criteria — no movie_title_year skips the result
-# ---------------------------------------------------------------------------
 
 
 class TestProcessCriteriaNoYear:

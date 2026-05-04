@@ -11,9 +11,7 @@ from movarr.queue_manager import _delete_stuck, run_queue_management
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _enabled_config() -> Config:
@@ -25,9 +23,7 @@ def _enabled_config() -> Config:
     return cfg
 
 
-# ---------------------------------------------------------------------------
 # run_queue_management
-# ---------------------------------------------------------------------------
 
 
 class TestRunQueueManagement:
@@ -108,9 +104,7 @@ class TestRunQueueManagement:
         qbt.list_by_category.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # _delete_stuck (internal, tested directly for full branch coverage)
-# ---------------------------------------------------------------------------
 
 
 class TestDeleteStuck:
@@ -215,9 +209,7 @@ class TestDeleteStuck:
         qbt.delete_stalled.assert_called_once_with(to_delete, state="metaDL", delete_data=True)
 
 
-# ---------------------------------------------------------------------------
 # mark_stalled called on deletion
-# ---------------------------------------------------------------------------
 
 
 class TestMarkStalledOnDeletion:

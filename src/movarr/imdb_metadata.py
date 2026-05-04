@@ -56,9 +56,7 @@ def fetch_metadata(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # IMDbPie strategy
-# ---------------------------------------------------------------------------
 
 
 def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
@@ -236,9 +234,7 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # OMDb fallback strategy
-# ---------------------------------------------------------------------------
 
 
 def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
@@ -329,9 +325,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# ---------------------------------------------------------------------------
 # Private helpers
-# ---------------------------------------------------------------------------
 
 
 def _credits_names(credits: dict, role: str) -> list[str] | None:

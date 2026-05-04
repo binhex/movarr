@@ -26,9 +26,7 @@ from movarr.post_processor import (
     run_post_processing,
 )
 
-# ---------------------------------------------------------------------------
 # _safe_path_component
-# ---------------------------------------------------------------------------
 
 
 class TestSafePathComponent:
@@ -72,9 +70,7 @@ class TestSafePathComponent:
         assert _safe_path_component("") == ""
 
 
-# ---------------------------------------------------------------------------
 # _cert_acceptable
-# ---------------------------------------------------------------------------
 
 
 class TestCertAcceptable:
@@ -117,9 +113,7 @@ class TestCertAcceptable:
         assert _cert_acceptable("12", "12A") is True
 
 
-# ---------------------------------------------------------------------------
 # _parse_genres
-# ---------------------------------------------------------------------------
 
 
 class TestParseGenres:
@@ -156,9 +150,7 @@ class TestParseGenres:
         assert _parse_genres('["Horror"]') == ["Horror"]
 
 
-# ---------------------------------------------------------------------------
 # _largest_file
-# ---------------------------------------------------------------------------
 
 
 class TestLargestFile:
@@ -212,9 +204,7 @@ class TestLargestFile:
         assert fdir == "movie/sub"
 
 
-# ---------------------------------------------------------------------------
 # _first_level_dir
-# ---------------------------------------------------------------------------
 
 
 class TestFirstLevelDir:
@@ -236,9 +226,7 @@ class TestFirstLevelDir:
         assert _first_level_dir("parent/child.mkv") == "parent"
 
 
-# ---------------------------------------------------------------------------
 # _canonical_filename
-# ---------------------------------------------------------------------------
 
 
 class TestCanonicalFilename:
@@ -278,9 +266,7 @@ class TestCanonicalFilename:
         assert result.endswith(".avi")
 
 
-# ---------------------------------------------------------------------------
 # _pick_path
-# ---------------------------------------------------------------------------
 
 
 class TestPickPath:
@@ -358,9 +344,7 @@ class TestPickPath:
         assert result == "/media/two"
 
 
-# ---------------------------------------------------------------------------
 # _build_copy_list
-# ---------------------------------------------------------------------------
 
 
 class TestBuildCopyList:
@@ -490,9 +474,7 @@ class TestBuildCopyList:
         assert result == []
 
 
-# ---------------------------------------------------------------------------
 # _resolve_destination
-# ---------------------------------------------------------------------------
 
 
 class TestResolveDestination:
@@ -559,9 +541,7 @@ class TestResolveDestination:
         assert result == "/media/kids"
 
 
-# ---------------------------------------------------------------------------
 # run_post_processing
-# ---------------------------------------------------------------------------
 
 
 class TestRunPostProcessing:
@@ -631,9 +611,7 @@ class TestRunPostProcessing:
         mock_process_one.assert_called_once_with(torrent, cfg, qbt, db)
 
 
-# ---------------------------------------------------------------------------
 # _resolution_from_index_title
-# ---------------------------------------------------------------------------
 
 
 class TestResolutionFromIndexTitle:
@@ -654,9 +632,7 @@ class TestResolutionFromIndexTitle:
         assert result is None
 
 
-# ---------------------------------------------------------------------------
 # _canonical_filename — additional edge-cases
-# ---------------------------------------------------------------------------
 
 
 class TestCanonicalFilenameEdgeCases:
@@ -670,9 +646,7 @@ class TestCanonicalFilenameEdgeCases:
         assert result == "movie.mkv"
 
 
-# ---------------------------------------------------------------------------
 # _pick_path — additional edge-cases
-# ---------------------------------------------------------------------------
 
 
 class TestPickPathEdgeCases:
@@ -691,9 +665,7 @@ class TestPickPathEdgeCases:
         assert result == "/action/hd"
 
 
-# ---------------------------------------------------------------------------
 # _build_copy_list — exception path
-# ---------------------------------------------------------------------------
 
 
 class TestBuildCopyListOSError:
@@ -719,9 +691,7 @@ class TestBuildCopyListOSError:
         assert result == []
 
 
-# ---------------------------------------------------------------------------
 # _process_one
-# ---------------------------------------------------------------------------
 
 
 class TestProcessOne:
@@ -863,9 +833,7 @@ class TestProcessOne:
         assert "Unknown" in dst_dir_arg
 
 
-# ---------------------------------------------------------------------------
 # _apply_path_remapping
-# ---------------------------------------------------------------------------
 
 
 class TestApplyPathRemapping:
@@ -899,9 +867,7 @@ class TestApplyPathRemapping:
         assert result == "/downloads/movie.mkv"
 
 
-# ---------------------------------------------------------------------------
 # _process_one — non-largest-file branch (line 141)
-# ---------------------------------------------------------------------------
 
 
 class TestProcessOneMultiFile:

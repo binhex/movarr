@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 from movarr.config import Config
 from movarr.imdb_metadata import _fetch_imdbpie, _fetch_omdb, fetch_metadata
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_result(**overrides: object) -> ResultDict:
@@ -78,9 +76,7 @@ def _mock_imdbpie_client(mocker: MockerFixture, *, raise_on_fetch: bool = False)
     return mock_imdbpie, mock_client
 
 
-# ---------------------------------------------------------------------------
 # fetch_metadata (public entry point)
-# ---------------------------------------------------------------------------
 
 
 class TestFetchMetadata:
@@ -139,9 +135,7 @@ class TestFetchMetadata:
         assert out["result"] == "Failed"
 
 
-# ---------------------------------------------------------------------------
 # _fetch_imdbpie
-# ---------------------------------------------------------------------------
 
 
 class TestFetchImdbpie:
@@ -271,9 +265,7 @@ class TestFetchImdbpie:
         assert fake_client.is_redirection_title("tt31193180") is True
 
 
-# ---------------------------------------------------------------------------
 # _fetch_omdb
-# ---------------------------------------------------------------------------
 
 
 class TestFetchOmdb:
@@ -398,9 +390,7 @@ class TestFetchOmdb:
             assert "Sci-Fi" in genres
 
 
-# ---------------------------------------------------------------------------
 # _resolve_imdbpie_redirect (private helper — tested directly)
-# ---------------------------------------------------------------------------
 
 
 class TestResolveImdbpieRedirect:
@@ -446,9 +436,7 @@ class TestResolveImdbpieRedirect:
         assert result == "tt0133093"
 
 
-# ---------------------------------------------------------------------------
 # _patch_imdbpie_redirect_check — nm-id branch and except path
-# ---------------------------------------------------------------------------
 
 
 class TestPatchImdbpieRedirectCheckExtra:
@@ -505,9 +493,7 @@ class TestPatchImdbpieRedirectCheckExtra:
         assert fake_client.is_redirection_title("tt0133093") is False
 
 
-# ---------------------------------------------------------------------------
 # _credits_names, _credits_characters, _extract_list_or_none, _safe_val (exception paths)
-# ---------------------------------------------------------------------------
 
 
 class TestCreditsNamesException:
@@ -571,9 +557,7 @@ class TestSafeValException:
         assert _safe_val({"items": []}, "items", 0) is None
 
 
-# ---------------------------------------------------------------------------
 # _extract_cert_imdbpie — second try exception path
-# ---------------------------------------------------------------------------
 
 
 class TestExtractCertImdbpieException:

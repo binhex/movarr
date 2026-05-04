@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 
     from movarr.models import ResultDict
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_full_result(**overrides: object) -> ResultDict:
@@ -43,9 +41,7 @@ def _make_full_result(**overrides: object) -> ResultDict:
     return base
 
 
-# ---------------------------------------------------------------------------
 # _build_subject
-# ---------------------------------------------------------------------------
 
 
 class TestBuildSubject:
@@ -73,9 +69,7 @@ class TestBuildSubject:
         assert "Unknown" in _build_subject({})
 
 
-# ---------------------------------------------------------------------------
 # _build_body
-# ---------------------------------------------------------------------------
 
 
 class TestBuildBody:
@@ -135,9 +129,7 @@ class TestBuildBody:
         assert 'href="#"' in body
 
 
-# ---------------------------------------------------------------------------
 # _format_result_details
-# ---------------------------------------------------------------------------
 
 
 class TestFormatResultDetails:
@@ -168,9 +160,7 @@ class TestFormatResultDetails:
         assert "simple" in html
 
 
-# ---------------------------------------------------------------------------
 # send_queued_notification
-# ---------------------------------------------------------------------------
 
 
 class TestSendQueuedNotification:
@@ -234,9 +224,7 @@ class TestSendQueuedNotification:
         assert send_queued_notification(_make_full_result(), cfg) is False
 
 
-# ---------------------------------------------------------------------------
 # NotificationConfig defaults (via Config)
-# ---------------------------------------------------------------------------
 
 
 class TestNotificationConfigDefaults:

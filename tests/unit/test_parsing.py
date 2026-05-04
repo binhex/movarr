@@ -18,9 +18,7 @@ from movarr.parsing import (
     sanitise,
 )
 
-# ---------------------------------------------------------------------------
 # sanitise
-# ---------------------------------------------------------------------------
 
 
 class TestSanitise:
@@ -50,9 +48,7 @@ class TestSanitise:
         assert result
 
 
-# ---------------------------------------------------------------------------
 # extract_movie_title
-# ---------------------------------------------------------------------------
 
 
 class TestExtractMovieTitle:
@@ -73,9 +69,7 @@ class TestExtractMovieTitle:
         assert extract_movie_title("") is None
 
 
-# ---------------------------------------------------------------------------
 # extract_year
-# ---------------------------------------------------------------------------
 
 
 class TestExtractYear:
@@ -91,9 +85,7 @@ class TestExtractYear:
         assert extract_year("") is None
 
 
-# ---------------------------------------------------------------------------
 # extract_resolution
-# ---------------------------------------------------------------------------
 
 
 class TestExtractResolution:
@@ -125,9 +117,7 @@ class TestExtractResolution:
         assert extract_resolution("") is None
 
 
-# ---------------------------------------------------------------------------
 # extract_after_year
-# ---------------------------------------------------------------------------
 
 
 class TestExtractAfterYear:
@@ -145,9 +135,7 @@ class TestExtractAfterYear:
         assert extract_after_year("") is None
 
 
-# ---------------------------------------------------------------------------
 # normalise_for_compare
-# ---------------------------------------------------------------------------
 
 
 class TestNormaliseForCompare:
@@ -177,9 +165,7 @@ class TestNormaliseForCompare:
         assert normalise_for_compare("") is None
 
 
-# ---------------------------------------------------------------------------
 # build_sqlite_pattern
-# ---------------------------------------------------------------------------
 
 
 class TestBuildSqlitePattern:
@@ -208,9 +194,7 @@ class TestBuildSqlitePattern:
         assert build_sqlite_pattern("NoYearOrTitle") is None
 
 
-# ---------------------------------------------------------------------------
 # all_criteria_present
-# ---------------------------------------------------------------------------
 
 
 class TestAllCriteriaPresent:
@@ -229,9 +213,7 @@ class TestAllCriteriaPresent:
         assert all_criteria_present("1080p BLURAY", "movie 2020 1080p bluray") is True
 
 
-# ---------------------------------------------------------------------------
 # is_tv_content
-# ---------------------------------------------------------------------------
 
 
 class TestIsTvContent:
@@ -247,9 +229,7 @@ class TestIsTvContent:
         assert is_tv_content("") is False
 
 
-# ---------------------------------------------------------------------------
 # keyword_search
-# ---------------------------------------------------------------------------
 
 
 class TestKeywordSearch:
@@ -271,9 +251,7 @@ class TestKeywordSearch:
         assert keyword_search("", "HDR") is False
 
 
-# ---------------------------------------------------------------------------
 # extract_group
-# ---------------------------------------------------------------------------
 
 
 class TestExtractGroup:
@@ -290,9 +268,7 @@ class TestExtractGroup:
         assert extract_group("") is None
 
 
-# ---------------------------------------------------------------------------
 # bad_keyword_search
-# ---------------------------------------------------------------------------
 
 
 class TestBadKeywordSearch:
@@ -308,9 +284,7 @@ class TestBadKeywordSearch:
         assert bad_keyword_search("", "CAM") is False
 
 
-# ---------------------------------------------------------------------------
 # quality_score
-# ---------------------------------------------------------------------------
 
 
 class TestQualityScore:

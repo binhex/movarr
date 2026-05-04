@@ -175,9 +175,7 @@ def _run_daemon(config: Config) -> None:
             scheduler.shutdown(wait=False)
 
 
-# ---------------------------------------------------------------------------
 # Task wrappers — catch all exceptions so one bad run doesn't kill the scheduler
-# ---------------------------------------------------------------------------
 
 
 def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -207,9 +205,7 @@ def _task_post_processing(config: Config, qbt: QBittorrentClient, db: Database) 
         logger.exception("Post-processing task failed.")
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _connect_qbt(config: Config) -> QBittorrentClient:

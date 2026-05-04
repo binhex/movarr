@@ -16,9 +16,7 @@ if TYPE_CHECKING:
 _NS = "http://torznab.com/schemas/2015/feed"
 _NS_ATTR = f"{_NS}:attr"
 
-# ---------------------------------------------------------------------------
 # Sample XML fixtures
-# ---------------------------------------------------------------------------
 
 _SINGLE_ITEM_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
@@ -67,9 +65,7 @@ _IMDB_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>"""
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_client(mocker: MockerFixture) -> tuple[JackettClient, Any]:
@@ -88,9 +84,7 @@ def _make_item(title: str, attrs: list[dict[str, str]] | None = None) -> dict[st
     return item
 
 
-# ---------------------------------------------------------------------------
 # _attr (static method)
-# ---------------------------------------------------------------------------
 
 
 class TestAttr:
@@ -119,9 +113,7 @@ class TestAttr:
         assert JackettClient._attr(item, "seeders") == ""
 
 
-# ---------------------------------------------------------------------------
 # _to_mb (static method)
-# ---------------------------------------------------------------------------
 
 
 class TestToMb:
@@ -152,9 +144,7 @@ class TestToMb:
         assert bytes_to_mb(None) == "0"
 
 
-# ---------------------------------------------------------------------------
 # _parse_item
-# ---------------------------------------------------------------------------
 
 
 class TestParseItem:
@@ -399,9 +389,7 @@ class TestParseItem:
         assert client._fetch_page("http://example.com", "test-indexer") is None
 
 
-# ---------------------------------------------------------------------------
 # search (public)
-# ---------------------------------------------------------------------------
 
 
 class TestSearch:
@@ -470,9 +458,7 @@ class TestSearch:
         assert results[0].get("imdb_id") == "tt1375666"
 
 
-# ---------------------------------------------------------------------------
 # is_reachable (public)
-# ---------------------------------------------------------------------------
 
 
 class TestIsReachable:

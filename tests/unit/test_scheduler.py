@@ -27,9 +27,7 @@ from movarr.scheduler import (
     run_once,
 )
 
-# ---------------------------------------------------------------------------
 # _write_pid
-# ---------------------------------------------------------------------------
 
 
 class TestWritePid:
@@ -56,9 +54,7 @@ class TestWritePid:
         _write_pid(pid_path)
 
 
-# ---------------------------------------------------------------------------
 # run_once
-# ---------------------------------------------------------------------------
 
 
 class TestRunOnce:
@@ -107,9 +103,7 @@ class TestRunOnce:
         assert call_args[0][2] is mock_db_cls.return_value
 
 
-# ---------------------------------------------------------------------------
 # run
-# ---------------------------------------------------------------------------
 
 
 class TestRun:
@@ -185,9 +179,7 @@ class TestRun:
         assert not Path(pid_path).exists()
 
 
-# ---------------------------------------------------------------------------
 # _task_search
-# ---------------------------------------------------------------------------
 
 
 class TestTaskSearch:
@@ -258,9 +250,7 @@ class TestTaskSearch:
         _task_search(config, mocker.MagicMock(), mocker.MagicMock())
 
 
-# ---------------------------------------------------------------------------
 # _task_queue_management
-# ---------------------------------------------------------------------------
 
 
 class TestTaskQueueManagement:
@@ -290,9 +280,7 @@ class TestTaskQueueManagement:
         _task_queue_management(config, mocker.MagicMock(), mocker.MagicMock())
 
 
-# ---------------------------------------------------------------------------
 # _task_post_processing
-# ---------------------------------------------------------------------------
 
 
 class TestTaskPostProcessing:
@@ -322,9 +310,7 @@ class TestTaskPostProcessing:
         _task_post_processing(config, mocker.MagicMock(), mocker.MagicMock())
 
 
-# ---------------------------------------------------------------------------
 # _connect_qbt
-# ---------------------------------------------------------------------------
 
 
 class TestConnectQbt:
@@ -359,9 +345,7 @@ class TestConnectQbt:
         assert result is expected
 
 
-# ---------------------------------------------------------------------------
 # _run_daemon
-# ---------------------------------------------------------------------------
 
 
 class TestRunDaemon:
@@ -476,9 +460,7 @@ class TestRunDaemonSignalHandler:
         _run_daemon(Config())
 
 
-# ---------------------------------------------------------------------------
 # _run_daemon — run_on_start
-# ---------------------------------------------------------------------------
 
 
 class TestRunDaemonRunOnStart:
@@ -585,9 +567,7 @@ class TestRunDaemonRunOnStart:
         assert "next_run_time" not in self._kwargs_by_id(mock_sched, "post_processing")
 
 
-# ---------------------------------------------------------------------------
 # _log_next_run
-# ---------------------------------------------------------------------------
 
 
 class TestLogNextRun:

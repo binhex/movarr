@@ -86,9 +86,7 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
         _process_one(torrent, config, qbt, db)
 
 
-# ---------------------------------------------------------------------------
 # Per-torrent processing
-# ---------------------------------------------------------------------------
 
 
 def _process_one(
@@ -156,9 +154,7 @@ def _process_one(
         qbt.delete_torrent(torrent_hash, delete_data=True, state="completed")
 
 
-# ---------------------------------------------------------------------------
 # File-list helpers
-# ---------------------------------------------------------------------------
 
 
 def _build_copy_list(torrent: dict, config: Config) -> list[str]:
@@ -249,9 +245,7 @@ def _first_level_dir(path: str) -> str:
     return parts[0] if parts else ""
 
 
-# ---------------------------------------------------------------------------
 # Destination routing
-# ---------------------------------------------------------------------------
 
 
 def _resolve_destination(db_record: HistoryRecord, config: Config) -> str | None:
