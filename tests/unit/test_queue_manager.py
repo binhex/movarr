@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from movarr.config import Config
 from movarr.qbittorrent import QBittorrentClient
-from movarr.queue_manager import _delete_stuck, run_queue_management
+from movarr.queue_manager import _delete_stuck, _StuckConfig, run_queue_management
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -122,13 +122,15 @@ class TestDeleteStuck:
         db = mocker.MagicMock()
 
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=120,
-            label="stalled",
-            delete_data=False,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
         )
 
         qbt.identify_for_deletion.assert_not_called()
@@ -142,13 +144,15 @@ class TestDeleteStuck:
         db = mocker.MagicMock()
 
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=120,
-            label="stalled",
-            delete_data=False,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
         )
 
         qbt.delete_stalled.assert_not_called()
@@ -164,13 +168,15 @@ class TestDeleteStuck:
         qbt.identify_for_deletion.return_value = to_delete
 
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=120,
-            label="stalled",
-            delete_data=False,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
         )
 
         qbt.delete_stalled.assert_called_once_with(to_delete, state="stalledDL", delete_data=False)
@@ -184,7 +190,15 @@ class TestDeleteStuck:
         db = mocker.MagicMock()
 
         _delete_stuck(
-            qbt=qbt, db=db, state="metaDL", filter_type="added_on", max_mins=30, label="metadata", delete_data=True
+            qbt,
+            db,
+            _StuckConfig(
+                state="metaDL",
+                filter_type="added_on",
+                max_mins=30,
+                label="metadata",
+                delete_data=True,
+            ),
         )
 
         qbt.identify_for_deletion.assert_called_once_with(
@@ -203,7 +217,15 @@ class TestDeleteStuck:
         db = mocker.MagicMock()
 
         _delete_stuck(
-            qbt=qbt, db=db, state="metaDL", filter_type="added_on", max_mins=30, label="metadata", delete_data=True
+            qbt,
+            db,
+            _StuckConfig(
+                state="metaDL",
+                filter_type="added_on",
+                max_mins=30,
+                label="metadata",
+                delete_data=True,
+            ),
         )
 
         qbt.delete_stalled.assert_called_once_with(to_delete, state="metaDL", delete_data=True)
@@ -225,13 +247,15 @@ class TestMarkStalledOnDeletion:
         qbt.identify_for_deletion.return_value = to_delete
 
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=120,
-            label="stalled",
-            delete_data=False,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
         )
 
         db.mark_stalled.assert_called_once_with("movarr-uuid-stalled")
@@ -246,13 +270,15 @@ class TestMarkStalledOnDeletion:
         qbt.identify_for_deletion.return_value = to_delete
 
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=120,
-            label="stalled",
-            delete_data=False,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
         )
 
         db.mark_stalled.assert_not_called()
@@ -267,7 +293,15 @@ class TestMarkStalledOnDeletion:
         qbt.identify_for_deletion.return_value = to_delete
 
         _delete_stuck(
-            qbt=qbt, db=db, state="metaDL", filter_type="added_on", max_mins=30, label="metadata", delete_data=False
+            qbt,
+            db,
+            _StuckConfig(
+                state="metaDL",
+                filter_type="added_on",
+                max_mins=30,
+                label="metadata",
+                delete_data=False,
+            ),
         )
 
         db.mark_stalled.assert_called_once_with("movarr-uuid-meta")

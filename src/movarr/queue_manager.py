@@ -7,6 +7,7 @@ torrents that will never complete.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -19,6 +20,17 @@ if TYPE_CHECKING:
 __all__ = ["run_queue_management"]
 
 _TAG_PREFIX = "movarr-"
+
+
+@dataclass(frozen=True, slots=True)
+class _StuckConfig:
+    """Parameters that describe one class of stuck torrents to delete."""
+
+    state: str
+    filter_type: str
+    max_mins: int
+    label: str
+    delete_data: bool
 
 
 def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -40,53 +52,49 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
 
     if qm_cfg.metadata_monitor_enabled:
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="metaDL",
-            filter_type="added_on",
-            max_mins=qm_cfg.metadata_delete_torrent_max_mins,
-            label="metadata",
-            delete_data=qm_cfg.metadata_delete_torrent_data,
+            qbt,
+            db,
+            _StuckConfig(
+                state="metaDL",
+                filter_type="added_on",
+                max_mins=qm_cfg.metadata_delete_torrent_max_mins,
+                label="metadata",
+                delete_data=qm_cfg.metadata_delete_torrent_data,
+            ),
         )
 
     if qm_cfg.stalled_monitor_enabled:
         _delete_stuck(
-            qbt=qbt,
-            db=db,
-            state="stalledDL",
-            filter_type="last_activity",
-            max_mins=qm_cfg.stalled_delete_torrent_max_mins,
-            label="stalled",
-            delete_data=qm_cfg.stalled_delete_torrent_data,
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=qm_cfg.stalled_delete_torrent_max_mins,
+                label="stalled",
+                delete_data=qm_cfg.stalled_delete_torrent_data,
+            ),
         )
 
 
-def _delete_stuck(
-    qbt: QBittorrentClient,
-    db: Database,
-    state: str,
-    filter_type: str,
-    max_mins: int,
-    label: str,
-    delete_data: bool,
-) -> None:
+def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> None:
     torrent_map = qbt.list_by_category()
     if not torrent_map:
         return
 
     to_delete = qbt.identify_for_deletion(
         torrent_map=torrent_map,
-        state=state,
-        delay_max_mins=max_mins,
-        filter_type=filter_type,
+        state=cfg.state,
+        delay_max_mins=cfg.max_mins,
+        filter_type=cfg.filter_type,
     )
 
     if not to_delete:
-        logger.debug("No {} torrents to delete.", label)
+        logger.debug("No {} torrents to delete.", cfg.label)
         return
 
-    logger.info("Deleting {} {} torrent(s) in state '{}'.", len(to_delete), label, state)
-    qbt.delete_stalled(to_delete, state=state, delete_data=delete_data)
+    logger.info("Deleting {} {} torrent(s) in state '{}'.", len(to_delete), cfg.label, cfg.state)
+    qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
 
     for torrent_hash in to_delete:
         torrent_info = torrent_map.get(torrent_hash, {})
