@@ -17,9 +17,11 @@ import signal
 import sys
 import time
 import datetime
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import SchedulerNotRunningError
 from loguru import logger
 
 from movarr.database import Database
@@ -48,10 +50,14 @@ def run(config: Config, pid_path: str | None = None) -> None:
     if pid_path:
         _write_pid(pid_path)
 
-    if config.general.daemon_mode == "background":
-        _run_daemon(config)
-    else:
-        run_once(config)
+    try:
+        if config.general.daemon_mode == "background":
+            _run_daemon(config)
+        else:
+            run_once(config)
+    finally:
+        if pid_path and os.path.exists(pid_path):
+            os.unlink(pid_path)
 
 
 def run_once(config: Config) -> None:
@@ -154,7 +160,8 @@ def _run_daemon(config: Config) -> None:
     # Block until SIGTERM or SIGINT.
     def _shutdown(signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal {}; shutting down.", signum)
-        scheduler.shutdown(wait=False)
+        with suppress(SchedulerNotRunningError):
+            scheduler.shutdown(wait=False)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown)
@@ -164,7 +171,8 @@ def _run_daemon(config: Config) -> None:
         while True:
             time.sleep(30)
     except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown(wait=False)
+        with suppress(SchedulerNotRunningError):
+            scheduler.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------

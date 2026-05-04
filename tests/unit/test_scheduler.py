@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 import datetime
 
+import pytest
+from apscheduler.schedulers.base import SchedulerNotRunningError
+
 from movarr.config import Config, GeneralConfig
 from movarr.scheduler import (
     _connect_qbt,
@@ -133,13 +136,14 @@ class TestRun:
         mock_run_once.assert_not_called()
 
     def test_writes_pid_when_pid_path_provided(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
         mocker.patch("movarr.scheduler.run_once")
         pid_path = str(tmp_path / "run" / "movarr.pid")
         config = Config()
 
         run(config, pid_path=pid_path)
 
-        assert Path(pid_path).exists()
+        mock_write_pid.assert_called_once_with(pid_path)
 
     def test_no_pid_written_when_pid_path_is_none(self, mocker: MockerFixture) -> None:
         mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
@@ -158,6 +162,27 @@ class TestRun:
         run(config, pid_path=None)
 
         mock_write_pid.assert_not_called()
+
+    def test_pid_file_removed_on_clean_exit(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """PID file is deleted in the finally block after run_once completes."""
+        mocker.patch("movarr.scheduler.run_once")
+        pid_path = str(tmp_path / "run" / "movarr.pid")
+        config = Config()
+
+        run(config, pid_path=pid_path)
+
+        assert not Path(pid_path).exists()
+
+    def test_pid_file_removed_on_exception(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """PID file is deleted in the finally block even when an exception is raised."""
+        mocker.patch("movarr.scheduler.run_once", side_effect=RuntimeError("boom"))
+        pid_path = str(tmp_path / "run" / "movarr.pid")
+        config = Config()
+
+        with pytest.raises(RuntimeError):
+            run(config, pid_path=pid_path)
+
+        assert not Path(pid_path).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +428,56 @@ class TestRunDaemonSignalHandler:
 
         mock_sched.shutdown.assert_called()
         mock_sys_exit.assert_called_with(0)
+
+    def test_signal_handler_when_scheduler_already_stopped_does_not_raise(
+        self, mocker: MockerFixture
+    ) -> None:
+        """If _shutdown is called a second time (double signal) after the scheduler
+        is already stopped, it must not raise SchedulerNotRunningError."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mock_sys_exit = mocker.patch("movarr.scheduler.sys.exit")
+
+        captured_handlers: dict = {}
+
+        def capture_signal(sig, handler):
+            captured_handlers[sig] = handler
+
+        mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
+
+        _run_daemon(Config())
+
+        import signal as signal_mod
+
+        handler = captured_handlers.get(signal_mod.SIGINT)
+        assert handler is not None
+
+        # Simulate scheduler already stopped when handler fires a second time.
+        mock_sched.shutdown.side_effect = SchedulerNotRunningError
+
+        # Must not raise SchedulerNotRunningError.
+        handler(signal_mod.SIGINT, None)
+        mock_sys_exit.assert_called_with(0)
+
+    def test_clean_exit_does_not_raise(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When SystemExit escapes time.sleep (from _shutdown's sys.exit call)
+        and the scheduler is already stopped, the except block must not raise
+        SchedulerNotRunningError — _run_daemon returns normally."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mock_sched.shutdown.side_effect = SchedulerNotRunningError
+        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
+        mocker.patch("movarr.scheduler.sys.exit")
+
+        # Must complete without raising SchedulerNotRunningError.
+        _run_daemon(Config())
 
 
 # ---------------------------------------------------------------------------
