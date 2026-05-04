@@ -9,6 +9,7 @@ import xmltodict
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
+from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -156,7 +157,7 @@ class JackettClient:
             "index_seeders": self._attr(item, "seeders"),
             "index_peers": self._attr(item, "peers"),
             "index_size": item.get("size", ""),
-            "index_size_mb": self._to_mb(item.get("size", "")),
+            "index_size_mb": bytes_to_mb(item.get("size", "")),
             "torrent_url": self._torrent_url(item),
             "magnet_url": magnet_url or self._enclosure_magnet(item),
             "category": self._attr(item, "category"),
@@ -216,11 +217,3 @@ class JackettClient:
             if isinstance(attr, dict) and attr.get("@name") == name:
                 return str(attr.get("@value", ""))
         return ""
-
-    @staticmethod
-    def _to_mb(size_bytes: str) -> str:
-        """Convert a byte string to a decimal megabyte string (integer, truncated)."""
-        try:
-            return str(int(size_bytes) // 1_000_000)
-        except (ValueError, TypeError):
-            return "0"

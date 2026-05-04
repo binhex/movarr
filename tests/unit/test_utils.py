@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from movarr.utils import get_project_root
+from movarr.utils import bytes_to_mb, get_project_root
 
 
 class TestGetProjectRoot:
@@ -37,3 +37,26 @@ class TestGetProjectRoot:
     def test_consistent_on_repeated_calls(self) -> None:
         """Repeated calls must return the same path."""
         assert get_project_root() == get_project_root()
+
+
+class TestBytesToMb:
+    """Tests for bytes_to_mb shared helper."""
+
+    def test_converts_bytes_to_mb(self) -> None:
+        assert bytes_to_mb(8_589_934_592) == "8589"
+
+    def test_truncates_remainder(self) -> None:
+        assert bytes_to_mb(1_000_001) == "1"
+
+    def test_zero_returns_zero(self) -> None:
+        assert bytes_to_mb(0) == "0"
+
+    def test_float_input_works(self) -> None:
+        assert bytes_to_mb(1_000_000.0) == "1"
+        assert bytes_to_mb(8_589_934_592.0) == "8589"
+
+    def test_invalid_string_returns_zero(self) -> None:
+        assert bytes_to_mb("not-a-number") == "0"
+
+    def test_empty_string_returns_zero(self) -> None:
+        assert bytes_to_mb("") == "0"

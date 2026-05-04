@@ -186,9 +186,9 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
     writers = _credits_names(credits_data, "writer")
     cast = _credits_names(credits_data, "cast")
     characters = _credits_characters(credits_data)
-    languages = _get(aux_data, "spokenLanguages")
-    countries = _get(aux_data, "origins")
-    genres = _get(genres_data, "genres")
+    languages = _extract_list_or_none(aux_data, "spokenLanguages")
+    countries = _extract_list_or_none(aux_data, "origins")
+    genres = _extract_list_or_none(genres_data, "genres")
     cert = _extract_cert_imdbpie(aux_data)
     title = _safe_str(title_data, "base", "title")
     year = _safe_val(title_data, "base", "year")
@@ -259,7 +259,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         result["result_details"] = details
         return result
 
-    def _nona(key: str) -> str | None:
+    def _omit_na(key: str) -> str | None:
         """Return None if value is absent, None, or 'N/A'."""
         val = data.get(key)
         if val in (None, "N/A", ""):
@@ -267,47 +267,47 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         return str(val)
 
     # Strip non-digits from votes and runtime, then normalise to int.
-    raw_votes = _nona("imdb_votes")
+    raw_votes = _omit_na("imdb_votes")
     votes: int | None = int("".join(re.findall(r"\d+", raw_votes))) if raw_votes else None
 
-    raw_runtime = _nona("runtime")
+    raw_runtime = _omit_na("runtime")
     runtime: int | None = int("".join(re.findall(r"\d+", raw_runtime))) if raw_runtime else None
 
     # Split comma-separated credits.
-    cast = [x.strip() for x in (_nona("actors") or "").split(",") if x.strip()] or None
-    directors = [x.strip() for x in (_nona("director") or "").split(",") if x.strip()] or None
-    writers = [x.strip() for x in (_nona("writer") or "").split(",") if x.strip()] or None
-    genres = [x.strip() for x in (_nona("genre") or "").split(",") if x.strip()] or None
+    cast = [x.strip() for x in (_omit_na("actors") or "").split(",") if x.strip()] or None
+    directors = [x.strip() for x in (_omit_na("director") or "").split(",") if x.strip()] or None
+    writers = [x.strip() for x in (_omit_na("writer") or "").split(",") if x.strip()] or None
+    genres = [x.strip() for x in (_omit_na("genre") or "").split(",") if x.strip()] or None
 
     # Rated — skip MPAA-specific non-values but keep the value so callers can
     # set imdb_cert_source='omdb' and use it only where appropriate.
-    rated = _nona("rated")
+    rated = _omit_na("rated")
     if rated in ("Not Rated", "Unrated"):
         rated = None
 
-    countries = _convert_countries(_nona("country"))
-    languages = _convert_languages(_nona("language"))
+    countries = _convert_countries(_omit_na("country"))
+    languages = _convert_languages(_omit_na("language"))
 
     # Normalise year and rating to canonical numeric types.
     # OMDb may return '2026–' for ongoing series — extract leading 4-digit year.
-    raw_year = _nona("year")
+    raw_year = _omit_na("year")
     year_digits = "".join(re.findall(r"\d+", raw_year))[:4] if raw_year else ""
     year: int | None = int(year_digits) if len(year_digits) == 4 else None
 
-    raw_rating = _nona("imdb_rating")
+    raw_rating = _omit_na("imdb_rating")
     rating: float | None = float(raw_rating) if raw_rating else None
 
     result.update(
         {
-            "imdb_title": _nona("title"),
+            "imdb_title": _omit_na("title"),
             "imdb_year": year,
-            "imdb_poster_url": _nona("poster"),
+            "imdb_poster_url": _omit_na("poster"),
             "imdb_trailer_url": None,
-            "imdb_plot_summary": _nona("plot"),
+            "imdb_plot_summary": _omit_na("plot"),
             "imdb_plot_outline": None,
             "imdb_rating": rating,
             "imdb_votes": votes,
-            "imdb_title_type": _nona("type"),
+            "imdb_title_type": _omit_na("type"),
             "imdb_running_time_in_minutes": runtime,
             "imdb_genres_list": genres,
             "imdb_certification": rated,
@@ -360,7 +360,7 @@ def _credits_characters(credits: dict) -> list[str] | None:
     return chars or None
 
 
-def _get(data: dict, key: str) -> list | None:
+def _extract_list_or_none(data: dict, key: str) -> list | None:
     try:
         val = data[key]
         return val if val else None

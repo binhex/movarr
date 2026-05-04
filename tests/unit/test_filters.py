@@ -1160,15 +1160,15 @@ class TestLogLevels:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckSizeEdgeCases:
-    """Edge cases for _check_size — unparseable index_size."""
+class TestCheckMinimumSizeEdgeCases:
+    """Edge cases for _check_minimum_size — unparseable index_size."""
 
     def test_unparseable_size_sets_failed(self) -> None:
-        from movarr.filters import _check_size
+        from movarr.filters import _check_minimum_size
 
         result = _index_result(index_size="not-a-number")
         site = _default_site_dict(minimum_size_mb=100)
-        out = _check_size(result, site, "minimum")
+        out = _check_minimum_size(result, site)
         assert out["result"] == "Failed"
 
 

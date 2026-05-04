@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
+from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -152,7 +153,7 @@ class ProwlarrClient:
             "index_seeders": str(item.get("seeders", "")),
             "index_peers": str(item.get("leechers", "")),
             "index_size": str(size_bytes),
-            "index_size_mb": self._to_mb(size_bytes),
+            "index_size_mb": bytes_to_mb(size_bytes),
             "torrent_url": item.get("downloadUrl", "") or "",
             "magnet_url": item.get("magnetUrl", "") or "",
             "category": "",
@@ -166,11 +167,3 @@ class ProwlarrClient:
                 result["imdb_id"] = f"tt{int(imdb_id_raw):07d}"
 
         return result
-
-    @staticmethod
-    def _to_mb(size_bytes: int | float) -> str:
-        """Convert bytes to a decimal megabyte string (integer, truncated)."""
-        try:
-            return str(int(size_bytes) // 1_000_000)
-        except (ValueError, TypeError):
-            return "0"

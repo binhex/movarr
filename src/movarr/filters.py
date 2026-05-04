@@ -68,8 +68,8 @@ def filter_by_index(
     """
     checks = [
         lambda r: _check_search_criteria(r, index_site),
-        lambda r: _check_size(r, index_site, "minimum"),
-        lambda r: _check_size(r, index_site, "maximum"),
+        lambda r: _check_minimum_size(r, index_site),
+        lambda r: _check_maximum_size(r, index_site),
         lambda r: _check_bad_keywords(r, config),
         lambda r: _check_tv_type(r),
         lambda r: _check_bad_movie_titles(r, config),
@@ -152,12 +152,24 @@ def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
     return _pass(result, f"Index title passes search criteria '{criteria}'.")
 
 
-def _check_size(result: ResultDict, index_site: dict, bound: str) -> ResultDict:
-    key = f"{bound}_size_mb"
-    threshold_mb = index_site.get(key)
+def _check_minimum_size(result: ResultDict, index_site: dict) -> ResultDict:
+    """Fail if the torrent size (MB) is below the configured minimum."""
+    threshold_mb = index_site.get("minimum_size_mb")
     if not threshold_mb:
-        return _pass(result, f"No {bound} size defined; skipping.")
+        return _pass(result, "No minimum size defined; skipping.")
+    return _check_size_bound(result, threshold_mb, "minimum")
 
+
+def _check_maximum_size(result: ResultDict, index_site: dict) -> ResultDict:
+    """Fail if the torrent size (MB) exceeds the configured maximum."""
+    threshold_mb = index_site.get("maximum_size_mb")
+    if not threshold_mb:
+        return _pass(result, "No maximum size defined; skipping.")
+    return _check_size_bound(result, threshold_mb, "maximum")
+
+
+def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> ResultDict:
+    """Compare raw index size against a threshold."""
     raw_size = result.get("index_size")
     if not raw_size:
         return _fail(result, "No index size available; assuming below threshold.")

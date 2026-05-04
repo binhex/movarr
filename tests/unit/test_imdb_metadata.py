@@ -491,7 +491,7 @@ class TestPatchImdbpieRedirectCheckExtra:
         assert fake_client.is_redirection_title("tt0133093") is False
 
     def test_returns_false_when_no_id_in_response(self, mocker: MockerFixture) -> None:
-        """Returns False when _get() returns a resource with no usable id field."""
+        """Returns False when _extract_list_or_none() returns a resource with no usable id field."""
         from movarr.imdb_metadata import _patch_imdbpie_redirect_check
 
         fake_client = mocker.MagicMock()
@@ -506,7 +506,7 @@ class TestPatchImdbpieRedirectCheckExtra:
 
 
 # ---------------------------------------------------------------------------
-# _credits_names, _credits_characters, _get, _safe_val (exception paths)
+# _credits_names, _credits_characters, _extract_list_or_none, _safe_val (exception paths)
 # ---------------------------------------------------------------------------
 
 
@@ -538,18 +538,18 @@ class TestCreditsCharactersException:
         assert _credits_characters(None) is None  # type: ignore[arg-type]
 
 
-class TestGetHelper:
-    """_get must return None on KeyError / TypeError."""
+class TestExtractListOrNone:
+    """_extract_list_or_none must return None on KeyError / TypeError."""
 
     def test_returns_none_on_missing_key(self) -> None:
-        from movarr.imdb_metadata import _get
+        from movarr.imdb_metadata import _extract_list_or_none
 
-        assert _get({}, "missing") is None
+        assert _extract_list_or_none({}, "missing") is None
 
     def test_returns_none_on_none_data(self) -> None:
-        from movarr.imdb_metadata import _get
+        from movarr.imdb_metadata import _extract_list_or_none
 
-        assert _get(None, "key") is None  # type: ignore[arg-type]
+        assert _extract_list_or_none(None, "key") is None  # type: ignore[arg-type]
 
 
 class TestSafeValException:

@@ -119,21 +119,3 @@ class HttpClient:
             finally:
                 self._read_timeout = original
         return self._request("get", url, headers=headers, auth=auth)
-
-    def post(
-        self,
-        url: str,
-        *,
-        data: Any = None,
-        headers: dict[str, str] | None = None,
-        auth: tuple[str, str] | None = None,
-    ) -> requests.Response:
-        """Perform a POST request.
-
-        Args:
-            url: Target URL.
-            data: Request body payload.
-            headers: Extra request headers.
-            auth: Optional ``(username, password)`` tuple.
-        """
-        return self._request("post", url, headers=headers, data=data, auth=auth)

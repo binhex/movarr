@@ -155,56 +155,6 @@ class TestHttpClientGet:
 # ---------------------------------------------------------------------------
 
 
-class TestHttpClientPost:
-    """HttpClient.post() calls _request with the correct arguments."""
-
-    def test_calls_request_with_post_method(self, mocker: MockerFixture) -> None:
-        """post() must delegate to _request(method='post', ...)."""
-        client = HttpClient()
-        mock_req = mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
-
-        client.post("https://example.com/api")
-
-        mock_req.assert_called_once_with("post", "https://example.com/api", headers=None, data=None, auth=None)
-
-    def test_passes_data(self, mocker: MockerFixture) -> None:
-        """Request body data should be forwarded to _request."""
-        client = HttpClient()
-        mock_req = mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
-
-        client.post("https://example.com/api", data={"key": "val"})
-
-        mock_req.assert_called_once_with(
-            "post", "https://example.com/api", headers=None, data={"key": "val"}, auth=None
-        )
-
-    def test_passes_headers(self, mocker: MockerFixture) -> None:
-        """Extra headers should be forwarded to _request."""
-        client = HttpClient()
-        mock_req = mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
-
-        client.post("https://example.com/api", headers={"Content-Type": "application/json"})
-
-        mock_req.assert_called_once_with(
-            "post",
-            "https://example.com/api",
-            headers={"Content-Type": "application/json"},
-            data=None,
-            auth=None,
-        )
-
-    def test_passes_auth(self, mocker: MockerFixture) -> None:
-        """Auth credentials should be forwarded to _request."""
-        client = HttpClient()
-        mock_req = mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
-
-        client.post("https://example.com/api", auth=("admin", "pw"))
-
-        mock_req.assert_called_once_with(
-            "post", "https://example.com/api", headers=None, data=None, auth=("admin", "pw")
-        )
-
-
 # ---------------------------------------------------------------------------
 # _request() — tested directly because its session/header wiring cannot be
 # fully observed through the public API's return value alone.

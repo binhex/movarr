@@ -36,11 +36,14 @@ def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[s
     return chain.from_iterable(os.walk(p) for p in library_paths)
 
 
+_CHUNK_SIZE = 65_536  # 64 KiB — balance between I/O calls and memory usage
+
+
 def _sha256(file_path: Path) -> str:
     """Return the SHA-256 hex digest of *file_path*."""
     h = hashlib.sha256()
     with file_path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
+        for chunk in iter(lambda: fh.read(_CHUNK_SIZE), b""):
             h.update(chunk)
     return h.hexdigest()
 
