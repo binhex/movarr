@@ -1,16 +1,17 @@
 """IMDb ID search using multiple provider strategies.
 
-Search order: IMDbPie → TMDb → OMDb → Google.
+Search order: IMDbPie → TMDb → OMDb → DuckDuckGo.
 Each strategy updates result['imdb_id'] and result['result'] = 'Passed' on success.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import urllib.parse
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger as _logger
 
@@ -22,6 +23,13 @@ if TYPE_CHECKING:
     from movarr.models import ResultDict
 
 __all__ = ["search_for_imdb_id"]
+
+_DDGS: Any = None
+
+try:
+    from ddgs import DDGS as _DDGS  # type: ignore[no-redef]
+except Exception:  # noqa: BLE001
+    pass
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
@@ -42,7 +50,7 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
         Updated *result* dict with ``imdb_id`` set and
         ``result == 'Passed'`` on success.
     """
-    for strategy in (_search_imdbpie, _search_tmdb, _search_omdb, _search_google):
+    for strategy in (_search_imdbpie, _search_tmdb, _search_omdb, _search_duckduckgo):
         result = strategy(result, config)
         if result.get("result") == "Passed":
             return result
@@ -218,58 +226,58 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
 # Strategy 4 — Google (last resort; may be slow / unreliable)
 
 
-def _search_google(result: ResultDict, _config: Config) -> ResultDict:
+def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
+    """Search IMDb ID via DuckDuckGo web search.
+
+    Uses ``duckduckgo-search`` (a maintained, scraper-friendly alternative
+    to the fragile Google HTML scraper).  Returns the first IMDb URL whose
+    normalised title is contained in ``index_title_compare``.
+    """
     search_term = result.get("movie_title_and_year_search", "")
     index_compare = result.get("index_title_compare") or ""
     year = result.get("movie_title_year") or ""
 
     try:
-        import googlesearch
-
-        gen = googlesearch.search(
-            f"imdb {search_term}",
-            advanced=True,
-            sleep_interval=5,
-            num_results=10,
-            timeout=10,
-        )
-        hits = list(gen)
+        if _DDGS is None:
+            raise ImportError("ddgs not available")
+        with _DDGS() as ddgs:
+            hits = list(ddgs.text(f"imdb {search_term}", max_results=10))
     except Exception as exc:  # noqa: BLE001
-        _fail(result, f"Google search error: {exc}")
+        _fail(result, f"DuckDuckGo error: {exc}")
         return result
 
     for hit in hits:
-        g_title: str = hit.title or ""
-        g_url: str = hit.url or ""
+        d_title: str = hit.get("title") or ""
+        d_url: str = hit.get("href") or ""
 
-        # If the Google title contains a year that does NOT match the
+        # If the result title contains a year that does NOT match the
         # expected year, skip this hit to avoid returning the wrong film.
         # Ignore year-like numbers that are literally the movie title
         # (e.g. "1917", "2012") so we don't false-negative those hits.
         if year:
-            title_years = _YEAR_RE.findall(g_title)
+            title_years = _YEAR_RE.findall(d_title)
             if title_years:
                 movie_title = result.get("movie_title") or ""
                 title_years = [y for y in title_years if y not in movie_title]
                 if title_years and year not in title_years:
                     continue
 
-        san = sanitise(g_title)
+        san = sanitise(d_title)
         if not san:
             continue
         norm = normalise_for_compare(san)
         if not norm or norm not in index_compare:
             continue
 
-        match = _IMDB_ID_RE.search(g_url)
+        match = _IMDB_ID_RE.search(d_url)
         if not match:
             continue
 
         imdb_id = match.group()
-        _pass(result, imdb_id, f"Found via Google for '{search_term}'.")
+        _pass(result, imdb_id, f"Found via DuckDuckGo for '{search_term}'.")
         return result
 
-    _fail(result, f"Google: no results for '{search_term}'.")
+    _fail(result, f"DuckDuckGo: no results for '{search_term}'.")
     return result
 
 

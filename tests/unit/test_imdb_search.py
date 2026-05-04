@@ -15,7 +15,7 @@ from movarr.imdb_search import (
     _OMDB_NOT_FOUND_ERROR,
     _fail,
     _pass,
-    _search_google,
+    _search_duckduckgo,
     _search_imdbpie,
     _search_omdb,
     _search_tmdb,
@@ -320,155 +320,158 @@ class TestSearchOmdb:
         assert out["result"] == "Failed"
 
 
-# _search_google
+# _search_duckduckgo
 
 
-class TestSearchGoogle:
-    """Tests for the Google search strategy (last resort)."""
+class _MockDDGS:
+    """Minimal mock for duckduckgo_search.DDGS."""
+
+    def __init__(self, hits: list[dict[str, str]], mocker: MockerFixture) -> None:
+        self._hits = hits
+        self.text = mocker.MagicMock(return_value=self._hits)
+
+    def __enter__(self) -> _MockDDGS:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        pass
+
+
+class TestSearchDuckDuckGo:
+    """Tests for the DuckDuckGo search strategy (last resort)."""
 
     def test_imdb_id_extracted_from_url_passes(self, mocker: MockerFixture) -> None:
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "The Matrix 1999"
-        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
-        # "thematrix1999" is normalised form; set index_title_compare to contain it
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [{"title": "The Matrix 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
+        )
         result = _make_result(index_title_compare="thematrix1999")
         cfg = Config()
-        out = _search_google(result, cfg)
+        out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_no_results_stop_iteration_sets_failed(self, mocker: MockerFixture) -> None:
-        mock_gs = mocker.MagicMock()
-        mock_gs.search.return_value = iter([])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
-        result = _make_result()
-        cfg = Config()
-        out = _search_google(result, cfg)
+    def test_no_results_sets_failed(self, mocker: MockerFixture) -> None:
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS([], mocker)
+        out = _search_duckduckgo(_make_result(), Config())
         assert out["result"] == "Failed"
 
     def test_no_imdb_id_in_url_sets_failed(self, mocker: MockerFixture) -> None:
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "The Matrix 1999"
-        mock_hit.url = "https://www.somesite.com/the-matrix"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [{"title": "The Matrix 1999", "href": "https://www.somesite.com/the-matrix"}], mocker
+        )
         result = _make_result(index_title_compare="thematrix1999")
         cfg = Config()
-        out = _search_google(result, cfg)
+        out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Failed"
 
     def test_year_not_in_title_still_passes(self, mocker: MockerFixture) -> None:
-        """Google snippet titles often omit the year; IMDb URL is authoritative enough."""
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "The Matrix IMDb"  # no year
-        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        """DDG snippet titles often omit the year; IMDb URL is authoritative enough."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [{"title": "The Matrix IMDb", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
+        )
         result = _make_result(index_title_compare="thematrix")
         cfg = Config()
-        out = _search_google(result, cfg)
+        out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Passed"
 
     def test_import_error_sets_failed(self, mocker: MockerFixture) -> None:
-        mocker.patch.dict("sys.modules", {"googlesearch": None})
+        mocker.patch("movarr.imdb_search._DDGS", None)
         result = _make_result()
         cfg = Config()
-        out = _search_google(result, cfg)
+        out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Failed"
 
     def test_requests_ten_results(self, mocker: MockerFixture) -> None:
-        """Google search must request up to 10 results so we can skip non-IMDb hits."""
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "The Matrix 1999"
-        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        """DDG search must request up to 10 results so we can skip non-IMDb hits."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_instance = _MockDDGS(
+            [{"title": "The Matrix 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
+        )
+        mock_ddgs.return_value = mock_instance
         result = _make_result(index_title_compare="thematrix1999")
-        _search_google(result, Config())
+        _search_duckduckgo(result, Config())
 
-        call_kwargs = mock_gs.search.call_args.kwargs
-        assert call_kwargs.get("num_results") == 10
+        call_kwargs = mock_instance.text.call_args.kwargs
+        assert call_kwargs.get("max_results") == 10
 
     def test_skips_non_imdb_results_and_finds_match(self, mocker: MockerFixture) -> None:
         """First result is Wikipedia, second result is IMDb — must skip to the IMDb hit."""
-        mock_gs = mocker.MagicMock()
-        hit1 = mocker.MagicMock()
-        hit1.title = "The Matrix - Wikipedia"
-        hit1.url = "https://en.wikipedia.org/wiki/The_Matrix"
-        hit2 = mocker.MagicMock()
-        hit2.title = "The Matrix (1999) - IMDb"
-        hit2.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([hit1, hit2])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [
+                {"title": "The Matrix - Wikipedia", "href": "https://en.wikipedia.org/wiki/The_Matrix"},
+                {"title": "The Matrix (1999) - IMDb", "href": "https://www.imdb.com/title/tt0133093/"},
+            ],
+            mocker,
+        )
         result = _make_result(index_title_compare="thematrix1999")
-        out = _search_google(result, Config())
+        out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
 
-    def test_year_not_required_in_google_title(self, mocker: MockerFixture) -> None:
-        """Google result titles often omit the year (e.g. 'Title - IMDb').
+    def test_year_not_required_in_ddg_title(self, mocker: MockerFixture) -> None:
+        """DDG result titles often omit the year (e.g. 'Title - IMDb').
 
         We should accept the result if the title matches and the URL contains
         an IMDb tt-number, without requiring the year in the snippet title.
         """
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "Little Amelie or the Character of Rain - IMDb"
-        mock_hit.url = "https://www.imdb.com/title/tt1234567/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [
+                {
+                    "title": "Little Amelie or the Character of Rain - IMDb",
+                    "href": "https://www.imdb.com/title/tt1234567/",
+                }
+            ],
+            mocker,
+        )
         result = _make_result(
             movie_title="Little Amelie or the Character of Rain",
             movie_title_year="2025",
             movie_title_and_year_search="Little Amelie or the Character of Rain 2025",
             index_title_compare="littleamelieorthecharacterofrain2025",
         )
-        out = _search_google(result, Config())
+        out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt1234567"
 
     def test_skips_hit_with_wrong_year_in_title(self, mocker: MockerFixture) -> None:
-        """If Google title contains a year that does NOT match, skip that hit."""
-        mock_gs = mocker.MagicMock()
-        hit1 = mocker.MagicMock()
-        hit1.title = "The Matrix (1999) - IMDb"  # wrong year
-        hit1.url = "https://www.imdb.com/title/tt0133093/"
-        hit2 = mocker.MagicMock()
-        hit2.title = "The Matrix Resurrections - IMDb"  # no year, accepted
-        hit2.url = "https://www.imdb.com/title/tt10838180/"
-        mock_gs.search.return_value = iter([hit1, hit2])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        """If DDG title contains a year that does NOT match, skip that hit."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [
+                {"title": "The Matrix (1999) - IMDb", "href": "https://www.imdb.com/title/tt0133093/"},
+                {"title": "The Matrix Resurrections - IMDb", "href": "https://www.imdb.com/title/tt10838180/"},
+            ],
+            mocker,
+        )
         result = _make_result(
             movie_title="The Matrix Resurrections",
             movie_title_year="2021",
             movie_title_and_year_search="The Matrix Resurrections 2021",
             index_title_compare="thematrixresurrections2021",
         )
-        out = _search_google(result, Config())
+        out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt10838180"
 
     def test_year_in_movie_title_not_rejected(self, mocker: MockerFixture) -> None:
         """A year-like movie title (e.g. '1917') must not be treated as a wrong-year hit."""
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "1917 - IMDb"
-        mock_hit.url = "https://www.imdb.com/title/tt8579674/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [{"title": "1917 - IMDb", "href": "https://www.imdb.com/title/tt8579674/"}], mocker
+        )
         result = _make_result(
             movie_title="1917",
             movie_title_year="2019",
             movie_title_and_year_search="1917 2019",
             index_title_compare="19172019",
         )
-        out = _search_google(result, Config())
+        out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt8579674"
 
@@ -486,7 +489,7 @@ class TestSearchForImdbId:
         )
         spy_tmdb = mocker.patch("movarr.imdb_search._search_tmdb")
         spy_omdb = mocker.patch("movarr.imdb_search._search_omdb")
-        spy_google = mocker.patch("movarr.imdb_search._search_google")
+        spy_google = mocker.patch("movarr.imdb_search._search_duckduckgo")
         result = _make_result()
         cfg = Config()
         out = search_for_imdb_id(result, cfg)
@@ -513,7 +516,7 @@ class TestSearchForImdbId:
         spy_omdb.assert_not_called()
 
     def test_returns_failed_when_all_strategies_exhausted(self, mocker: MockerFixture) -> None:
-        for strategy in ("_search_imdbpie", "_search_tmdb", "_search_omdb", "_search_google"):
+        for strategy in ("_search_imdbpie", "_search_tmdb", "_search_omdb", "_search_duckduckgo"):
             mocker.patch(
                 f"movarr.imdb_search.{strategy}",
                 side_effect=lambda r, c: {**r, "result": "Failed"},
@@ -530,7 +533,7 @@ class TestSearchForImdbId:
                 side_effect=lambda r, c: {**r, "result": "Failed"},
             )
         mocker.patch(
-            "movarr.imdb_search._search_google",
+            "movarr.imdb_search._search_duckduckgo",
             side_effect=lambda r, c: {**r, "result": "Passed", "imdb_id": "tt0133093"},
         )
         result = _make_result()
@@ -714,32 +717,25 @@ class TestSearchOmdbEdgeCases:
         assert "The Matrix" in details
 
 
-# _search_google — sanitise-returns-None and title-mismatch edge cases
+# _search_duckduckgo — sanitise-returns-None and title-mismatch edge cases
 
 
-class TestSearchGoogleEdgeCases:
-    """Additional edge cases for _search_google."""
+class TestSearchDuckDuckGoEdgeCases:
+    """Additional edge cases for _search_duckduckgo."""
 
     def test_empty_title_cannot_be_sanitised_sets_failed(self, mocker: MockerFixture) -> None:
-        """Google hit with an empty title results in sanitise returning falsy."""
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = ""
-        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
-        out = _search_google(_make_result(), Config())
+        """DDG hit with an empty title results in sanitise returning falsy."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS([{"title": "", "href": "https://www.imdb.com/title/tt0133093/"}], mocker)
+        out = _search_duckduckgo(_make_result(), Config())
         assert out["result"] == "Failed"
 
     def test_title_not_in_index_compare_sets_failed(self, mocker: MockerFixture) -> None:
-        """Google hit whose normalised title is not in index_title_compare fails."""
-        mock_gs = mocker.MagicMock()
-        mock_hit = mocker.MagicMock()
-        mock_hit.title = "Something Completely Different 1999"
-        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
-        mock_gs.search.return_value = iter([mock_hit])
-        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
-        # index_title_compare does NOT contain "somethingcompletelydifferent"
+        """DDG hit whose normalised title is not in index_title_compare fails."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [{"title": "Something Completely Different 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
+        )
         result = _make_result(index_title_compare="thematrix1999")
-        out = _search_google(result, Config())
+        out = _search_duckduckgo(result, Config())
         assert out["result"] == "Failed"
