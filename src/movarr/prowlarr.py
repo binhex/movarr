@@ -76,12 +76,9 @@ class ProwlarrClient:
             return
 
         encoded_criteria = urllib.parse.quote_plus(criteria.replace(",", " "))
+        cat_params = "&".join(f"categories={cat.strip()}" for cat in category.split(","))
         base_url = (
-            f"http://{self._cfg.host}:{self._cfg.port}"
-            f"/api/v1/search"
-            f"?query={encoded_criteria}"
-            f"&type=search"
-            f"&categories={category}"
+            f"http://{self._cfg.host}:{self._cfg.port}/api/v1/search?query={encoded_criteria}&type=search&{cat_params}"
         )
         url = base_url if indexer_id is None else f"{base_url}&indexerIds={indexer_id}"
         try:

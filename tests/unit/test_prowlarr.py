@@ -229,6 +229,17 @@ class TestSearch:
         url = mock_http.get.call_args[0][0]
         assert "indexerIds=7" in url
 
+    def test_multi_category_expands_to_repeated_params(self, mocker: MockerFixture) -> None:
+        """Prowlarr expects categories=2000&categories=5000, not categories=2000,5000."""
+        client, mock_http = _make_client(mocker)
+        mock_resp = mocker.MagicMock()
+        mock_resp.json.return_value = []
+        mock_http.get.return_value = mock_resp
+        list(client.search("all", "1080p", "2000,5000"))
+        url = mock_http.get.call_args[0][0]
+        assert "categories=2000&categories=5000" in url
+        assert "categories=2000,5000" not in url
+
     def test_skips_items_with_no_title(self, mocker: MockerFixture) -> None:
         client, mock_http = _make_client(mocker)
         mock_resp = mocker.MagicMock()
