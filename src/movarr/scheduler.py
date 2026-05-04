@@ -92,11 +92,31 @@ def _run_daemon(config: Config) -> None:
     qm_mins = config.schedule.queue_management.schedule_time_mins
     pp_mins = config.schedule.post_processing.schedule_time_mins
 
+    def _search_job() -> None:
+        _task_search(config, qbt, db)
+        try:
+            _log_next_run(scheduler, "search")
+        except Exception:
+            logger.exception("Failed to log next search run time.")
+
+    def _queue_management_job() -> None:
+        _task_queue_management(config, qbt, db)
+        try:
+            _log_next_run(scheduler, "queue_management")
+        except Exception:
+            logger.exception("Failed to log next queue_management run time.")
+
+    def _post_processing_job() -> None:
+        _task_post_processing(config, qbt, db)
+        try:
+            _log_next_run(scheduler, "post_processing")
+        except Exception:
+            logger.exception("Failed to log next post_processing run time.")
+
     scheduler.add_job(
-        _task_search,
+        _search_job,
         trigger="interval",
         minutes=search_mins,
-        args=(config, qbt, db),
         id="search",
         name="Jackett search + filter + add",
         max_instances=1,
@@ -104,20 +124,18 @@ def _run_daemon(config: Config) -> None:
         **_next_run_kwargs(config.schedule.acquisition.run_on_start),
     )
     scheduler.add_job(
-        _task_queue_management,
+        _queue_management_job,
         trigger="interval",
         minutes=qm_mins,
-        args=(config, qbt, db),
         id="queue_management",
         max_instances=1,
         coalesce=True,
         **_next_run_kwargs(config.schedule.queue_management.run_on_start),
     )
     scheduler.add_job(
-        _task_post_processing,
+        _post_processing_job,
         trigger="interval",
         minutes=pp_mins,
-        args=(config, qbt, db),
         id="post_processing",
         name="Post-processing (copy to library)",
         max_instances=1,
@@ -191,6 +209,16 @@ def _connect_qbt(config: Config) -> QBittorrentClient:
     if not qbt.is_connected():
         logger.warning("qBittorrent is not reachable at startup; tasks will retry each interval.")
     return qbt
+
+
+def _log_next_run(scheduler: BackgroundScheduler, job_id: str) -> None:
+    """Log when the given APScheduler job will next run."""
+    job = scheduler.get_job(job_id)
+    if job is None or job.next_run_time is None:
+        logger.info(f"Next {job_id} run time unavailable.")
+        return
+    next_time = job.next_run_time.isoformat(sep=" ", timespec="seconds")
+    logger.info(f"Next {job_id} run at {next_time}.")
 
 
 def _write_pid(pid_path: str) -> None:
