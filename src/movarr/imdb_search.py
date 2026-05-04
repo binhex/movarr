@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 __all__ = ["search_for_imdb_id"]
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
+_OMDB_NOT_FOUND_ERROR = "Movie not found!"
 
 
 def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
@@ -190,8 +191,15 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
 
     omdb_title = data.get("Title")
     omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
-    if not omdb_title or not omdb_norm or omdb_norm not in index_compare:
-        _fail(result, f"OMDb: title '{omdb_title}' does not match '{index_compare}'.")
+    if not omdb_title or not omdb_norm:
+        omdb_error = data.get("Error") or ""
+        if omdb_error and omdb_error != _OMDB_NOT_FOUND_ERROR:
+            _fail(result, f"OMDb: API error for '{title}' ({year}): {omdb_error}")
+        else:
+            _fail(result, f"OMDb: no result for '{title}' ({year}).")
+        return result
+    if omdb_norm not in index_compare:
+        _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
         return result
 
     raw_year = re.sub(r"\D+", "", data.get("Year", ""))

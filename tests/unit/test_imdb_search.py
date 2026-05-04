@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from movarr.config import Config
 from movarr.imdb_search import (
+    _OMDB_NOT_FOUND_ERROR,
     _fail,
     _pass,
     _search_google,
@@ -563,6 +564,82 @@ class TestSearchOmdbEdgeCases:
         mock_http.get.return_value = resp
         out = _search_omdb(_make_result(), cfg)
         assert out["result"] == "Failed"
+
+    def test_no_title_in_response_message_shows_search_query(self, mocker: MockerFixture) -> None:
+        """When OMDb returns no Title the failure message names the search query, not the slug."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        resp.content = json.dumps({"Response": "False", "Error": "Movie not found!"})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+        assert any("The Matrix" in d and "1999" in d for d in out["result_details"])
+        assert not any("index_title_compare" in d or "thematrix" in d for d in out["result_details"])
+
+    def test_no_title_in_response_message_shows_omdb_error(self, mocker: MockerFixture) -> None:
+        """When OMDb returns an Error field, the failure message includes it."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        resp.content = json.dumps({"Response": "False", "Error": "Invalid API key!"})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out["result_details"])
+        assert "Invalid API key!" in details
+        assert "The Matrix" in details
+        assert "1999" in details
+
+    def test_no_title_no_error_field_shows_no_result_message(self, mocker: MockerFixture) -> None:
+        """When OMDb returns no Title and no Error field, the message says 'no result'."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        resp.content = json.dumps({})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out["result_details"])
+        assert "no result" in details
+        assert "The Matrix" in details
+        assert "1999" in details
+
+    def test_movie_not_found_error_shows_no_result_message(self, mocker: MockerFixture) -> None:
+        """OMDb 'Movie not found!' is treated as no result, not as an API error."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        resp.content = json.dumps({"Response": "False", "Error": _OMDB_NOT_FOUND_ERROR})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out["result_details"])
+        assert "no result" in details
+        assert "API error" not in details
+
+    def test_title_mismatch_message_shows_both_titles_not_slug(self, mocker: MockerFixture) -> None:
+        """When OMDb returns a non-matching title the message shows both titles, not the slug."""
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        resp = mocker.MagicMock()
+        resp.content = json.dumps({"Title": "Something Else", "Year": "1999", "imdbID": "tt0099999"})
+        mock_http.get.return_value = resp
+        out = _search_omdb(_make_result(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out["result_details"])
+        assert "Something Else" in details
+        assert "The Matrix" in details
 
 
 # ---------------------------------------------------------------------------
