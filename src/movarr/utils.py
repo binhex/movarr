@@ -19,5 +19,5 @@ def bytes_to_mb(size_bytes: object) -> str:
     """
     try:
         return str(int(float(str(size_bytes))) // 1_000_000)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return "0"

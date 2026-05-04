@@ -60,3 +60,13 @@ class TestBytesToMb:
 
     def test_empty_string_returns_zero(self) -> None:
         assert bytes_to_mb("") == "0"
+
+    def test_none_returns_zero(self) -> None:
+        assert bytes_to_mb(None) == "0"
+
+    def test_infinity_returns_zero(self) -> None:
+        assert bytes_to_mb(float("inf")) == "0"
+        assert bytes_to_mb("inf") == "0"
+
+    def test_overflow_returns_zero(self) -> None:
+        assert bytes_to_mb(10**400) == "0"
