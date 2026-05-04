@@ -373,7 +373,8 @@ class TestSearchGoogle:
         out = _search_google(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_year_not_in_title_sets_failed(self, mocker: MockerFixture) -> None:
+    def test_year_not_in_title_still_passes(self, mocker: MockerFixture) -> None:
+        """Google snippet titles often omit the year; IMDb URL is authoritative enough."""
         mock_gs = mocker.MagicMock()
         mock_hit = mocker.MagicMock()
         mock_hit.title = "The Matrix IMDb"  # no year
@@ -383,7 +384,7 @@ class TestSearchGoogle:
         result = _make_result(index_title_compare="thematrix")
         cfg = Config()
         out = _search_google(result, cfg)
-        assert out["result"] == "Failed"
+        assert out["result"] == "Passed"
 
     def test_import_error_sets_failed(self, mocker: MockerFixture) -> None:
         mocker.patch.dict("sys.modules", {"googlesearch": None})
@@ -391,6 +392,97 @@ class TestSearchGoogle:
         cfg = Config()
         out = _search_google(result, cfg)
         assert out["result"] == "Failed"
+
+    def test_requests_ten_results(self, mocker: MockerFixture) -> None:
+        """Google search must request up to 10 results so we can skip non-IMDb hits."""
+        mock_gs = mocker.MagicMock()
+        mock_hit = mocker.MagicMock()
+        mock_hit.title = "The Matrix 1999"
+        mock_hit.url = "https://www.imdb.com/title/tt0133093/"
+        mock_gs.search.return_value = iter([mock_hit])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        result = _make_result(index_title_compare="thematrix1999")
+        _search_google(result, Config())
+
+        call_kwargs = mock_gs.search.call_args.kwargs
+        assert call_kwargs.get("num_results") == 10
+
+    def test_skips_non_imdb_results_and_finds_match(self, mocker: MockerFixture) -> None:
+        """First result is Wikipedia, second result is IMDb — must skip to the IMDb hit."""
+        mock_gs = mocker.MagicMock()
+        hit1 = mocker.MagicMock()
+        hit1.title = "The Matrix - Wikipedia"
+        hit1.url = "https://en.wikipedia.org/wiki/The_Matrix"
+        hit2 = mocker.MagicMock()
+        hit2.title = "The Matrix (1999) - IMDb"
+        hit2.url = "https://www.imdb.com/title/tt0133093/"
+        mock_gs.search.return_value = iter([hit1, hit2])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        result = _make_result(index_title_compare="thematrix1999")
+        out = _search_google(result, Config())
+        assert out["result"] == "Passed"
+        assert out["imdb_id"] == "tt0133093"
+
+    def test_year_not_required_in_google_title(self, mocker: MockerFixture) -> None:
+        """Google result titles often omit the year (e.g. 'Title - IMDb').
+
+        We should accept the result if the title matches and the URL contains
+        an IMDb tt-number, without requiring the year in the snippet title.
+        """
+        mock_gs = mocker.MagicMock()
+        mock_hit = mocker.MagicMock()
+        mock_hit.title = "Little Amelie or the Character of Rain - IMDb"
+        mock_hit.url = "https://www.imdb.com/title/tt1234567/"
+        mock_gs.search.return_value = iter([mock_hit])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        result = _make_result(
+            movie_title="Little Amelie or the Character of Rain",
+            movie_title_year="2025",
+            movie_title_and_year_search="Little Amelie or the Character of Rain 2025",
+            index_title_compare="littleamelieorthecharacterofrain2025",
+        )
+        out = _search_google(result, Config())
+        assert out["result"] == "Passed"
+        assert out["imdb_id"] == "tt1234567"
+
+    def test_skips_hit_with_wrong_year_in_title(self, mocker: MockerFixture) -> None:
+        """If Google title contains a year that does NOT match, skip that hit."""
+        mock_gs = mocker.MagicMock()
+        hit1 = mocker.MagicMock()
+        hit1.title = "The Matrix (1999) - IMDb"  # wrong year
+        hit1.url = "https://www.imdb.com/title/tt0133093/"
+        hit2 = mocker.MagicMock()
+        hit2.title = "The Matrix Resurrections - IMDb"  # no year, accepted
+        hit2.url = "https://www.imdb.com/title/tt10838180/"
+        mock_gs.search.return_value = iter([hit1, hit2])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        result = _make_result(
+            movie_title="The Matrix Resurrections",
+            movie_title_year="2021",
+            movie_title_and_year_search="The Matrix Resurrections 2021",
+            index_title_compare="thematrixresurrections2021",
+        )
+        out = _search_google(result, Config())
+        assert out["result"] == "Passed"
+        assert out["imdb_id"] == "tt10838180"
+
+    def test_year_in_movie_title_not_rejected(self, mocker: MockerFixture) -> None:
+        """A year-like movie title (e.g. '1917') must not be treated as a wrong-year hit."""
+        mock_gs = mocker.MagicMock()
+        mock_hit = mocker.MagicMock()
+        mock_hit.title = "1917 - IMDb"
+        mock_hit.url = "https://www.imdb.com/title/tt8579674/"
+        mock_gs.search.return_value = iter([mock_hit])
+        mocker.patch.dict("sys.modules", {"googlesearch": mock_gs})
+        result = _make_result(
+            movie_title="1917",
+            movie_title_year="2019",
+            movie_title_and_year_search="1917 2019",
+            index_title_compare="19172019",
+        )
+        out = _search_google(result, Config())
+        assert out["result"] == "Passed"
+        assert out["imdb_id"] == "tt8579674"
 
 
 # ---------------------------------------------------------------------------

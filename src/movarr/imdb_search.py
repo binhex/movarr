@@ -25,6 +25,7 @@ __all__ = ["search_for_imdb_id"]
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
+_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 
 
 def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
@@ -237,40 +238,46 @@ def _search_google(result: ResultDict, _config: Config) -> ResultDict:
             f"imdb {search_term}",
             advanced=True,
             sleep_interval=5,
-            num_results=1,
+            num_results=10,
             timeout=10,
         )
-        hit = next(gen)
-    except StopIteration:
-        _fail(result, f"Google: no results for '{search_term}'.")
-        return result
+        hits = list(gen)
     except Exception as exc:  # noqa: BLE001
         _fail(result, f"Google search error: {exc}")
         return result
 
-    g_title: str = hit.title or ""
-    g_url: str = hit.url or ""
+    for hit in hits:
+        g_title: str = hit.title or ""
+        g_url: str = hit.url or ""
 
-    san = sanitise(g_title)
-    if not san:
-        _fail(result, f"Google: cannot sanitise title '{g_title}'.")
-        return result
-    norm = normalise_for_compare(san)
-    if not norm or norm not in index_compare:
-        _fail(result, f"Google: title '{g_title}' not in index compare.")
+        # If the Google title contains a year that does NOT match the
+        # expected year, skip this hit to avoid returning the wrong film.
+        # Ignore year-like numbers that are literally the movie title
+        # (e.g. "1917", "2012") so we don't false-negative those hits.
+        if year:
+            title_years = _YEAR_RE.findall(g_title)
+            if title_years:
+                movie_title = result.get("movie_title") or ""
+                title_years = [y for y in title_years if y not in movie_title]
+                if title_years and year not in title_years:
+                    continue
+
+        san = sanitise(g_title)
+        if not san:
+            continue
+        norm = normalise_for_compare(san)
+        if not norm or norm not in index_compare:
+            continue
+
+        match = _IMDB_ID_RE.search(g_url)
+        if not match:
+            continue
+
+        imdb_id = match.group()
+        _pass(result, imdb_id, f"Found via Google for '{search_term}'.")
         return result
 
-    if year not in g_title:
-        _fail(result, f"Google: year '{year}' not in title '{g_title}'.")
-        return result
-
-    match = _IMDB_ID_RE.search(g_url)
-    if not match:
-        _fail(result, f"Google: no IMDb ID in URL '{g_url}'.")
-        return result
-
-    imdb_id = match.group()
-    _pass(result, imdb_id, f"Found via Google for '{search_term}'.")
+    _fail(result, f"Google: no results for '{search_term}'.")
     return result
 
 
