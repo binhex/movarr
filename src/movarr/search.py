@@ -66,6 +66,10 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         logger.info("No search criteria configured; skipping search.")
         return
 
+    if not qbt.is_connected():
+        logger.warning("qBittorrent is unreachable; skipping search.")
+        return
+
     indexer_client = get_indexer_client(config)
     if not indexer_client.is_reachable():
         logger.warning(

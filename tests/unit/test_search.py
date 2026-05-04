@@ -129,6 +129,19 @@ class TestRunSearch:
 
         mock_factory.assert_not_called()
 
+    def test_qbittorrent_unreachable_skips_search(self, mocker: MockerFixture) -> None:
+        cfg = Config()
+        qbt = mocker.MagicMock()
+        qbt.is_connected.return_value = False
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_process = mocker.patch("movarr.search._process_criteria")
+        db = mocker.MagicMock()
+
+        run_search(cfg, qbt, db)
+
+        mock_factory.assert_not_called()
+        mock_process.assert_not_called()
+
     def test_jackett_not_reachable_skips_criteria_processing(self, mocker: MockerFixture) -> None:
         cfg = Config()
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
