@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.6.0"
+_CONFIG_VERSION = "2.7.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -75,6 +75,20 @@ def _migrate_v25_to_v26(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v26_to_v27(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.6.0 → v2.7.0: rename good_* fields to allow_* in filters."""
+    filters = raw.setdefault("filters", {})
+    for old, new in (
+        ("good_imdb_title_type_list", "allow_imdb_title_type_list"),
+        ("good_country_list", "allow_country_list"),
+        ("good_language_list", "allow_language_list"),
+    ):
+        if old in filters:
+            filters[new] = filters.pop(old)
+    raw.setdefault("general", {})["config_version"] = "2.7.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -83,6 +97,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.3.0": _migrate_v23_to_v24,
     "2.4.0": _migrate_v24_to_v25,
     "2.5.0": _migrate_v25_to_v26,
+    "2.6.0": _migrate_v26_to_v27,
 }
 
 
@@ -141,9 +156,9 @@ class FiltersConfig(BaseModel):
     minimum_rating: float = 7.0
     minimum_votes: int = 5000
     override_genre: dict[str, OverrideGenreConfig] = Field(default_factory=dict)
-    good_imdb_title_type_list: list[str] = Field(default_factory=lambda: ["movie", "video", "tvmovie"])
-    good_country_list: list[str] = Field(default_factory=list)
-    good_language_list: list[str] = Field(default_factory=list)
+    allow_imdb_title_type_list: list[str] = Field(default_factory=lambda: ["movie", "video", "tvmovie"])
+    allow_country_list: list[str] = Field(default_factory=list)
+    allow_language_list: list[str] = Field(default_factory=list)
     bad_index_title_list: list[str] = Field(default_factory=list)
     bad_genre_list: list[str] = Field(default_factory=list)
     bad_movie_title_list: list[str] = Field(default_factory=list)
