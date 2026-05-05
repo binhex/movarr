@@ -38,11 +38,11 @@ def get_indexer_client(config: Config) -> IndexProxyProtocol:
     """
     selected = config.index_proxy.selected
     if selected == "jackett":
-        from movarr.jackett import JackettClient
+        from movarr.jackett import JackettClient  # noqa: PLC0415
 
         return JackettClient(config)
     if selected == "prowlarr":
-        from movarr.prowlarr import ProwlarrClient
+        from movarr.prowlarr import ProwlarrClient  # noqa: PLC0415
 
         return ProwlarrClient(config)
     raise ValueError(f"Unknown index proxy '{selected}'. Supported values: 'jackett', 'prowlarr'.")

@@ -69,7 +69,7 @@ def filter_by_index(
         lambda r: _check_minimum_size(r, index_site),
         lambda r: _check_maximum_size(r, index_site),
         lambda r: _check_bad_keywords(r, config),
-        lambda r: _check_tv_type(r),
+        _check_tv_type,
         lambda r: _check_bad_movie_titles(r, config),
         lambda r: _check_library(r, config, library_walk),
     ]
@@ -99,7 +99,7 @@ def filter_by_imdb(
     checks = [
         lambda r: _check_good_title_type(r, config),
         lambda r: _check_bad_genre(r, config),
-        lambda r: _check_bitrate(r),
+        _check_bitrate,
         lambda r: _check_year(r, config),
         lambda r: _check_runtime(r, config),
         lambda r: _check_language_country(r, config, "language"),
@@ -450,30 +450,38 @@ def _check_library_canonical(
 # Library walk helpers
 
 
+def _match_library_file(
+    fname: str,
+    title_compare: str,
+    year: str,
+) -> str | None:
+    """Return the full path if *fname* matches *title_compare* and *year*."""
+    if not fname.lower().endswith(_VIDEO_EXTS):
+        return None
+    san = sanitise(fname)
+    if not san:
+        return None
+    lib_title = extract_movie_title(san)
+    lib_year = extract_year(san)
+    if not lib_title or not lib_year:
+        return None
+    norm = normalise_for_compare(lib_title)
+    if not norm or norm not in title_compare:
+        return None
+    if lib_year not in year:
+        return None
+    return fname
+
+
 def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
     """Return absolute paths to library video files matching the index title+year."""
     title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
     found: list[str] = []
-
     for root, _dirs, files in library_walk:
         for fname in files:
-            if not fname.lower().endswith(_VIDEO_EXTS):
-                continue
-            san = sanitise(fname)
-            if not san:
-                continue
-            lib_title = extract_movie_title(san)
-            lib_year = extract_year(san)
-            if not lib_title or not lib_year:
-                continue
-            norm = normalise_for_compare(lib_title)
-            if not norm or norm not in title_compare:
-                continue
-            if lib_year not in year:
-                continue
-            found.append(os.path.join(root, fname))
-
+            if _match_library_file(fname, title_compare, year):
+                found.append(os.path.join(root, fname))
     return found
 
 
@@ -484,21 +492,8 @@ def _find_library_files_by_compare(
     found: list[str] = []
     for root, _dirs, files in library_walk:
         for fname in files:
-            if not fname.lower().endswith(_VIDEO_EXTS):
-                continue
-            san = sanitise(fname)
-            if not san:
-                continue
-            lib_title = extract_movie_title(san)
-            lib_year = extract_year(san)
-            if not lib_title or not lib_year:
-                continue
-            norm = normalise_for_compare(lib_title)
-            if not norm or norm not in title_compare:
-                continue
-            if lib_year not in year:
-                continue
-            found.append(os.path.join(root, fname))
+            if _match_library_file(fname, title_compare, year):
+                found.append(os.path.join(root, fname))
     return found
 
 

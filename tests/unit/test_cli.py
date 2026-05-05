@@ -23,7 +23,6 @@ def _make_config_mock() -> MagicMock:
     cfg = MagicMock()
     cfg.general.db_path = "/fake/movarr.db"
     cfg.general.daemon_mode = "foreground"
-    cfg.general.ffprobe_path = "/usr/bin/ffprobe"
     return cfg
 
 
@@ -152,16 +151,6 @@ class TestCliTestMode:
         CliRunner().invoke(cli, ["--daemon", "--test"])
 
         assert mock_cfg.general.daemon_mode == "background"
-
-    def test_ffprobe_path_written_to_config(self, mocker: MockerFixture) -> None:
-        """The --ffprobe-path CLI value should be stored on config.general.ffprobe_path."""
-        mocker.patch("movarr.cli.create_logger")
-        mock_cfg = _make_config_mock()
-        mocker.patch("movarr.config.load_config", return_value=mock_cfg)
-
-        CliRunner().invoke(cli, ["--ffprobe-path", "/custom/ffprobe", "--test"])
-
-        assert mock_cfg.general.ffprobe_path == "/custom/ffprobe"
 
     def test_create_logger_called(self, mocker: MockerFixture) -> None:
         """create_logger should be invoked regardless of --test flag."""
