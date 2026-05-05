@@ -149,10 +149,19 @@ def _process_criteria(
                 session.db.write(result)
                 continue
 
-            result = fetch_metadata(result, session.config)
-            if result.get("result") != "Passed":
-                session.db.write(result)
-                continue
+            # Try cached IMDb metadata before hitting the API.
+            cached = session.db.find_imdb_metadata(result["imdb_id"])
+            if cached:
+                logger.info("IMDb metadata cache hit for '{}' — skipping API call.", result["imdb_id"])
+                for key, value in cached.items():
+                    result[key] = value  # type: ignore[literal-required]
+                result["result"] = "Passed"
+                result.setdefault("result_details", [])
+            else:
+                result = fetch_metadata(result, session.config)
+                if result.get("result") != "Passed":
+                    session.db.write(result)
+                    continue
 
             result = filter_by_imdb(result, session.config, session.library_walk)
             if result.get("result") != "Passed":

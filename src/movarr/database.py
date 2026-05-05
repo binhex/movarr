@@ -6,7 +6,7 @@ import ast
 import datetime
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger as _logger
 from sqlalchemy import Column, Integer, String, create_engine, text
@@ -413,6 +413,64 @@ class Database:
         """
         with Session(self._engine) as session:
             return session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).first()
+
+    def find_imdb_metadata(self, imdb_id: str) -> dict[str, Any] | None:
+        """Return cached IMDb metadata for *imdb_id* if available.
+
+        Looks up the most recent history record with the given *imdb_id*
+        that has ``imdb_title`` set (indicating a successful metadata fetch).
+        Returns a plain dict suitable for merging into a pipeline result.
+
+        Args:
+            imdb_id: The IMDb identifier (e.g. ``"tt0095169"``).
+
+        Returns:
+            A dict of ``imdb_*`` fields, or ``None`` if no cache hit.
+        """
+        with Session(self._engine) as session:
+            row = (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.imdb_id == imdb_id,
+                    HistoryRecord.imdb_title.isnot(None),
+                )
+                .order_by(HistoryRecord.id.desc())
+                .first()
+            )
+        if row is None:
+            return None
+
+        def _decode(value: object) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    return value
+            return value
+
+        return {
+            "imdb_title": row.imdb_title,
+            "imdb_year": row.imdb_year,
+            "imdb_rating": row.imdb_rating,
+            "imdb_votes": row.imdb_votes,
+            "imdb_title_type": row.imdb_title_type,
+            "imdb_running_time_in_minutes": row.imdb_running_time_in_minutes,
+            "imdb_genres_list": _decode(row.imdb_genres_list),
+            "imdb_plot_summary": row.imdb_plot_summary,
+            "imdb_plot_outline": row.imdb_plot_outline,
+            "imdb_poster_url": row.imdb_poster_url,
+            "imdb_trailer_url": row.imdb_trailer_url,
+            "imdb_language_list": _decode(row.imdb_language_list),
+            "imdb_country_list": _decode(row.imdb_country_list),
+            "imdb_certification": row.imdb_certification,
+            "imdb_cert_source": row.imdb_cert_source,
+            "imdb_credits_director_list": _decode(row.imdb_credits_director_list),
+            "imdb_credits_writer_list": _decode(row.imdb_credits_writer_list),
+            "imdb_credits_cast_list": _decode(row.imdb_credits_cast_list),
+            "imdb_credits_character_list": _decode(row.imdb_credits_character_list),
+        }
 
     def genres_for_tag(self, torrent_tag: str) -> list[str]:
         """Return the genre list stored for *torrent_tag*, or an empty list.

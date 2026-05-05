@@ -146,6 +146,90 @@ class TestGenresForTag:
         assert db2.genres_for_tag("bad-genre-tag") == []
 
 
+# IMDb metadata cache
+
+
+class TestFindImdbMetadata:
+    """Database.find_imdb_metadata() must return cached fields by imdb_id."""
+
+    def test_cache_hit_returns_metadata_dict(self, db: Database) -> None:
+        db.write(
+            _minimal_result(
+                torrent_tag="cache-hit-001",
+                imdb_id="tt0468569",
+                imdb_title="The Dark Knight",
+                imdb_year="2008",
+                imdb_rating="9.0",
+                imdb_votes="2500000",
+                imdb_genres_list=["Action", "Crime", "Drama"],
+                imdb_certification="PG-13",
+                imdb_cert_source="imdbpie",
+            )
+        )
+        cached = db.find_imdb_metadata("tt0468569")
+        assert cached is not None
+        assert cached["imdb_title"] == "The Dark Knight"
+        assert cached["imdb_year"] == "2008"
+        assert cached["imdb_rating"] == "9.0"
+        assert cached["imdb_genres_list"] == ["Action", "Crime", "Drama"]
+        assert cached["imdb_certification"] == "PG-13"
+        assert cached["imdb_cert_source"] == "imdbpie"
+
+    def test_cache_miss_returns_none(self, db: Database) -> None:
+        assert db.find_imdb_metadata("tt0000000") is None
+
+    def test_cache_ignores_rows_without_imdb_title(self, db: Database) -> None:
+        """Rows where the metadata fetch never succeeded (imdb_title is None) are ignored."""
+        db.write(_minimal_result(torrent_tag="no-title-001", imdb_id="tt9999999"))
+        assert db.find_imdb_metadata("tt9999999") is None
+
+    def test_cache_prefers_most_recent_row(self, db: Database) -> None:
+        """When multiple rows exist, the one with the highest id is returned."""
+        db.write(
+            _minimal_result(
+                torrent_tag="old-001",
+                imdb_id="tt0468569",
+                imdb_title="Old Title",
+                imdb_year="2007",
+            )
+        )
+        db.write(
+            _minimal_result(
+                torrent_tag="new-001",
+                imdb_id="tt0468569",
+                imdb_title="The Dark Knight",
+                imdb_year="2008",
+            )
+        )
+        cached = db.find_imdb_metadata("tt0468569")
+        assert cached is not None
+        assert cached["imdb_title"] == "The Dark Knight"
+        assert cached["imdb_year"] == "2008"
+
+    def test_cache_decodes_json_fields(self, db: Database) -> None:
+        db.write(
+            _minimal_result(
+                torrent_tag="json-001",
+                imdb_id="tt1234567",
+                imdb_title="Test",
+                imdb_language_list=["en", "fr"],
+                imdb_country_list=["us", "gb"],
+                imdb_credits_director_list=["Christopher Nolan"],
+                imdb_credits_writer_list=["Jonathan Nolan"],
+                imdb_credits_cast_list=[["Christian Bale", "Bruce Wayne"]],
+                imdb_credits_character_list=["Bruce Wayne"],
+            )
+        )
+        cached = db.find_imdb_metadata("tt1234567")
+        assert cached is not None
+        assert cached["imdb_language_list"] == ["en", "fr"]
+        assert cached["imdb_country_list"] == ["us", "gb"]
+        assert cached["imdb_credits_director_list"] == ["Christopher Nolan"]
+        assert cached["imdb_credits_writer_list"] == ["Jonathan Nolan"]
+        assert cached["imdb_credits_cast_list"] == [["Christian Bale", "Bruce Wayne"]]
+        assert cached["imdb_credits_character_list"] == ["Bruce Wayne"]
+
+
 # Database upgrade path
 
 
