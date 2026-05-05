@@ -290,7 +290,7 @@ class TestFilterByIndexBitrate:
     def test_passes_when_bitrate_meets_minimum(self) -> None:
         # 8000 MB / 120 min = ~66 MB/min, min = 50
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             index_size=str(8_000_000_000),
             imdb_running_time_in_minutes="120",
         )
@@ -301,7 +301,7 @@ class TestFilterByIndexBitrate:
     def test_fails_when_bitrate_below_minimum(self) -> None:
         # 1000 MB / 120 min = ~8 MB/min, min = 50
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             index_size=str(1_000_000_000),
             imdb_running_time_in_minutes="120",
         )
@@ -317,7 +317,7 @@ class TestFilterByIndexBitrate:
 
     def test_fails_when_no_index_size_available(self) -> None:
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             imdb_running_time_in_minutes="120",
         )
         result.pop("index_size", None)
@@ -775,7 +775,7 @@ class TestFilterByImdbBitrateNoRuntime:
     """Bitrate check fails when runtime is absent."""
 
     def test_fails_when_minimum_bitrate_set_but_no_runtime(self) -> None:
-        result = _imdb_result(_filter_minimum_bitrate_mb="50")
+        result = _imdb_result(_filter_minimum_bitrate_mb=50)
         result.pop("imdb_running_time_in_minutes", None)
         out = filter_by_imdb(result, Config())
         assert out["result"] != "Passed"
@@ -991,6 +991,19 @@ class TestFilterByIndexLibraryWalkEdgeCases:
         out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
         assert out["result"] == "Passed"
 
+    def test_library_file_normalise_returns_none_skipped(self) -> None:
+        """File whose title normalises to None is skipped (covers _match_library_file line 496)."""
+        cfg = Config()
+        cfg.general.library_path_list = ["/library"]
+        result = _index_result(
+            index_title_resolution="1080",
+            movie_title_compare="thedarkknight",
+            movie_title_year="2008",
+        )
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["imdb 2008 1080p.mkv"])]
+        out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+
 
 # _evaluate_library_files: resolution edge cases
 
@@ -1165,7 +1178,7 @@ class TestCheckBitrateEdgeCases:
 
         result = _imdb_result(imdb_running_time_in_minutes="0")
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
-        result["_filter_minimum_bitrate_mb"] = "50"
+        result["_filter_minimum_bitrate_mb"] = 50
         result["index_size"] = "8000000000"
         out = _check_bitrate(result)
         assert out["result"] == "Failed"

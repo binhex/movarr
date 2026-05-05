@@ -183,10 +183,20 @@ class QBittorrentClient:
                 continue
 
             ts = info.get("last_activity") if filter_type == "last_activity" else info.get("added_on")
-            if not ts:  # None or 0 (never had network activity)
+            if ts is None:
                 continue
 
-            age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
+            if filter_type == "last_activity":
+                if ts == 0:
+                    # Never had network activity — treat as infinitely old.
+                    age_mins = float("inf")
+                else:
+                    age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
+            else:
+                # added_on: 0 is "not set" in qBittorrent — skip.
+                if ts == 0:
+                    continue
+                age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
             candidates[torrent_hash] = {
                 "name": info["name"],
                 "age_mins": age_mins,

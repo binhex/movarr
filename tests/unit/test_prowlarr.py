@@ -121,6 +121,13 @@ class TestParseResult:
         assert result is not None
         assert "imdb_id" not in result
 
+    def test_imdb_id_tt_prefix_preserved(self, mocker: MockerFixture) -> None:
+        """Prowlarr imdbId string 'tt0113627' is kept as-is."""
+        client, _ = _make_client(mocker)
+        result = client._parse_result(self._item(imdbId="tt0113627"))
+        assert result is not None
+        assert result.get("imdb_id") == "tt0113627"
+
     def test_missing_optional_fields_default_to_empty(self, mocker: MockerFixture) -> None:
         """Optional fields that are absent or null default to '' or '0'."""
         client, _ = _make_client(mocker)

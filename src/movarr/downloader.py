@@ -49,7 +49,12 @@ class HttpClient:
 
     @backoff.on_exception(
         backoff.expo,
-        (socket.timeout, requests.exceptions.Timeout, requests.exceptions.HTTPError),
+        (
+            socket.timeout,
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+        ),
         max_tries=10,
     )
     def _request(

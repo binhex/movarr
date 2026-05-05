@@ -294,14 +294,14 @@ def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
 def _check_bitrate(result: ResultDict) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
-    if not min_bitrate_mb:
+    if min_bitrate_mb is None:
         return _pass(result, "No minimum bitrate defined.")
 
     raw_size = result.get("index_size")
     runtime = result.get("imdb_running_time_in_minutes")
     if not raw_size:
         return _fail(result, "No index size available for bitrate check.")
-    if not runtime:
+    if runtime is None:
         return _fail(result, "No runtime available for bitrate check.")
 
     try:
@@ -334,7 +334,7 @@ def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
         return _pass(result, "No minimum runtime defined.")
 
     runtime = result.get("imdb_running_time_in_minutes")
-    if not runtime:
+    if runtime is None:
         return _fail(result, "No runtime available for runtime check.")
 
     if int(runtime) >= int(min_runtime):
@@ -441,7 +441,7 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
         return True
 
     imdb_votes = result.get("imdb_votes")
-    if not imdb_votes:
+    if imdb_votes is None:
         _fail(result, "No IMDb votes available; assuming below threshold.")
         return False
 
@@ -492,7 +492,11 @@ def _match_library_file(
     if not lib_title or not lib_year:
         return None
     norm = normalise_for_compare(lib_title)
-    if not norm or norm not in title_compare:
+    if not norm:
+        return None
+    # title_compare is already normalised; require exact match to prevent
+    # substring false positives (e.g. "rings" matching "thelordoftherings").
+    if norm != title_compare:
         return None
     if lib_year not in year:
         return None

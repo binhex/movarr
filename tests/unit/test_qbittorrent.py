@@ -244,8 +244,29 @@ class TestIdentifyForDeletion:
 
         assert "hash1" not in result
 
-    def test_skips_torrent_with_zero_timestamp(self, mocker: MockerFixture) -> None:
-        """Torrent with ts=0 (never had network activity) is skipped."""
+    def test_zero_last_activity_treated_as_infinitely_old(self, mocker: MockerFixture) -> None:
+        """Torrent with last_activity=0 (never had network activity) is treated as very old."""
+        client, _ = _make_client(mocker)
+        torrent_map = {
+            "hash1": {"state": "stalledDL", "name": "Never Active", "last_activity": 0},
+        }
+        result = client.identify_for_deletion(torrent_map, "stalledDL", 30, "last_activity")
+
+        assert "hash1" in result
+        assert result["hash1"]["age_mins"] == float("inf")
+
+    def test_none_last_activity_skipped(self, mocker: MockerFixture) -> None:
+        """Torrent with last_activity=None is skipped."""
+        client, _ = _make_client(mocker)
+        torrent_map = {
+            "hash1": {"state": "stalledDL", "name": "No Activity Key", "last_activity": None},
+        }
+        result = client.identify_for_deletion(torrent_map, "stalledDL", 30, "last_activity")
+
+        assert "hash1" not in result
+
+    def test_zero_added_on_skipped(self, mocker: MockerFixture) -> None:
+        """Torrent with added_on=0 is skipped (None vs 0 distinction)."""
         client, _ = _make_client(mocker)
         torrent_map = {
             "hash1": {"state": "metaDL", "name": "Never Active", "added_on": 0},
