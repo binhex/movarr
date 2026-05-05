@@ -383,28 +383,28 @@ class TestFilterByImdbGenre:
 
 
 class TestFilterByImdbLanguage:
-    """Language allowlist filter (good_language_list)."""
+    """Language allowlist filter (allow_language_list)."""
 
     def test_matching_language_passes(self) -> None:
-        cfg = _make_config(good_language_list=["english"])
+        cfg = _make_config(allow_language_list=["english"])
         result = _imdb_result(imdb_language_list=["English"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_non_matching_language_fails(self) -> None:
-        cfg = _make_config(good_language_list=["english"])
+        cfg = _make_config(allow_language_list=["english"])
         result = _imdb_result(imdb_language_list=["French"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
     def test_empty_language_list_skips_check(self) -> None:
-        cfg = Config()  # good_language_list = []
+        cfg = Config()  # allow_language_list = []
         result = _imdb_result(imdb_language_list=["Klingon"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_no_imdb_language_data_passes(self) -> None:
-        cfg = _make_config(good_language_list=["english"])
+        cfg = _make_config(allow_language_list=["english"])
         result = _imdb_result(imdb_language_list=None)
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
@@ -414,28 +414,28 @@ class TestFilterByImdbLanguage:
 
 
 class TestFilterByImdbCountry:
-    """Country allowlist filter (good_country_list)."""
+    """Country allowlist filter (allow_country_list)."""
 
     def test_matching_country_passes(self) -> None:
-        cfg = _make_config(good_country_list=["us"])
+        cfg = _make_config(allow_country_list=["us"])
         result = _imdb_result(imdb_country_list=["US"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_non_matching_country_fails(self) -> None:
-        cfg = _make_config(good_country_list=["us"])
+        cfg = _make_config(allow_country_list=["us"])
         result = _imdb_result(imdb_country_list=["FR"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
     def test_empty_country_list_skips_check(self) -> None:
-        cfg = Config()  # good_country_list = []
+        cfg = Config()  # allow_country_list = []
         result = _imdb_result(imdb_country_list=["ZW"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_no_imdb_country_data_passes(self) -> None:
-        cfg = _make_config(good_country_list=["us"])
+        cfg = _make_config(allow_country_list=["us"])
         result = _imdb_result(imdb_country_list=None)
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
@@ -707,14 +707,14 @@ class TestFilterByIndexBadMovieTitles:
         assert out["result"] == "Passed"
 
 
-# filter_by_imdb: empty good_imdb_title_type_list
+# filter_by_imdb: empty allow_imdb_title_type_list
 
 
 class TestFilterByImdbTitleTypeEmptyList:
-    """An empty good_imdb_title_type_list skips the title-type gate."""
+    """An empty allow_imdb_title_type_list skips the title-type gate."""
 
     def test_any_type_passes_when_list_empty(self) -> None:
-        cfg = _make_config(good_imdb_title_type_list=[])
+        cfg = _make_config(allow_imdb_title_type_list=[])
         result = _imdb_result(imdb_title_type="videoGame")
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"

@@ -1,6 +1,6 @@
 # movarr
 
-Automated movie torrent acquisition, filtering, and post-processing daemon.
+Automated movie downloader based on IMDb criteria filtering.
 
 ## Features
 
@@ -125,9 +125,9 @@ Controls which torrents pass the IMDb quality gate.
 | `minimum_rating` | Minimum IMDb rating (0–10). | `7.0` |
 | `minimum_votes` | Minimum IMDb vote count. | `5000` |
 | `override_genre` | Map of genre → `{minimum_rating, minimum_votes}` to relax thresholds for specific genres. | `{}` |
-| `good_imdb_title_type_list` | Allowed IMDb title types. | `[movie, video, tvmovie]` |
-| `good_country_list` | Allowed production country codes (ISO 3166-1 alpha-2). Empty = allow all. | `[]` |
-| `good_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
+| `allow_imdb_title_type_list` | Allowed IMDb title types. | `[movie, video, tvmovie]` |
+| `allow_country_list` | Allowed production country codes (ISO 3166-1 alpha-2). Empty = allow all. | `[]` |
+| `allow_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
 | `bad_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
 | `bad_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
 | `bad_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
@@ -355,7 +355,7 @@ the Plex/Jellyfin naming convention and that all library roots are listed under 
 
 **Q: How do I prevent movarr from downloading non-English movies?**
 
-Set `filters.good_language_list` to `[en]`. movarr will reject any title where the primary IMDb language is
+Set `filters.allow_language_list` to `[en]`. movarr will reject any title where the primary IMDb language is
 not English.
 
 **Q: Can I force-accept a specific director's entire filmography?**
