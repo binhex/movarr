@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import unicodedata
 import urllib.parse
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -26,10 +27,8 @@ __all__ = ["search_for_imdb_id"]
 
 _DDGS: Any = None
 
-try:
+with contextlib.suppress(Exception):
     from ddgs import DDGS as _DDGS  # type: ignore[no-redef]
-except Exception:  # noqa: BLE001
-    pass
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
@@ -226,6 +225,42 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
 # Strategy 4 — Google (last resort; may be slow / unreliable)
 
 
+_TRANSLATE_MAP = str.maketrans(
+    {
+        "ß": "ss",
+        "Ø": "O",
+        "ø": "o",
+        "Æ": "AE",
+        "æ": "ae",
+        "Œ": "OE",
+        "œ": "oe",
+        "Ð": "D",
+        "ð": "d",
+        "Þ": "Th",
+        "þ": "th",
+        "Ł": "L",
+        "ł": "l",
+        "Đ": "D",
+        "đ": "d",
+        "ı": "i",
+        "İ": "I",
+    }
+)
+
+
+def _strip_accents(text: str) -> str:
+    """Remove accents from Unicode characters, leaving ASCII equivalents.
+
+    Decomposes combined characters (e.g. ``é`` → ``e`` + combining accent),
+    then strips remaining non-ASCII codepoints.  Also maps a handful of
+    common non-decomposable Latin characters (``ß``, ``ø``, ``æ``, etc.)
+    to their ASCII equivalents so they are not silently dropped.
+    """
+    decomposed = unicodedata.normalize("NFD", text)
+    decomposed = decomposed.translate(_TRANSLATE_MAP)
+    return "".join(c for c in decomposed if ord(c) < 128)
+
+
 def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
     """Search IMDb ID via DuckDuckGo web search.
 
@@ -262,20 +297,24 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
                 if title_years and year not in title_years:
                     continue
 
-        san = sanitise(d_title)
-        if not san:
-            continue
-        norm = normalise_for_compare(san)
-        if not norm or norm not in index_compare:
-            continue
+        # DDG titles may contain accents that the indexer strips out, or
+        # may preserve non-decomposable characters that the indexer keeps.
+        # Try both the raw title and an accent-stripped variant.
+        for d_title_variant in (d_title, _strip_accents(d_title)):
+            san = sanitise(d_title_variant)
+            if not san:
+                continue
+            norm = normalise_for_compare(san)
+            if not norm or norm not in index_compare:
+                continue
 
-        match = _IMDB_ID_RE.search(d_url)
-        if not match:
-            continue
+            match = _IMDB_ID_RE.search(d_url)
+            if not match:
+                continue
 
-        imdb_id = match.group()
-        _pass(result, imdb_id, f"Found via DuckDuckGo for '{search_term}'.")
-        return result
+            imdb_id = match.group()
+            _pass(result, imdb_id, f"Found via DuckDuckGo for '{search_term}'.")
+            return result
 
     _fail(result, f"DuckDuckGo: no results for '{search_term}'.")
     return result

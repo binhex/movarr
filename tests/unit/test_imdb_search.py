@@ -475,6 +475,28 @@ class TestSearchDuckDuckGo:
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt8579674"
 
+    def test_accented_ddg_title_matches_unaccented_index(self, mocker: MockerFixture) -> None:
+        """DDG returns accented titles; index title has no accents. Must still match."""
+        mock_ddgs = mocker.patch("movarr.imdb_search._DDGS")
+        mock_ddgs.return_value = _MockDDGS(
+            [
+                {
+                    "title": "Les Enquêtes du département V : L'Effet papillon",
+                    "href": "https://www.imdb.com/title/tt10451312/",
+                }
+            ],
+            mocker,
+        )
+        result = _make_result(
+            movie_title="Les Enquetes du Departement V LEffet Papillon",
+            movie_title_year="2021",
+            movie_title_and_year_search="Les Enquetes du Departement V LEffet Papillon 2021",
+            index_title_compare="lesenquetesdudepartement5leffetpapillon2021",
+        )
+        out = _search_duckduckgo(result, Config())
+        assert out["result"] == "Passed"
+        assert out["imdb_id"] == "tt10451312"
+
 
 # search_for_imdb_id (orchestrator)
 
