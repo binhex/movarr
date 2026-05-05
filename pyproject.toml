@@ -35,7 +35,6 @@ dependencies = [
     "qbittorrent-api",
     "imdbpie",
     "xmltodict",
-    "ffmpeg-python",
     "pycountry>=26.2.16",
     "omdb>=0.10.1",
     "ddgs>=9.0.0",
@@ -137,10 +136,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "omdb"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "ffmpeg"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

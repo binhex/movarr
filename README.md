@@ -79,7 +79,7 @@ movarr --help
 | `--log-path <path>` | Path to the log file. | `logs/movarr.log` |
 | `--log-level <level>` | Logging level for console output. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. | `INFO` |
 | `--pid-path <path>` | Path to PID file (daemon mode only). | `<config-dir>/movarr.pid` |
-| `--ffprobe-path <path>` | Path to the ffprobe binary. | `/usr/bin/ffprobe` |
+
 | `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
@@ -99,7 +99,7 @@ automatically on first run. The file is divided into the sections below.
 | `log_level_file` | File logging level. | `debug` |
 | `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. | `[]` |
 | `db_path` | Path to the SQLite history database. | `db/movarr.db` |
-| `ffprobe_path` | Path to the `ffprobe` binary used for bitrate analysis during post-processing. | `/usr/bin/ffprobe` |
+
 
 ### `schedule`
 

@@ -12,7 +12,6 @@ from movarr.file_utils import (
     copy_with_verify,
     delete_file,
     make_directory,
-    resolution_from_ffprobe,
     resolution_label_from_height,
     walk_library,
 )
@@ -252,73 +251,6 @@ class TestCopyWithVerify:
         finally:
             _loguru_logger.remove(sink_id)
         assert any("erifying" in r["message"] for r in records)
-
-
-class TestResolutionFromFfprobe:
-    """Tests for resolution_from_ffprobe()."""
-
-    def test_returns_none_when_ffmpeg_not_installed(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mocker.patch.dict("sys.modules", {"ffmpeg": None})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result is None
-
-    def test_maps_1920_width_to_1080(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{"width": 1920, "height": 1080}]}
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result == "1080"
-
-    def test_maps_3840_width_to_2160(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{"width": 3840, "height": 2160}]}
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result == "2160"
-
-    def test_maps_1280_width_to_720(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{"width": 1280, "height": 720}]}
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result == "720"
-
-    def test_returns_raw_height_for_unmapped_width(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{"width": 854, "height": 480}]}
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result == "480"
-
-    def test_returns_none_on_probe_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.Error = RuntimeError
-        mock_ffmpeg.probe.side_effect = RuntimeError("probe failed")
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result is None
-
-    def test_uses_custom_ffprobe_path(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{"width": 1920, "height": 1080}]}
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"), ffprobe_path="/usr/bin/ffprobe")
-        assert result == "1080"
-        _, kwargs = mock_ffmpeg.probe.call_args
-        assert kwargs.get("cmd") == "/usr/bin/ffprobe"
-
-    def test_returns_none_on_key_error(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        mock_ffmpeg = mocker.MagicMock()
-        mock_ffmpeg.probe.return_value = {"streams": [{}]}  # missing width/height
-        mock_ffmpeg.Error = RuntimeError
-        mocker.patch.dict("sys.modules", {"ffmpeg": mock_ffmpeg})
-        result = resolution_from_ffprobe(str(tmp_path / "file.mkv"))
-        assert result is None
 
 
 class TestResolutionLabelFromHeight:

@@ -90,7 +90,6 @@ class GeneralConfig(BaseModel):
     log_level_file: str = "info"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db/movarr.db"
-    ffprobe_path: str = "/usr/bin/ffprobe"
 
     @field_validator("daemon_mode")
     @classmethod

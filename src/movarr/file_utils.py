@@ -15,16 +15,11 @@ __all__ = [
     "copy_with_verify",
     "make_directory",
     "delete_file",
-    "resolution_from_ffprobe",
     "resolution_label_from_height",
 ]
 
-# Mapping from pixel width to canonical resolution height string.
-_WIDTH_TO_HEIGHT: dict[int, str] = {
-    1280: "720",
-    1920: "1080",
-    3840: "2160",
-}
+# Resolution height strings recognised by the post-processor routing logic.
+_KNOWN_HEIGHTS: frozenset[str] = frozenset({"720", "1080", "2160"})
 
 
 def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[str]]]:
@@ -157,38 +152,6 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
 
     _logger.info("Verified '{}' (sha256={}).", dst_path, dst_hash[:12])
     return True
-
-
-def resolution_from_ffprobe(file_path: str | Path, ffprobe_path: str | None = None) -> str | None:
-    """Return the resolution height string by probing *file_path* with ffprobe.
-
-    Maps pixel widths 1280→720, 1920→1080, 3840→2160.  Other widths fall
-    through to the raw height value.
-
-    Args:
-        file_path: Path to the media file.
-        ffprobe_path: Path to the ffprobe binary.  Uses PATH if ``None``.
-
-    Returns:
-        Resolution as a string (e.g. ``"1080"``), or ``None`` on failure.
-    """
-    try:
-        import ffmpeg
-    except ImportError:
-        _logger.warning("ffmpeg-python not installed; cannot probe '{}'.", file_path)
-        return None
-
-    try:
-        probe_kwargs: dict[str, str | Path] = {}
-        if ffprobe_path:
-            probe_kwargs["cmd"] = ffprobe_path
-        info = ffmpeg.probe(str(file_path), select_streams="v", **probe_kwargs)
-        width: int = info["streams"][0]["width"]
-        height: str = str(info["streams"][0]["height"])
-        return _WIDTH_TO_HEIGHT.get(width, height)
-    except (ffmpeg.Error, KeyError, IndexError) as exc:
-        _logger.warning("ffprobe failed on '{}': {}.", file_path, exc)
-        return None
 
 
 def resolution_label_from_height(height: str | None) -> str:

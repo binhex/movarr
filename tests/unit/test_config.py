@@ -37,10 +37,6 @@ class TestGeneralConfigDefaults:
         cfg = GeneralConfig()
         assert cfg.db_path
 
-    def test_default_ffprobe_path_is_set(self) -> None:
-        cfg = GeneralConfig()
-        assert cfg.ffprobe_path
-
     def test_invalid_daemon_mode_raises(self) -> None:
         with pytest.raises(ValidationError):
             GeneralConfig(daemon_mode="invalid")

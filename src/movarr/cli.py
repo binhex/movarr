@@ -58,14 +58,6 @@ _PROJECT_ROOT = get_project_root()
     help="Path to PID file (daemon mode). Defaults to movarr.pid in the config directory.",
 )
 @click.option(
-    "--ffprobe-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default="/usr/bin/ffprobe",
-    show_default=True,
-    metavar="<path>",
-    help="Path to ffprobe binary.",
-)
-@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -84,7 +76,6 @@ def cli(
     log_path: str,
     log_level: str,
     pid_path: str | None,
-    ffprobe_path: str,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -116,8 +107,6 @@ def cli(
     # Override config paths with CLI values so they take precedence.
     config.general.db_path = db_path
     config.general.daemon_mode = "background" if daemon else "foreground"
-    if ffprobe_path:
-        config.general.ffprobe_path = ffprobe_path
 
     if test:
         click.echo("Configuration loaded successfully. Test mode — exiting.")
