@@ -58,14 +58,6 @@ _PROJECT_ROOT = get_project_root()
     help="Path to PID file (daemon mode). Defaults to movarr.pid in the config directory.",
 )
 @click.option(
-    "--ffprobe-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default="/usr/bin/ffprobe",
-    show_default=True,
-    metavar="<path>",
-    help="Path to ffprobe binary.",
-)
-@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -78,13 +70,12 @@ _PROJECT_ROOT = get_project_root()
     help="Validate configuration and exit without running any tasks.",
 )
 @click.version_option(version=_VERSION, prog_name="movarr")
-def cli(
+def cli(  # noqa: PLR0913
     config_path: str,
     db_path: str,
     log_path: str,
     log_level: str,
     pid_path: str | None,
-    ffprobe_path: str,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -109,21 +100,19 @@ def cli(
     if pid_path is None:
         pid_path = str(Path(config_path).parent / "movarr.pid")
 
-    from movarr.config import load_config
+    from movarr.config import load_config  # noqa: PLC0415
 
     config = load_config(config_path)
 
     # Override config paths with CLI values so they take precedence.
     config.general.db_path = db_path
     config.general.daemon_mode = "background" if daemon else "foreground"
-    if ffprobe_path:
-        config.general.ffprobe_path = ffprobe_path
 
     if test:
         click.echo("Configuration loaded successfully. Test mode — exiting.")
         return
 
-    from movarr.scheduler import run
+    from movarr.scheduler import run  # noqa: PLC0415
 
     run(config, pid_path=pid_path)
 

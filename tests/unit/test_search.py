@@ -230,6 +230,7 @@ class TestProcessCriteria:
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -253,6 +254,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -275,6 +277,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -300,6 +303,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -329,6 +333,7 @@ class TestProcessCriteria:
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -393,6 +398,7 @@ class TestProcessCriteria:
         qbt.add_torrent.return_value = updated_result
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
@@ -420,10 +426,128 @@ class TestProcessCriteria:
         qbt.add_torrent.return_value = None
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
 
         self._call(mocker, jackett, qbt, db)
 
         mock_imdb_search.assert_not_called()
+
+    def test_imdb_metadata_cache_hit_skips_fetch_metadata(self, mocker: MockerFixture) -> None:
+        """When cached IMDb metadata exists, fetch_metadata is not called."""
+        mocker.patch(
+            "movarr.search.filter_by_index",
+            side_effect=lambda r, *a, **kw: {**r, "imdb_id": "tt0133093", "result": "Passed"},
+        )
+        mock_metadata = mocker.patch("movarr.search.fetch_metadata")
+        mocker.patch(
+            "movarr.search.filter_by_imdb",
+            side_effect=lambda r, *a, **kw: {**r, "result": "Passed"},
+        )
+        mocker.patch("movarr.search.send_queued_notification")
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter([_base_result()])
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.return_value = None
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = {
+            "imdb_title": "The Matrix",
+            "imdb_year": "1999",
+            "imdb_rating": "8.7",
+            "imdb_genres_list": ["Action", "Sci-Fi"],
+        }
+
+        self._call(mocker, jackett, qbt, db)
+
+        mock_metadata.assert_not_called()
+        qbt.add_torrent.assert_called_once()
+        db.write.assert_called_once()
+
+    def test_imdb_metadata_cache_miss_calls_fetch_metadata(self, mocker: MockerFixture) -> None:
+        """When no cached IMDb metadata exists, fetch_metadata is called as normal."""
+        mocker.patch(
+            "movarr.search.filter_by_index",
+            side_effect=lambda r, *a, **kw: {**r, "imdb_id": "tt0133093", "result": "Passed"},
+        )
+        mock_metadata = mocker.patch(
+            "movarr.search.fetch_metadata",
+            side_effect=lambda r, *a, **kw: {**r, "result": "Passed"},
+        )
+        mocker.patch(
+            "movarr.search.filter_by_imdb",
+            side_effect=lambda r, *a, **kw: {**r, "result": "Passed"},
+        )
+        mocker.patch("movarr.search.send_queued_notification")
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter([_base_result()])
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.return_value = None
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
+
+        self._call(mocker, jackett, qbt, db)
+
+        mock_metadata.assert_called_once()
+
+    def test_imdb_metadata_cache_hit_populates_result_dict(self, mocker: MockerFixture) -> None:
+        """Cached fields are merged into the result dict before filtering."""
+        mocker.patch(
+            "movarr.search.filter_by_index",
+            side_effect=lambda r, *a, **kw: {**r, "imdb_id": "tt0133093", "result": "Passed"},
+        )
+        mocker.patch("movarr.search.fetch_metadata")
+        mock_filter_imdb = mocker.patch(
+            "movarr.search.filter_by_imdb",
+            side_effect=lambda r, *a, **kw: {**r, "result": "Passed"},
+        )
+        mocker.patch("movarr.search.send_queued_notification")
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter([_base_result()])
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.return_value = None
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = {
+            "imdb_title": "The Matrix",
+            "imdb_year": "1999",
+            "imdb_rating": "8.7",
+            "imdb_genres_list": ["Action", "Sci-Fi"],
+        }
+
+        self._call(mocker, jackett, qbt, db)
+
+        call_args = mock_filter_imdb.call_args
+        result_passed = call_args[0][0] if call_args else {}
+        assert result_passed.get("imdb_title") == "The Matrix"
+        assert result_passed.get("imdb_rating") == "8.7"
+        assert result_passed.get("imdb_genres_list") == ["Action", "Sci-Fi"]
+
+    def test_imdb_metadata_cache_hit_with_failed_filter_still_writes_db(self, mocker: MockerFixture) -> None:
+        """Even if the IMDb filter fails, a cache hit still skips the API call."""
+        mocker.patch(
+            "movarr.search.filter_by_index",
+            side_effect=lambda r, *a, **kw: {**r, "imdb_id": "tt0133093", "result": "Passed"},
+        )
+        mock_metadata = mocker.patch("movarr.search.fetch_metadata")
+        mocker.patch(
+            "movarr.search.filter_by_imdb",
+            side_effect=lambda r, *a, **kw: {**r, "result": "Failed"},
+        )
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter([_base_result()])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = {
+            "imdb_title": "The Matrix",
+            "imdb_year": "1999",
+        }
+
+        self._call(mocker, jackett, qbt, db)
+
+        mock_metadata.assert_not_called()
+        db.write.assert_called_once()
 
     def test_multiple_results_each_processed(self, mocker: MockerFixture) -> None:
         mocker.patch(

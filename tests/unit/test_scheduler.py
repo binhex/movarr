@@ -393,7 +393,7 @@ class TestRunDaemonSignalHandler:
 
         captured_handlers: dict = {}
 
-        def capture_signal(sig, handler):
+        def capture_signal(sig: object, handler: object) -> None:
             captured_handlers[sig] = handler
 
         mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)
@@ -424,7 +424,7 @@ class TestRunDaemonSignalHandler:
 
         captured_handlers: dict = {}
 
-        def capture_signal(sig, handler):
+        def capture_signal(sig: object, handler: object) -> None:
             captured_handlers[sig] = handler
 
         mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)

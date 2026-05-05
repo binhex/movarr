@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.5.0"
+_CONFIG_VERSION = "2.6.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +68,13 @@ def _migrate_v24_to_v25(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v25_to_v26(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.5.0 → v2.6.0: remove deprecated ffprobe_path setting."""
+    raw.setdefault("general", {}).pop("ffprobe_path", None)
+    raw.setdefault("general", {})["config_version"] = "2.6.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -75,6 +82,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.2.0": _migrate_v22_to_v23,
     "2.3.0": _migrate_v23_to_v24,
     "2.4.0": _migrate_v24_to_v25,
+    "2.5.0": _migrate_v25_to_v26,
 }
 
 
@@ -90,7 +98,6 @@ class GeneralConfig(BaseModel):
     log_level_file: str = "info"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db/movarr.db"
-    ffprobe_path: str = "/usr/bin/ffprobe"
 
     @field_validator("daemon_mode")
     @classmethod
