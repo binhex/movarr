@@ -1,6 +1,6 @@
 # movarr
 
-Automated movie torrent acquisition, filtering, and post-processing daemon.
+Automated movie downloader based on IMDb criteria filtering.
 
 ## Features
 
