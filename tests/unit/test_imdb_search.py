@@ -511,7 +511,7 @@ class TestSearchForImdbId:
         )
         spy_tmdb = mocker.patch("movarr.imdb_search._search_tmdb")
         spy_omdb = mocker.patch("movarr.imdb_search._search_omdb")
-        spy_google = mocker.patch("movarr.imdb_search._search_duckduckgo")
+        spy_ddg = mocker.patch("movarr.imdb_search._search_duckduckgo")
         result = _make_result()
         cfg = Config()
         out = search_for_imdb_id(result, cfg)
@@ -519,7 +519,7 @@ class TestSearchForImdbId:
         assert out["imdb_id"] == "tt0133093"
         spy_tmdb.assert_not_called()
         spy_omdb.assert_not_called()
-        spy_google.assert_not_called()
+        spy_ddg.assert_not_called()
 
     def test_tries_next_strategy_when_first_fails(self, mocker: MockerFixture) -> None:
         mocker.patch(
@@ -548,7 +548,7 @@ class TestSearchForImdbId:
         out = search_for_imdb_id(result, cfg)
         assert out["result"] == "Failed"
 
-    def test_google_used_as_last_resort(self, mocker: MockerFixture) -> None:
+    def test_duckduckgo_used_as_last_resort(self, mocker: MockerFixture) -> None:
         for strategy in ("_search_imdbpie", "_search_tmdb", "_search_omdb"):
             mocker.patch(
                 f"movarr.imdb_search.{strategy}",

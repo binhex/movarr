@@ -4,8 +4,8 @@ Automated movie torrent acquisition, filtering, and post-processing daemon.
 
 ## Features
 
-- **Jackett integration** — polls any Jackett-configured indexer (or all indexers at once) for movie torrents
-  across configurable quality tiers (1080p, 2160p, 2160p remux, etc.).
+- **Jackett and Prowlarr integration** — polls any Jackett-configured indexer (or all indexers at once) or a
+  Prowlarr instance for movie torrents across configurable quality tiers (1080p, 2160p, 2160p remux, etc.).
 - **Deep IMDb filtering** — every candidate is resolved to an IMDb ID and evaluated against rating, vote count,
   year, runtime, language, country, title type, and genre before anything is queued.
 - **Override lists** — bypass the standard filters for specific directors, cast members, writers, movie titles, or
@@ -20,8 +20,8 @@ Automated movie torrent acquisition, filtering, and post-processing daemon.
   retention windows so titles can be re-evaluated over time.
 - **Queue management** — monitors qBittorrent for torrents stuck in stalled or metadata-fetching states and
   removes them after configurable grace periods.
-- **Internet-aware removal** — stalled torrent removal is paused when internet connectivity is unavailable,
-  preventing false positives from transient outages.
+- **qBittorrent-aware queue management** — stalled torrent removal is paused when qBittorrent reports
+  it is disconnected from the internet, preventing false positives from transient outages.
 - **Post-processing** — detects completed downloads in qBittorrent, copies qualifying files to your media
   library, and removes source files if configured.
 - **Genre/certification routing** — routes completed movies to different library paths per viewer profile based
@@ -40,7 +40,7 @@ Automated movie torrent acquisition, filtering, and post-processing daemon.
 
 - [Python 3.12+](https://www.python.org/downloads/)
 - [Astral uv](https://github.com/astral-sh/uv#installation) (optional)
-- [Jackett](https://github.com/Jackett/Jackett) — torrent indexer proxy
+- [Jackett](https://github.com/Jackett/Jackett) or [Prowlarr](https://github.com/Prowlarr/Prowlarr) — torrent indexer proxy
 - [qBittorrent](https://www.qbittorrent.org/) with Web UI enabled
 
 ## Quick start
@@ -201,9 +201,9 @@ Each entry in `search`:
 | --- | ----------- | ------- |
 | `criteria` | Search string passed to the index proxy (e.g. `1080p`, `2160p remux`). | — |
 | `category` | Torrent category codes, comma-separated (Torznab format). | `2000,5000` |
-| `minimum_size_mb` | Minimum torrent size in MB. | `3000` |
-| `maximum_size_mb` | Maximum torrent size in MB. | `20000` |
-| `minimum_bitrate_mb` | Minimum video bitrate in Mb/s. Set `0` to disable. | `50` |
+| `minimum_size_mb` | Minimum torrent size in MB. | `3000` (1080p), `7000` (2160p) |
+| `maximum_size_mb` | Maximum torrent size in MB. | `20000` (1080p), `170000` (2160p) |
+| `minimum_bitrate_mb` | Minimum video bitrate in MB/min. Set `0` to disable. | `50` (1080p), `115` (2160p) |
 
 ### `queue_management`
 
@@ -216,7 +216,7 @@ Each entry in `search`:
 | `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `false` |
 | `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
 | `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
-| `connection_down_grace_mins` | If the internet has been unreachable for fewer than this many minutes, pause all stalled removal. | `30` |
+| `connection_down_grace_mins` | Deprecated. qBittorrent's own connection status is used to detect internet outages. | `30` |
 
 ### `post_process`
 
@@ -266,7 +266,7 @@ movarr runs three independent pipelines on configurable schedules.
 
 ```mermaid
 flowchart TD
-    A([Start]) --> B[Query Jackett for each search criteria]
+    A([Start]) --> B[Query Jackett/Prowlarr for each search criteria]
     B --> C[For each result]
     C --> D{Bad keyword\nin title?}
     D -- Yes --> SKIP1([⛔ Skip])
@@ -299,8 +299,8 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
   `stalled_expiry_days` controls when the title can be retried.
 - **Metadata-stuck torrents** — torrents that have been fetching metadata for longer than
   `metadata_delete_torrent_max_mins` are removed.
-- **Connectivity guard** — if the internet connection has been unreachable for fewer than
-  `connection_down_grace_mins` minutes, all removals are paused until connectivity returns.
+- **Connectivity guard** — if qBittorrent reports it is disconnected from the internet, queue management
+  is paused until connectivity returns (so stalled torrents are not incorrectly deleted during an outage).
 
 ### Post-processing pipeline
 
@@ -366,8 +366,8 @@ year, etc.) are bypassed for matching titles. The same pattern applies to `overr
 
 **Q: What happens if qBittorrent is not reachable?**
 
-The acquisition and post-processing pipelines log a warning and exit cleanly for that cycle. The queue
-management pipeline also pauses stalled-torrent removal when internet connectivity is detected as unavailable.
+The acquisition pipeline skips the search entirely if qBittorrent is unreachable. The post-processing and queue
+management pipelines also log a warning and skip their cycles when qBittorrent is unavailable.
 
 **Q: How do I disable passed record expiry?**
 

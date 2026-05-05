@@ -222,7 +222,7 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
     return result
 
 
-# Strategy 4 — Google (last resort; may be slow / unreliable)
+# Strategy 4 — DuckDuckGo (last resort; more reliable than Google HTML scraping)
 
 
 _TRANSLATE_MAP = str.maketrans(
