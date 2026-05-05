@@ -150,7 +150,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -175,21 +175,21 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
 
     def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated through to the latest version."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v2_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -208,7 +208,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v21_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -230,7 +230,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v22_migration_creates_backup(self, tmp_path: Path) -> None:
@@ -252,7 +252,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -421,7 +421,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -461,13 +461,48 @@ class TestMigrationV24toV25:
         cfg = load_config(str(cfg_file))
         assert cfg.index_proxy.jackett.host == "myjackett"
 
-    def test_existing_config_at_v25_needs_no_migration(self, tmp_path: Path) -> None:
-        """A config already at v2.5.0 is not re-migrated."""
+    def test_existing_config_at_v25_is_migrated_to_v26(self, tmp_path: Path) -> None:
+        """A config at v2.5.0 is migrated to v2.6.0 (ffprobe_path removal)."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.5.0"
+        assert cfg.general.config_version == "2.6.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
+        assert backup.exists()
+
+
+# Config migration v2.5.0 → v2.6.0
+
+
+class TestMigrationV25toV26:
+    """Migration v2.5.0 → v2.6.0 removes deprecated ffprobe_path."""
+
+    def _v25_config(self, tmp_path: Path) -> Path:
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("general:\n  config_version: '2.5.0'\n  ffprobe_path: /usr/bin/ffprobe\n")
+        return cfg_file
+
+    def test_v25_config_migrated_to_v26(self, tmp_path: Path) -> None:
+        """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
+        cfg_file = self._v25_config(tmp_path)
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.6.0"
+        raw = yaml.safe_load(cfg_file.read_text())
+        assert "ffprobe_path" not in raw.get("general", {})
+
+    def test_v25_migration_creates_backup(self, tmp_path: Path) -> None:
+        """A backup file config.yml.bak.2.5.0 is created before migration."""
+        cfg_file = self._v25_config(tmp_path)
+        load_config(str(cfg_file))
+        assert (tmp_path / "config.yml.bak.2.5.0").exists()
+
+    def test_existing_config_at_v26_needs_no_migration(self, tmp_path: Path) -> None:
+        """A config already at v2.6.0 is not re-migrated."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("general:\n  config_version: '2.6.0'\n")
+        cfg = load_config(str(cfg_file))
+        assert cfg.general.config_version == "2.6.0"
+        backup = tmp_path / "config.yml.bak.2.6.0"
         assert not backup.exists()
 
 
