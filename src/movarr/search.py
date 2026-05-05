@@ -123,6 +123,7 @@ def _process_criteria(
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
         with logger.contextualize(tracker=tracker):
+            logger.info("<blue>Processing index title '{}'</blue>", index_title)
             if session.db.is_duplicate_exact(index_title):
                 logger.debug("'{}' already in DB; skipping.", index_title)
                 continue
