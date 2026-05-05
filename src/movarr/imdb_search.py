@@ -25,10 +25,11 @@ if TYPE_CHECKING:
 
 __all__ = ["search_for_imdb_id"]
 
-_DDGS: Any = None
+_ASCII_LIMIT = 128
+_DDGS: Any | None = None
 
 with contextlib.suppress(Exception):
-    from ddgs import DDGS as _DDGS  # type: ignore[no-redef]
+    from ddgs import DDGS as _DDGS  # type: ignore[no-redef]  # noqa: F811
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
@@ -66,7 +67,7 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     year = result.get("movie_title_year") or ""
 
     try:
-        import imdbpie
+        import imdbpie  # noqa: PLC0415
 
         client = imdbpie.Imdb()
         hits = client.search_for_title(search_term)
@@ -171,7 +172,7 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
 # Strategy 3 — OMDb
 
 
-def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
+def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR0911
     api_key = config.credentials.omdb.api_key
     if not api_key:
         _fail(result, "OMDb: no API key configured.")
@@ -258,7 +259,7 @@ def _strip_accents(text: str) -> str:
     """
     decomposed = unicodedata.normalize("NFD", text)
     decomposed = decomposed.translate(_TRANSLATE_MAP)
-    return "".join(c for c in decomposed if ord(c) < 128)
+    return "".join(c for c in decomposed if ord(c) < _ASCII_LIMIT)
 
 
 def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:

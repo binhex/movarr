@@ -116,7 +116,7 @@ def _format_result_details(details: list[str]) -> str:
     items = ""
     for item in details:
         parts = item.split(": ", 2)
-        if len(parts) == 3:
+        if len(parts) == 3:  # noqa: PLR2004
             main, sub, detail = parts
             items += f"<li>{main}: {sub}<ul><li>{detail}</li></ul></li>"
         else:

@@ -70,7 +70,7 @@ _PROJECT_ROOT = get_project_root()
     help="Validate configuration and exit without running any tasks.",
 )
 @click.version_option(version=_VERSION, prog_name="movarr")
-def cli(
+def cli(  # noqa: PLR0913
     config_path: str,
     db_path: str,
     log_path: str,
@@ -100,7 +100,7 @@ def cli(
     if pid_path is None:
         pid_path = str(Path(config_path).parent / "movarr.pid")
 
-    from movarr.config import load_config
+    from movarr.config import load_config  # noqa: PLC0415
 
     config = load_config(config_path)
 
@@ -112,7 +112,7 @@ def cli(
         click.echo("Configuration loaded successfully. Test mode — exiting.")
         return
 
-    from movarr.scheduler import run
+    from movarr.scheduler import run  # noqa: PLC0415
 
     run(config, pid_path=pid_path)
 

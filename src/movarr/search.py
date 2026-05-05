@@ -108,7 +108,7 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session)
 
 
-def _process_criteria(
+def _process_criteria(  # noqa: PLR0912
     criteria_cfg: SearchCriteriaConfig,
     category: str,
     indexer: str,
@@ -117,8 +117,8 @@ def _process_criteria(
     """Fetch and process all indexer results for one criteria tier."""
     site_dict = criteria_cfg.model_dump()
 
-    for result in session.indexer.search(indexer, criteria_cfg.criteria, category):
-        result = _enrich_index_metadata(result)
+    for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
+        result = _enrich_index_metadata(raw_result)
 
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer

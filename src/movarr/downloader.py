@@ -16,6 +16,10 @@ _USER_AGENT_CHROME = (
     "Chrome/59.0.3071.115 Safari/537.36"
 )
 
+_HTTP_OK_MIN = 200
+_HTTP_OK_MAX = 299
+_RESPONSE_PREVIEW_BYTES = 200
+
 
 class HttpError(Exception):
     """Raised when an HTTP request returns a non-2xx status code."""
@@ -88,9 +92,9 @@ class HttpClient:
                 data=data,
             )
 
-        if not 200 <= response.status_code <= 299:
+        if not _HTTP_OK_MIN <= response.status_code <= _HTTP_OK_MAX:
             raise HttpError(
-                f"HTTP {response.status_code} for {url!r}: {response.content[:200].decode('utf-8', errors='replace')}"
+                f"HTTP {response.status_code} for {url!r}: {response.content[:_RESPONSE_PREVIEW_BYTES].decode('utf-8', errors='replace')}"
             )
 
         return response

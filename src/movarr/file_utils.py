@@ -84,7 +84,7 @@ def delete_file(path: str | Path) -> bool:
     return False
 
 
-def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
+def copy_with_verify(src: str | Path, dst: str | Path) -> bool:  # noqa: PLR0911
     """Copy *src* to *dst* with SHA-256 pre/post verification.
 
     - If *dst* already exists and checksums match, the copy is skipped.

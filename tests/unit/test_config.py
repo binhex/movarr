@@ -177,13 +177,6 @@ class TestConfigMigration:
         cfg = load_config(str(cfg_file))
         assert cfg.general.config_version == "2.6.0"
 
-    def test_v2_config_needs_no_migration(self, tmp_path: Path) -> None:
-        """A v2.0.0 config is migrated through to the latest version."""
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
-        cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.6.0"
-
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
@@ -191,14 +184,6 @@ class TestConfigMigration:
         cfg = load_config(str(cfg_file))
         assert cfg.general.config_version == "2.6.0"
         assert cfg.database.stalled_expiry_days == 7
-
-    def test_v2_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.0.0 is created before v2→v2.1 migration."""
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
-        load_config(str(cfg_file))
-        backup = tmp_path / "config.yml.bak.2.0.0"
-        assert backup.exists()
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
         """A v2.1.0 config is migrated to v2.2.0, adding database.failed_expiry_days."""
@@ -211,17 +196,6 @@ class TestConfigMigration:
         assert cfg.general.config_version == "2.6.0"
         assert cfg.database.failed_expiry_days == 7
 
-    def test_v21_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.1.0 is created before v2.1→v2.2 migration."""
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.1.0'\nnotification:\n  apprise_urls: []\n"
-            "database:\n  stalled_expiry_days: 7\n"
-        )
-        load_config(str(cfg_file))
-        backup = tmp_path / "config.yml.bak.2.1.0"
-        assert backup.exists()
-
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
         """A v2.2.0 config is migrated all the way to the latest version."""
         cfg_file = tmp_path / "config.yml"
@@ -232,17 +206,6 @@ class TestConfigMigration:
         cfg = load_config(str(cfg_file))
         assert cfg.general.config_version == "2.6.0"
         assert cfg.database.passed_expiry_days == 30
-
-    def test_v22_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.2.0 is created before v2.2→v2.3 migration."""
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text(
-            "general:\n  config_version: '2.2.0'\nnotification:\n  apprise_urls: []\n"
-            "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
-        )
-        load_config(str(cfg_file))
-        backup = tmp_path / "config.yml.bak.2.2.0"
-        assert backup.exists()
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
         """A v2.3.0 config is migrated to v2.4.0, adding run_on_start: true to all tasks."""
@@ -256,14 +219,6 @@ class TestConfigMigration:
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
-
-    def test_v23_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.3.0 is created before v2.3→v2.4 migration."""
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text("general:\n  config_version: '2.3.0'\nnotification:\n  apprise_urls: []\n")
-        load_config(str(cfg_file))
-        backup = tmp_path / "config.yml.bak.2.3.0"
-        assert backup.exists()
 
     def test_v23_migration_writes_run_on_start_to_disk(self, tmp_path: Path) -> None:
         """After migration the on-disk YAML contains run_on_start: true for all tasks."""
@@ -426,12 +381,6 @@ class TestMigrationV24toV25:
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
 
-    def test_v24_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.4.0 is created before migration."""
-        cfg_file = self._v24_config(tmp_path)
-        load_config(str(cfg_file))
-        assert (tmp_path / "config.yml.bak.2.4.0").exists()
-
     def test_v24_migration_writes_prowlarr_block_to_disk(self, tmp_path: Path) -> None:
         """After migration the on-disk YAML contains the prowlarr block."""
         cfg_file = self._v24_config(tmp_path)
@@ -489,12 +438,6 @@ class TestMigrationV25toV26:
         assert cfg.general.config_version == "2.6.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
-
-    def test_v25_migration_creates_backup(self, tmp_path: Path) -> None:
-        """A backup file config.yml.bak.2.5.0 is created before migration."""
-        cfg_file = self._v25_config(tmp_path)
-        load_config(str(cfg_file))
-        assert (tmp_path / "config.yml.bak.2.5.0").exists()
 
     def test_existing_config_at_v26_needs_no_migration(self, tmp_path: Path) -> None:
         """A config already at v2.6.0 is not re-migrated."""

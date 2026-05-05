@@ -229,6 +229,35 @@ class TestFindImdbMetadata:
         assert cached["imdb_credits_cast_list"] == [["Christian Bale", "Bruce Wayne"]]
         assert cached["imdb_credits_character_list"] == ["Bruce Wayne"]
 
+    def test_cache_decode_returns_non_string_value_unchanged(self, db: Database, tmp_path: Path) -> None:
+        """If a column somehow stores a non-string value, _decode_field passes it through."""
+        import sqlite3
+
+        db.write(_minimal_result(torrent_tag="non-str-001", imdb_id="tt5555555", imdb_title="Test"))
+        raw_path = str(tmp_path / "test.db")
+        con = sqlite3.connect(raw_path)
+        # Update the row directly to bypass ORM encoding.
+        con.execute(
+            "UPDATE history SET imdb_genres_list = 42 WHERE torrent_tag = ?",
+            ("non-str-001",),
+        )
+        con.commit()
+        con.close()
+        db2 = Database(raw_path)
+        cached = db2.find_imdb_metadata("tt5555555")
+        assert cached is not None
+        assert cached["imdb_genres_list"] == 42
+
+    def test_decode_field_function(self) -> None:
+        """_decode_field must handle strings, None, and non-strings."""
+        from movarr.database import _decode_field
+
+        assert _decode_field(None) is None
+        assert _decode_field('["Action"]') == ["Action"]
+        assert _decode_field("plain string") == "plain string"
+        assert _decode_field(42) == 42
+        assert _decode_field(["already", "a", "list"]) == ["already", "a", "list"]
+
 
 # Database upgrade path
 

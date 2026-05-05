@@ -114,7 +114,7 @@ class TestHttpClientGet:
         client = HttpClient(read_timeout=30.0)
         captured: list[float] = []
 
-        def _capture(*args, **kwargs):
+        def _capture(*args: object, **kwargs: object) -> object:
             captured.append(client._read_timeout)
             return mocker.MagicMock(spec=requests.Response)
 

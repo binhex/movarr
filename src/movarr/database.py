@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 __all__ = ["Database", "HistoryRecord"]
 
 _DB_VERSION = 10
+_SCHEMA_V7_CERT_FIELDS = 7
+_SCHEMA_V8_INDEX_TITLE_IDX = 8
+_SCHEMA_V9_STALLED_AT = 9
+_SCHEMA_V10_CREATED_AT = 10
 
 
 def _encode_field(value: object) -> str | None:
@@ -27,6 +31,18 @@ def _encode_field(value: object) -> str | None:
     if isinstance(value, list):
         return json.dumps(value)
     return str(value)
+
+
+def _decode_field(value: object) -> Any:
+    """Deserialise a stored field: JSON strings → object, None → None, else passthrough."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+    return value
 
 
 class Base(DeclarativeBase):
@@ -136,7 +152,7 @@ class Database:
     def _upgrade(self, from_version: int) -> None:
         """Apply incremental schema migrations."""
         with self._engine.connect() as conn:
-            if from_version < 7:
+            if from_version < _SCHEMA_V7_CERT_FIELDS:
                 cursor = conn.execute(text("PRAGMA table_info(history)"))
                 existing_cols = {row[1] for row in cursor.fetchall()}
                 if "imdb_certification" not in existing_cols:
@@ -144,16 +160,16 @@ class Database:
                 if "imdb_cert_source" not in existing_cols:
                     conn.execute(text("ALTER TABLE history ADD COLUMN imdb_cert_source TEXT"))
                 conn.commit()
-            if from_version < 8:
+            if from_version < _SCHEMA_V8_INDEX_TITLE_IDX:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_history_index_title ON history (index_title)"))
                 conn.commit()
-            if from_version < 9:
+            if from_version < _SCHEMA_V9_STALLED_AT:
                 cursor = conn.execute(text("PRAGMA table_info(history)"))
                 existing_cols = {row[1] for row in cursor.fetchall()}
                 if "stalled_at" not in existing_cols:
                     conn.execute(text("ALTER TABLE history ADD COLUMN stalled_at TEXT"))
                 conn.commit()
-            if from_version < 10:
+            if from_version < _SCHEMA_V10_CREATED_AT:
                 cursor = conn.execute(text("PRAGMA table_info(history)"))
                 existing_cols = {row[1] for row in cursor.fetchall()}
                 if "created_at" not in existing_cols:
@@ -173,7 +189,15 @@ class Database:
         Args:
             result: The completed :class:`~movarr.models.ResultDict`.
         """
-        record = HistoryRecord(
+        record = self._result_to_record(result)
+        with Session(self._engine) as session:
+            session.add(record)
+            session.commit()
+
+    @staticmethod
+    def _result_to_record(result: ResultDict) -> HistoryRecord:
+        """Build a :class:`HistoryRecord` from a pipeline *result*."""
+        return HistoryRecord(
             index_title=result.get("index_title"),
             result=result.get("result"),
             result_details=_encode_field(result.get("result_details")),
@@ -210,9 +234,6 @@ class Database:
             imdb_cert_source=result.get("imdb_cert_source"),
             created_at=datetime.datetime.now(tz=datetime.UTC).isoformat(),
         )
-        with Session(self._engine) as session:
-            session.add(record)
-            session.commit()
 
     def set_verified(self, torrent_tag: str) -> None:
         """Mark a history record as verified after a successful file copy.
@@ -440,16 +461,11 @@ class Database:
         if row is None:
             return None
 
-        def _decode(value: object) -> Any:
-            if value is None:
-                return None
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except (json.JSONDecodeError, TypeError):
-                    return value
-            return value
+        return self._record_to_imdb_dict(row)
 
+    @staticmethod
+    def _record_to_imdb_dict(row: HistoryRecord) -> dict[str, Any]:
+        """Convert a *row* into a plain dict of ``imdb_*`` fields."""
         return {
             "imdb_title": row.imdb_title,
             "imdb_year": row.imdb_year,
@@ -457,19 +473,19 @@ class Database:
             "imdb_votes": row.imdb_votes,
             "imdb_title_type": row.imdb_title_type,
             "imdb_running_time_in_minutes": row.imdb_running_time_in_minutes,
-            "imdb_genres_list": _decode(row.imdb_genres_list),
+            "imdb_genres_list": _decode_field(row.imdb_genres_list),
             "imdb_plot_summary": row.imdb_plot_summary,
             "imdb_plot_outline": row.imdb_plot_outline,
             "imdb_poster_url": row.imdb_poster_url,
             "imdb_trailer_url": row.imdb_trailer_url,
-            "imdb_language_list": _decode(row.imdb_language_list),
-            "imdb_country_list": _decode(row.imdb_country_list),
+            "imdb_language_list": _decode_field(row.imdb_language_list),
+            "imdb_country_list": _decode_field(row.imdb_country_list),
             "imdb_certification": row.imdb_certification,
             "imdb_cert_source": row.imdb_cert_source,
-            "imdb_credits_director_list": _decode(row.imdb_credits_director_list),
-            "imdb_credits_writer_list": _decode(row.imdb_credits_writer_list),
-            "imdb_credits_cast_list": _decode(row.imdb_credits_cast_list),
-            "imdb_credits_character_list": _decode(row.imdb_credits_character_list),
+            "imdb_credits_director_list": _decode_field(row.imdb_credits_director_list),
+            "imdb_credits_writer_list": _decode_field(row.imdb_credits_writer_list),
+            "imdb_credits_cast_list": _decode_field(row.imdb_credits_cast_list),
+            "imdb_credits_character_list": _decode_field(row.imdb_credits_character_list),
         }
 
     def genres_for_tag(self, torrent_tag: str) -> list[str]:
