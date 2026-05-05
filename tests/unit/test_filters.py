@@ -125,21 +125,69 @@ class TestFilterByIndexTv:
         assert out["result"] != "Passed"
 
 
-# filter_by_index: bad keywords
+# filter_by_index: reject group
 
 
-class TestFilterByIndexBadKeywords:
-    """Titles containing bad keywords must be rejected."""
+class TestFilterByIndexRejectGroup:
+    """Release group rejection filter."""
 
-    def test_bad_keyword_rejects_result(self) -> None:
+    def test_matching_group_fails(self) -> None:
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out.get("result_details", []))
+        assert "fgt" in details.lower()
+
+    def test_non_matching_group_passes(self) -> None:
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay SPARKS")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+
+    def test_empty_list_skips_check(self) -> None:
+        cfg = Config()  # reject_index_group_list = []
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+
+    def test_case_insensitive_match(self) -> None:
+        cfg = _make_config(reject_index_group_list=["fgt"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Failed"
+
+    def test_non_matching_quality_token_passes(self) -> None:
+        """extract_group returns the last token (e.g. 'bluray') when no group is present."""
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+        assert "bluray" in " ".join(out.get("result_details", [])).lower()
+
+    def test_no_group_detected_no_year_passes(self) -> None:
+        """Titles without a year have no after-year segment → no group detected."""
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie")
+        out = filter_by_index(result, _default_site_dict(criteria=""), cfg)
+        assert out["result"] == "Passed"
+
+
+# filter_by_index: reject keywords
+
+
+class TestFilterByIndexRejectKeywords:
+    """Titles containing rejected keywords must be rejected."""
+
+    def test_reject_keyword_rejects_result(self) -> None:
         cfg = Config()
-        cfg.filters.bad_index_title_list = ["CAM"]
+        cfg.filters.reject_index_title_list = ["CAM"]
         result = _index_result(index_title="Movie 2020 CAM 1080p BluRay")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] != "Passed"
 
-    def test_no_bad_keywords_passes(self) -> None:
-        cfg = Config()  # default — empty bad_index_title_list
+    def test_no_reject_keywords_passes(self) -> None:
+        cfg = Config()  # default — empty reject_index_title_list
         result = _index_result()
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
@@ -351,29 +399,29 @@ class TestFilterByIndexLibraryDedup:
 # filter_by_imdb: genre gate
 
 
-class TestFilterByImdbGenre:
-    """Genre exclusion filter (bad_genre_list)."""
+class TestFilterByImdbRejectGenre:
+    """Genre exclusion filter (reject_genre_list)."""
 
     def test_excluded_genre_rejects_result(self) -> None:
-        cfg = _make_config(bad_genre_list=["Horror"])
+        cfg = _make_config(reject_genre_list=["Horror"])
         result = _imdb_result(imdb_genres_list=["Horror", "Thriller"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
     def test_no_excluded_genres_passes(self) -> None:
-        cfg = _make_config(bad_genre_list=["Horror"])
+        cfg = _make_config(reject_genre_list=["Horror"])
         result = _imdb_result(imdb_genres_list=["Action", "Drama"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_empty_bad_genre_list_always_passes(self) -> None:
-        cfg = Config()  # empty bad_genre_list
+    def test_empty_reject_genre_list_always_passes(self) -> None:
+        cfg = Config()  # empty reject_genre_list
         result = _imdb_result(imdb_genres_list=["Horror", "Gore"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_case_insensitive_genre_match(self) -> None:
-        cfg = _make_config(bad_genre_list=["horror"])
+        cfg = _make_config(reject_genre_list=["horror"])
         result = _imdb_result(imdb_genres_list=["Horror"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
@@ -675,33 +723,33 @@ class TestFilterByIndexSizeEdgeCases:
         assert out["result"] != "Passed"
 
 
-# filter_by_index: bad keyword no-match path
+# filter_by_index: reject keyword no-match path
 
 
-class TestFilterByIndexBadKeywordNoMatch:
-    """Non-empty bad keyword list with no match must still pass."""
+class TestFilterByIndexRejectKeywordNoMatch:
+    """Non-empty reject keyword list with no match must still pass."""
 
-    def test_non_empty_bad_keyword_list_no_match_passes(self) -> None:
-        cfg = _make_config(bad_index_title_list=["CAM"])
+    def test_non_empty_reject_keyword_list_no_match_passes(self) -> None:
+        cfg = _make_config(reject_index_title_list=["CAM"])
         result = _index_result()
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
 
 
-# filter_by_index: bad movie title list
+# filter_by_index: reject movie title list
 
 
-class TestFilterByIndexBadMovieTitles:
-    """Bad movie title list rejects matched titles and passes others."""
+class TestFilterByIndexRejectMovieTitles:
+    """Reject movie title list rejects matched titles and passes others."""
 
-    def test_bad_movie_title_match_fails(self) -> None:
-        cfg = _make_config(bad_movie_title_list=["thedarkknight"])
+    def test_reject_movie_title_match_fails(self) -> None:
+        cfg = _make_config(reject_movie_title_list=["thedarkknight"])
         result = _index_result(movie_title_and_year_compare="thedarkknight2008")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] != "Passed"
 
-    def test_bad_movie_title_no_match_passes(self) -> None:
-        cfg = _make_config(bad_movie_title_list=["terminator"])
+    def test_reject_movie_title_no_match_passes(self) -> None:
+        cfg = _make_config(reject_movie_title_list=["terminator"])
         result = _index_result(movie_title_and_year_compare="thedarkknight2008")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"

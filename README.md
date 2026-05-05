@@ -128,9 +128,10 @@ Controls which torrents pass the IMDb quality gate.
 | `allow_imdb_title_type_list` | Allowed IMDb title types. | `[movie, video, tvmovie]` |
 | `allow_country_list` | Allowed production country codes (ISO 3166-1 alpha-2). Empty = allow all. | `[]` |
 | `allow_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
-| `bad_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
-| `bad_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
-| `bad_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
+| `reject_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
+| `reject_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
+| `reject_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
+| `reject_index_group_list` | Reject torrents from these release groups (case-insensitive). | `[]` |
 | `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing all other filters. | `[]` |
 | `override_writer_list` | Force-accept any movie written by one of these writers. | `[]` |
 | `override_director_list` | Force-accept any movie directed by one of these directors. | `[]` |

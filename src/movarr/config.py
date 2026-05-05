@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.7.0"
+_CONFIG_VERSION = "2.8.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +89,20 @@ def _migrate_v26_to_v27(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.7.0 → v2.8.0: rename bad_* fields to reject_* in filters."""
+    filters = raw.setdefault("filters", {})
+    for old, new in (
+        ("bad_index_title_list", "reject_index_title_list"),
+        ("bad_genre_list", "reject_genre_list"),
+        ("bad_movie_title_list", "reject_movie_title_list"),
+    ):
+        if old in filters:
+            filters[new] = filters.pop(old)
+    raw.setdefault("general", {})["config_version"] = "2.8.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -98,6 +112,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.4.0": _migrate_v24_to_v25,
     "2.5.0": _migrate_v25_to_v26,
     "2.6.0": _migrate_v26_to_v27,
+    "2.7.0": _migrate_v27_to_v28,
 }
 
 
@@ -159,9 +174,10 @@ class FiltersConfig(BaseModel):
     allow_imdb_title_type_list: list[str] = Field(default_factory=lambda: ["movie", "video", "tvmovie"])
     allow_country_list: list[str] = Field(default_factory=list)
     allow_language_list: list[str] = Field(default_factory=list)
-    bad_index_title_list: list[str] = Field(default_factory=list)
-    bad_genre_list: list[str] = Field(default_factory=list)
-    bad_movie_title_list: list[str] = Field(default_factory=list)
+    reject_index_title_list: list[str] = Field(default_factory=list)
+    reject_genre_list: list[str] = Field(default_factory=list)
+    reject_movie_title_list: list[str] = Field(default_factory=list)
+    reject_index_group_list: list[str] = Field(default_factory=list)
     override_cast_list: list[str] = Field(default_factory=list)
     override_writer_list: list[str] = Field(default_factory=list)
     override_director_list: list[str] = Field(default_factory=list)

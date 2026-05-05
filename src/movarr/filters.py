@@ -65,12 +65,13 @@ def filter_by_index(
         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
     """
     checks = [
+        lambda r: _check_reject_index_group(r, config),
         lambda r: _check_search_criteria(r, index_site),
         lambda r: _check_minimum_size(r, index_site),
         lambda r: _check_maximum_size(r, index_site),
-        lambda r: _check_bad_keywords(r, config),
+        lambda r: _check_reject_keywords(r, config),
         _check_tv_type,
-        lambda r: _check_bad_movie_titles(r, config),
+        lambda r: _check_reject_movie_titles(r, config),
         lambda r: _check_library(r, config, library_walk),
     ]
     for check in checks:
@@ -98,7 +99,7 @@ def filter_by_imdb(
     # Ordered gate chain — bail as soon as one check fails.
     checks = [
         lambda r: _check_allow_title_type(r, config),
-        lambda r: _check_bad_genre(r, config),
+        lambda r: _check_reject_genre(r, config),
         _check_bitrate,
         lambda r: _check_year(r, config),
         lambda r: _check_runtime(r, config),
@@ -137,6 +138,31 @@ def filter_by_imdb(
 
 
 # Stage 1 helpers
+
+
+def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
+    """Reject torrents from specific release groups.
+
+    Args:
+        result: Pipeline dict with ``index_title`` populated.
+        config: Application configuration.
+
+    Returns:
+        Updated result dict.
+    """
+    reject_list = config.filters.reject_index_group_list
+    if not reject_list:
+        return _pass(result, "No reject_index_group_list defined.")
+
+    index_title = result.get("index_title") or ""
+    group = extract_group(sanitise(index_title) or "")
+    if not group:
+        return _pass(result, "No release group detected; skipping group check.")
+
+    reject_lower = [g.lower() for g in reject_list]
+    if group.lower() in reject_lower:
+        return _fail(result, f"Release group '{group}' is in reject_index_group_list.")
+    return _pass(result, f"Release group '{group}' is not in reject_index_group_list.")
 
 
 def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
@@ -179,16 +205,16 @@ def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> Resu
     return _pass(result, msg) if ok else _fail(result, msg)
 
 
-def _check_bad_keywords(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_index_title_list
-    if not bad_list:
-        return _pass(result, "No bad index title keywords defined.")
+def _check_reject_keywords(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_index_title_list
+    if not reject_list:
+        return _pass(result, "No reject index title keywords defined.")
 
     index_title = result.get("index_title") or ""
-    for keyword in bad_list:
+    for keyword in reject_list:
         if bad_keyword_search(index_title, keyword):
-            return _fail(result, f"Index title contains bad keyword '{keyword}'.")
-    return _pass(result, "Index title passes bad keyword check.")
+            return _fail(result, f"Index title contains rejected keyword '{keyword}'.")
+    return _pass(result, "Index title passes reject keyword check.")
 
 
 def _check_tv_type(result: ResultDict) -> ResultDict:
@@ -200,17 +226,17 @@ def _check_tv_type(result: ResultDict) -> ResultDict:
     return _pass(result, "Index title is not TV content.")
 
 
-def _check_bad_movie_titles(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_movie_title_list
-    if not bad_list:
-        return _pass(result, "No bad movie titles defined.")
+def _check_reject_movie_titles(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_movie_title_list
+    if not reject_list:
+        return _pass(result, "No reject movie titles defined.")
 
     title_and_year_compare = result.get("movie_title_and_year_compare") or ""
-    for bad_title in bad_list:
-        norm = normalise_for_compare(bad_title)
+    for reject_title in reject_list:
+        norm = normalise_for_compare(reject_title)
         if norm and norm in title_and_year_compare:
-            return _fail(result, f"Index title matches bad movie title '{bad_title}'.")
-    return _pass(result, "Index title passes bad movie title check.")
+            return _fail(result, f"Index title matches reject movie title '{reject_title}'.")
+    return _pass(result, "Index title passes reject movie title check.")
 
 
 def _check_library(
@@ -250,19 +276,19 @@ def _check_allow_title_type(result: ResultDict, config: Config) -> ResultDict:
     return _pass(result, f"IMDb title type '{title_type_lower}' is allowed.")
 
 
-def _check_bad_genre(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_genre_list
-    if not bad_list:
-        return _pass(result, "No bad genre list defined.")
+def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_genre_list
+    if not reject_list:
+        return _pass(result, "No reject genre list defined.")
 
     genres = result.get("imdb_genres_list") or []
     genres_lower = [g.lower() for g in genres]
-    bad_lower = [b.lower() for b in bad_list]
+    reject_lower = [r.lower() for r in reject_list]
 
-    for bad in bad_lower:
-        if bad in genres_lower:
-            return _fail(result, f"Genre '{bad}' is in bad genre list.")
-    return _pass(result, f"Genres {genres_lower} pass bad genre check.")
+    for reject in reject_lower:
+        if reject in genres_lower:
+            return _fail(result, f"Genre '{reject}' is in reject genre list.")
+    return _pass(result, f"Genres {genres_lower} pass reject genre check.")
 
 
 def _check_bitrate(result: ResultDict) -> ResultDict:
