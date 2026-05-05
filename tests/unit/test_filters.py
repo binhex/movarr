@@ -820,6 +820,13 @@ class TestFilterByImdbRuntimeEdgeCases:
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
+    def test_fails_when_runtime_is_empty_string(self) -> None:
+        """Empty-string runtime cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_runtime_mins=60)
+        result = _imdb_result(imdb_running_time_in_minutes="")
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
 
 # filter_by_imdb: rating edge cases
 
@@ -863,6 +870,13 @@ class TestFilterByImdbVotesEdgeCases:
         cfg = _make_config(minimum_rating=0, minimum_votes=5000)
         result = _imdb_result()
         result.pop("imdb_votes", None)
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_fails_when_votes_is_empty_string(self) -> None:
+        """Empty-string votes cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_rating=0, minimum_votes=5000)
+        result = _imdb_result(imdb_votes="")
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
@@ -1178,6 +1192,15 @@ class TestCheckBitrateEdgeCases:
 
         result = _imdb_result(imdb_running_time_in_minutes="0")
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
+        result["_filter_minimum_bitrate_mb"] = 50
+        result["index_size"] = "8000000000"
+        out = _check_bitrate(result)
+        assert out["result"] == "Failed"
+
+    def test_empty_string_runtime_sets_failed(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result = _imdb_result(imdb_running_time_in_minutes="")
         result["_filter_minimum_bitrate_mb"] = 50
         result["index_size"] = "8000000000"
         out = _check_bitrate(result)

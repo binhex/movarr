@@ -305,9 +305,12 @@ def _check_bitrate(result: ResultDict) -> ResultDict:
         return _fail(result, "No runtime available for bitrate check.")
 
     try:
+        runtime_int = int(runtime)
+        if runtime_int <= 0:
+            return _fail(result, f"Invalid runtime '{runtime}' for bitrate check.")
         size_mb = int(raw_size) // 1_000_000
-        bitrate_mb = size_mb // int(runtime)
-    except (ValueError, TypeError, ZeroDivisionError):
+        bitrate_mb = size_mb // runtime_int
+    except (ValueError, TypeError):
         return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
     if bitrate_mb >= int(min_bitrate_mb):
         return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {min_bitrate_mb}.")
@@ -337,7 +340,12 @@ def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
     if runtime is None:
         return _fail(result, "No runtime available for runtime check.")
 
-    if int(runtime) >= int(min_runtime):
+    try:
+        runtime_int = int(runtime)
+    except (ValueError, TypeError):
+        return _fail(result, f"Could not parse runtime '{runtime}' for runtime check.")
+
+    if runtime_int >= int(min_runtime):
         return _pass(result, f"Runtime {runtime} min ≥ {min_runtime} min.")
     return _fail(result, f"Runtime {runtime} min < {min_runtime} min.")
 
@@ -445,7 +453,13 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
         _fail(result, "No IMDb votes available; assuming below threshold.")
         return False
 
-    if int(imdb_votes) >= int(min_votes):
+    try:
+        votes_int = int(imdb_votes)
+    except (ValueError, TypeError):
+        _fail(result, f"Could not parse votes '{imdb_votes}' for votes check.")
+        return False
+
+    if votes_int >= int(min_votes):
         _pass(result, f"Votes {imdb_votes} ≥ {min_votes}.")
         return True
 
