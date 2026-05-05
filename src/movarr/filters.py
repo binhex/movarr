@@ -97,7 +97,7 @@ def filter_by_imdb(
     """
     # Ordered gate chain — bail as soon as one check fails.
     checks = [
-        lambda r: _check_good_title_type(r, config),
+        lambda r: _check_allow_title_type(r, config),
         lambda r: _check_bad_genre(r, config),
         _check_bitrate,
         lambda r: _check_year(r, config),
@@ -236,17 +236,17 @@ def _check_library(
 # Stage 2 helpers
 
 
-def _check_good_title_type(result: ResultDict, config: Config) -> ResultDict:
-    good_types = config.filters.good_imdb_title_type_list
-    if not good_types:
+def _check_allow_title_type(result: ResultDict, config: Config) -> ResultDict:
+    allow_types = config.filters.allow_imdb_title_type_list
+    if not allow_types:
         return _pass(result, "No IMDb title type filter defined.")
 
     title_type = result.get("imdb_title_type") or ""
     title_type_lower = title_type.lower()  # safe: null-guarded above
-    good_lower = [t.lower() for t in good_types]
+    allow_lower = [t.lower() for t in allow_types]
 
-    if title_type_lower not in good_lower:
-        return _fail(result, f"IMDb title type '{title_type_lower}' not in allowed types {good_lower}.")
+    if title_type_lower not in allow_lower:
+        return _fail(result, f"IMDb title type '{title_type_lower}' not in allowed types {allow_lower}.")
     return _pass(result, f"IMDb title type '{title_type_lower}' is allowed.")
 
 
@@ -317,21 +317,21 @@ def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
 
 
 def _check_language_country(result: ResultDict, config: Config, kind: str) -> ResultDict:
-    good_list = getattr(config.filters, f"good_{kind}_list", []) or []
-    if not good_list:
-        return _pass(result, f"No good {kind} list defined.")
+    allow_list = getattr(config.filters, f"allow_{kind}_list", []) or []
+    if not allow_list:
+        return _pass(result, f"No allow {kind} list defined.")
 
     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
         return _pass(result, f"No IMDb {kind} found; assuming OK.")
 
     imdb_lower = [x.lower() for x in imdb_list]
-    good_lower = [x.lower() for x in good_list]
+    allow_lower = [x.lower() for x in allow_list]
 
-    for item in good_lower:
+    for item in allow_lower:
         if item in imdb_lower:
             return _pass(result, f"IMDb {kind} list {imdb_lower} matches allowed {kind} list.")
-    return _fail(result, f"IMDb {kind} list {imdb_lower} not in allowed {kind} list {good_lower}.")
+    return _fail(result, f"IMDb {kind} list {imdb_lower} not in allowed {kind} list {allow_lower}.")
 
 
 def _override_person(result: ResultDict, config: Config, person_type: str) -> bool:
