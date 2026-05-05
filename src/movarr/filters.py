@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, cast
 
 from loguru import logger as _logger
@@ -326,7 +326,12 @@ def _check_year(result: ResultDict, config: Config) -> ResultDict:
     if not year:
         return _fail(result, "No movie year available for year check.")
 
-    if int(year) >= int(min_year):
+    try:
+        year_int = int(year)
+    except (ValueError, TypeError):
+        return _fail(result, f"Could not parse year '{year}' for year check.")
+
+    if year_int >= int(min_year):
         return _pass(result, f"Year {year} ≥ {min_year}.")
     return _fail(result, f"Year {year} < {min_year}.")
 
@@ -429,12 +434,18 @@ def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
         _fail(result, "No IMDb rating available; assuming below threshold.")
         return False
 
-    threshold = Decimal(str(min_rating))
+    try:
+        threshold = Decimal(str(min_rating))
+        rating_val = Decimal(str(imdb_rating))
+    except (InvalidOperation, ValueError, TypeError):
+        _fail(result, f"Could not parse rating '{imdb_rating}' or threshold '{min_rating}'.")
+        return False
+
     if threshold > Decimal("10.0"):
         _pass(result, f"Configured min rating {threshold} > 10.0; treating as no threshold.")
         return True
 
-    if Decimal(str(imdb_rating)) >= threshold:
+    if rating_val >= threshold:
         _pass(result, f"Rating {imdb_rating} ≥ {threshold}.")
         return True
 

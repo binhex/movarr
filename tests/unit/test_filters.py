@@ -800,6 +800,13 @@ class TestFilterByImdbYearEdgeCases:
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
+    def test_fails_when_year_is_invalid_string(self) -> None:
+        """Non-numeric year string cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_year=2000)
+        result = _imdb_result(movie_title_year="abc")
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
 
 # filter_by_imdb: runtime edge cases
 
@@ -852,6 +859,13 @@ class TestFilterByImdbRatingEdgeCases:
         result = _imdb_result(imdb_rating="5.0")
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
+
+    def test_fails_when_rating_is_invalid_string(self) -> None:
+        """Non-numeric rating string cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_rating=7.0, minimum_votes=0)
+        result = _imdb_result(imdb_rating="abc")
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
 
 
 # filter_by_imdb: votes edge cases
