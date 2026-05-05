@@ -127,15 +127,15 @@ def _process_criteria(
                 logger.debug("'{}' already in DB; skipping.", index_title)
                 continue
 
-            logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
-
             if not result.get("movie_title"):
-                logger.info("No movie title from '{}'; skipping.", result.get("index_title"))
+                logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
                 continue
 
             if not result.get("movie_title_year"):
-                logger.info("No year from '{}'; skipping.", result.get("index_title"))
+                logger.debug("No year from '{}'; skipping.", result.get("index_title"))
                 continue
+
+            logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
 
             result = filter_by_index(result, site_dict, session.config, session.library_walk)
             if result.get("result") != "Passed":
