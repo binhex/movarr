@@ -361,3 +361,38 @@ class TestHttpClientRequest:
 
         # session.auth should not have been set via attribute assignment
         assert mock_session.auth != ("alice", "secret")
+
+    def test_connection_error_is_retried(self, mocker: MockerFixture) -> None:
+        """ConnectionError is in the backoff retry tuple and should be retried."""
+        client = HttpClient()
+        mock_session = mocker.MagicMock()
+        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
+        mock_session.__exit__ = mocker.MagicMock(return_value=False)
+        # First two calls raise ConnectionError, third succeeds
+        mock_session.request.side_effect = [
+            requests.exceptions.ConnectionError("conn reset"),
+            requests.exceptions.ConnectionError("conn reset"),
+            mocker.MagicMock(spec=requests.Response, status_code=200, content=b"ok"),
+        ]
+        mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+
+        result = client._request("get", "https://example.com")
+        assert result.status_code == 200
+        assert mock_session.request.call_count == 3
+
+    def test_socket_timeout_is_retried(self, mocker: MockerFixture) -> None:
+        """socket.timeout is in the backoff retry tuple and should be retried."""
+
+        client = HttpClient()
+        mock_session = mocker.MagicMock()
+        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
+        mock_session.__exit__ = mocker.MagicMock(return_value=False)
+        mock_session.request.side_effect = [
+            TimeoutError("timed out"),
+            mocker.MagicMock(spec=requests.Response, status_code=200, content=b"ok"),
+        ]
+        mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+
+        result = client._request("get", "https://example.com")
+        assert result.status_code == 200
+        assert mock_session.request.call_count == 2

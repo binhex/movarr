@@ -288,6 +288,11 @@ _AUDIO_SCORES: dict[str, int] = {
     r"(dtshd|dts\shd|truehd|true\shd|ddp)": 20,
     r"(dts)": 10,
 }
+_HDR_SCORES: dict[str, int] = {
+    r"(dolby\svision|dv|do\.vi\.)": 15,
+    r"(hdr10\+|hdr10plus|hdrplus)": 12,
+    r"(hdr)": 10,
+}
 
 
 def keyword_search(sanitised: str, keyword: str) -> bool:
@@ -327,15 +332,15 @@ def bad_keyword_search(string: str, keyword: str) -> bool:
 def quality_score(sanitised: str) -> int:
     """Return a composite quality score for a sanitised title.
 
-    Scores resolution, source type, and audio quality independently and sums them.
-    Higher scores represent better-quality releases.
+    Scores resolution, source type, audio quality, and HDR format independently
+    and sums them. Higher scores represent better-quality releases.
 
     Args:
         sanitised: A sanitised index title string.
     """
     after = _after_year(sanitised) or ""
     score = 0
-    for table in (_RESOLUTION_SCORES, _SOURCE_SCORES, _AUDIO_SCORES):
+    for table in (_RESOLUTION_SCORES, _SOURCE_SCORES, _AUDIO_SCORES, _HDR_SCORES):
         for pattern, value in table.items():
             if re.search(rf"(?:^|\s){pattern}(?:\s|$)", after, re.IGNORECASE):
                 score += value

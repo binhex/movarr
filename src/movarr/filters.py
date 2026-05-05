@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, cast
 
 from loguru import logger as _logger
@@ -65,12 +65,13 @@ def filter_by_index(
         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
     """
     checks = [
+        lambda r: _check_reject_index_group(r, config),
         lambda r: _check_search_criteria(r, index_site),
         lambda r: _check_minimum_size(r, index_site),
         lambda r: _check_maximum_size(r, index_site),
-        lambda r: _check_bad_keywords(r, config),
+        lambda r: _check_reject_keywords(r, config),
         _check_tv_type,
-        lambda r: _check_bad_movie_titles(r, config),
+        lambda r: _check_reject_movie_titles(r, config),
         lambda r: _check_library(r, config, library_walk),
     ]
     for check in checks:
@@ -98,7 +99,7 @@ def filter_by_imdb(
     # Ordered gate chain — bail as soon as one check fails.
     checks = [
         lambda r: _check_allow_title_type(r, config),
-        lambda r: _check_bad_genre(r, config),
+        lambda r: _check_reject_genre(r, config),
         _check_bitrate,
         lambda r: _check_year(r, config),
         lambda r: _check_runtime(r, config),
@@ -137,6 +138,31 @@ def filter_by_imdb(
 
 
 # Stage 1 helpers
+
+
+def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
+    """Reject torrents from specific release groups.
+
+    Args:
+        result: Pipeline dict with ``index_title`` populated.
+        config: Application configuration.
+
+    Returns:
+        Updated result dict.
+    """
+    reject_list = config.filters.reject_index_group_list
+    if not reject_list:
+        return _pass(result, "No reject_index_group_list defined.")
+
+    index_title = result.get("index_title") or ""
+    group = extract_group(sanitise(index_title) or "")
+    if not group:
+        return _pass(result, "No release group detected; skipping group check.")
+
+    reject_lower = [g.lower() for g in reject_list]
+    if group.lower() in reject_lower:
+        return _fail(result, f"Release group '{group}' is in reject_index_group_list.")
+    return _pass(result, f"Release group '{group}' is not in reject_index_group_list.")
 
 
 def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
@@ -179,16 +205,16 @@ def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> Resu
     return _pass(result, msg) if ok else _fail(result, msg)
 
 
-def _check_bad_keywords(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_index_title_list
-    if not bad_list:
-        return _pass(result, "No bad index title keywords defined.")
+def _check_reject_keywords(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_index_title_list
+    if not reject_list:
+        return _pass(result, "No reject index title keywords defined.")
 
     index_title = result.get("index_title") or ""
-    for keyword in bad_list:
+    for keyword in reject_list:
         if bad_keyword_search(index_title, keyword):
-            return _fail(result, f"Index title contains bad keyword '{keyword}'.")
-    return _pass(result, "Index title passes bad keyword check.")
+            return _fail(result, f"Index title contains rejected keyword '{keyword}'.")
+    return _pass(result, "Index title passes reject keyword check.")
 
 
 def _check_tv_type(result: ResultDict) -> ResultDict:
@@ -200,17 +226,17 @@ def _check_tv_type(result: ResultDict) -> ResultDict:
     return _pass(result, "Index title is not TV content.")
 
 
-def _check_bad_movie_titles(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_movie_title_list
-    if not bad_list:
-        return _pass(result, "No bad movie titles defined.")
+def _check_reject_movie_titles(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_movie_title_list
+    if not reject_list:
+        return _pass(result, "No reject movie titles defined.")
 
     title_and_year_compare = result.get("movie_title_and_year_compare") or ""
-    for bad_title in bad_list:
-        norm = normalise_for_compare(bad_title)
+    for reject_title in reject_list:
+        norm = normalise_for_compare(reject_title)
         if norm and norm in title_and_year_compare:
-            return _fail(result, f"Index title matches bad movie title '{bad_title}'.")
-    return _pass(result, "Index title passes bad movie title check.")
+            return _fail(result, f"Index title matches reject movie title '{reject_title}'.")
+    return _pass(result, "Index title passes reject movie title check.")
 
 
 def _check_library(
@@ -250,38 +276,41 @@ def _check_allow_title_type(result: ResultDict, config: Config) -> ResultDict:
     return _pass(result, f"IMDb title type '{title_type_lower}' is allowed.")
 
 
-def _check_bad_genre(result: ResultDict, config: Config) -> ResultDict:
-    bad_list = config.filters.bad_genre_list
-    if not bad_list:
-        return _pass(result, "No bad genre list defined.")
+def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
+    reject_list = config.filters.reject_genre_list
+    if not reject_list:
+        return _pass(result, "No reject genre list defined.")
 
     genres = result.get("imdb_genres_list") or []
     genres_lower = [g.lower() for g in genres]
-    bad_lower = [b.lower() for b in bad_list]
+    reject_lower = [r.lower() for r in reject_list]
 
-    for bad in bad_lower:
-        if bad in genres_lower:
-            return _fail(result, f"Genre '{bad}' is in bad genre list.")
-    return _pass(result, f"Genres {genres_lower} pass bad genre check.")
+    for reject in reject_lower:
+        if reject in genres_lower:
+            return _fail(result, f"Genre '{reject}' is in reject genre list.")
+    return _pass(result, f"Genres {genres_lower} pass reject genre check.")
 
 
 def _check_bitrate(result: ResultDict) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
-    if not min_bitrate_mb:
+    if min_bitrate_mb is None:
         return _pass(result, "No minimum bitrate defined.")
 
     raw_size = result.get("index_size")
     runtime = result.get("imdb_running_time_in_minutes")
     if not raw_size:
         return _fail(result, "No index size available for bitrate check.")
-    if not runtime:
+    if runtime is None:
         return _fail(result, "No runtime available for bitrate check.")
 
     try:
+        runtime_int = int(runtime)
+        if runtime_int <= 0:
+            return _fail(result, f"Invalid runtime '{runtime}' for bitrate check.")
         size_mb = int(raw_size) // 1_000_000
-        bitrate_mb = size_mb // int(runtime)
-    except (ValueError, TypeError, ZeroDivisionError):
+        bitrate_mb = size_mb // runtime_int
+    except (ValueError, TypeError):
         return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
     if bitrate_mb >= int(min_bitrate_mb):
         return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {min_bitrate_mb}.")
@@ -297,7 +326,12 @@ def _check_year(result: ResultDict, config: Config) -> ResultDict:
     if not year:
         return _fail(result, "No movie year available for year check.")
 
-    if int(year) >= int(min_year):
+    try:
+        year_int = int(year)
+    except (ValueError, TypeError):
+        return _fail(result, f"Could not parse year '{year}' for year check.")
+
+    if year_int >= int(min_year):
         return _pass(result, f"Year {year} ≥ {min_year}.")
     return _fail(result, f"Year {year} < {min_year}.")
 
@@ -308,10 +342,15 @@ def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
         return _pass(result, "No minimum runtime defined.")
 
     runtime = result.get("imdb_running_time_in_minutes")
-    if not runtime:
+    if runtime is None:
         return _fail(result, "No runtime available for runtime check.")
 
-    if int(runtime) >= int(min_runtime):
+    try:
+        runtime_int = int(runtime)
+    except (ValueError, TypeError):
+        return _fail(result, f"Could not parse runtime '{runtime}' for runtime check.")
+
+    if runtime_int >= int(min_runtime):
         return _pass(result, f"Runtime {runtime} min ≥ {min_runtime} min.")
     return _fail(result, f"Runtime {runtime} min < {min_runtime} min.")
 
@@ -395,12 +434,18 @@ def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
         _fail(result, "No IMDb rating available; assuming below threshold.")
         return False
 
-    threshold = Decimal(str(min_rating))
+    try:
+        threshold = Decimal(str(min_rating))
+        rating_val = Decimal(str(imdb_rating))
+    except (InvalidOperation, ValueError, TypeError):
+        _fail(result, f"Could not parse rating '{imdb_rating}' or threshold '{min_rating}'.")
+        return False
+
     if threshold > Decimal("10.0"):
         _pass(result, f"Configured min rating {threshold} > 10.0; treating as no threshold.")
         return True
 
-    if Decimal(str(imdb_rating)) >= threshold:
+    if rating_val >= threshold:
         _pass(result, f"Rating {imdb_rating} ≥ {threshold}.")
         return True
 
@@ -415,11 +460,17 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
         return True
 
     imdb_votes = result.get("imdb_votes")
-    if not imdb_votes:
+    if imdb_votes is None:
         _fail(result, "No IMDb votes available; assuming below threshold.")
         return False
 
-    if int(imdb_votes) >= int(min_votes):
+    try:
+        votes_int = int(imdb_votes)
+    except (ValueError, TypeError):
+        _fail(result, f"Could not parse votes '{imdb_votes}' for votes check.")
+        return False
+
+    if votes_int >= int(min_votes):
         _pass(result, f"Votes {imdb_votes} ≥ {min_votes}.")
         return True
 
@@ -466,7 +517,11 @@ def _match_library_file(
     if not lib_title or not lib_year:
         return None
     norm = normalise_for_compare(lib_title)
-    if not norm or norm not in title_compare:
+    if not norm:
+        return None
+    # title_compare is already normalised; require exact match to prevent
+    # substring false positives (e.g. "rings" matching "thelordoftherings").
+    if norm != title_compare:
         return None
     if lib_year not in year:
         return None
