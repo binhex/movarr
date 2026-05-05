@@ -123,17 +123,17 @@ def _process_criteria(
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
         with logger.contextualize(tracker=tracker):
-            logger.info("<blue>Processing index title '{}'</blue>", index_title)
+            logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
             if session.db.is_duplicate_exact(index_title):
-                logger.debug("'{}' already in DB; skipping.", index_title)
+                logger.info("'{}' already in DB; skipping.", index_title)
                 continue
 
             if not result.get("movie_title"):
-                logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
+                logger.info("No movie title from '{}'; skipping.", result.get("index_title"))
                 continue
 
             if not result.get("movie_title_year"):
-                logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+                logger.info("No year from '{}'; skipping.", result.get("index_title"))
                 continue
 
             result = filter_by_index(result, site_dict, session.config, session.library_walk)
