@@ -161,6 +161,9 @@ class ProwlarrClient:
         imdb_id_raw = item.get("imdbId")
         if imdb_id_raw:
             with contextlib.suppress(ValueError, TypeError):
-                result["imdb_id"] = f"tt{int(imdb_id_raw):07d}"
+                if isinstance(imdb_id_raw, str) and imdb_id_raw.startswith("tt"):
+                    result["imdb_id"] = imdb_id_raw
+                else:
+                    result["imdb_id"] = f"tt{int(imdb_id_raw):07d}"
 
         return result

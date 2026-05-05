@@ -107,7 +107,11 @@ class Database:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._engine = create_engine(f"sqlite:///{self._db_path}", echo=False)
+        self._engine = create_engine(
+            f"sqlite:///{self._db_path}",
+            echo=False,
+            connect_args={"check_same_thread": False},
+        )
         self._Session = sessionmaker(bind=self._engine)
         self._ensure_schema()
 

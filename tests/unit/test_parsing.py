@@ -318,3 +318,24 @@ class TestQualityScore:
         score_atmos = quality_score("Movie 2020 1080p BluRay DTS HD TrueHD Atmos")
         score_dts = quality_score("Movie 2020 1080p BluRay DTS")
         assert score_atmos > score_dts
+
+    def test_hdr_scores_higher_than_sdr(self) -> None:
+        score_hdr = quality_score("Movie 2020 2160p BluRay HDR DTS")
+        score_sdr = quality_score("Movie 2020 2160p BluRay DTS")
+        assert score_hdr > score_sdr
+
+    def test_dolby_vision_scores_higher_than_hdr10(self) -> None:
+        score_dv = quality_score("Movie 2020 2160p BluRay Dolby Vision DTS")
+        score_hdr = quality_score("Movie 2020 2160p BluRay HDR DTS")
+        assert score_dv > score_hdr
+
+    def test_hdr10plus_scores_between_dv_and_plain_hdr(self) -> None:
+        score_dv = quality_score("Movie 2020 2160p BluRay DV DTS")
+        score_hdr_plus = quality_score("Movie 2020 2160p BluRay HDR10+ DTS")
+        score_hdr = quality_score("Movie 2020 2160p BluRay HDR DTS")
+        assert score_dv > score_hdr_plus > score_hdr
+
+    def test_dovi_alias_scores_as_dolby_vision(self) -> None:
+        score_dovi = quality_score("Movie 2020 2160p WEB-DL Do.Vi. DTS")
+        score_dv = quality_score("Movie 2020 2160p WEB-DL Dolby Vision DTS")
+        assert score_dovi == score_dv

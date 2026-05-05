@@ -70,8 +70,8 @@ class TestResultDictConstruction:
 
     def test_filter_bitrate_field(self) -> None:
         """Private-prefixed bitrate field can be set and read back."""
-        result: ResultDict = {"_filter_minimum_bitrate_mb": "5000"}
-        assert result["_filter_minimum_bitrate_mb"] == "5000"
+        result: ResultDict = {"_filter_minimum_bitrate_mb": 5000}
+        assert result["_filter_minimum_bitrate_mb"] == 5000
 
     def test_imdb_string_fields(self) -> None:
         """IMDb scalar string fields can be set and read back."""
@@ -215,7 +215,7 @@ class TestResultDictFullPayload:
             "magnet_url": "magnet:?xt=urn:btih:xyz",
             "torrent_hash": "xyzxyz",
             "category": "movies",
-            "_filter_minimum_bitrate_mb": "6000",
+            "_filter_minimum_bitrate_mb": 6000,
             "torrent_tag": "hd",
             "imdb_id": "tt1375666",
             "imdb_title": "Inception",

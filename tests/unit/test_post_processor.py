@@ -455,6 +455,30 @@ class TestBuildCopyList:
         result = _build_copy_list(torrent, self._config(file_regex=[r"sample"]))
         assert result == []
 
+    def test_invalid_file_regex_skipped(self, tmp_path: Path) -> None:
+        """Invalid regex in exclude_file_regex_list is skipped and file is kept."""
+        torrent = {
+            "torrent_save_path": str(tmp_path),
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 8_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, self._config(file_regex=[r"(invalid"]))
+        assert len(result) == 1
+        assert result[0].endswith("movie.mkv")
+
+    def test_invalid_folder_regex_skipped(self, tmp_path: Path) -> None:
+        """Invalid regex in exclude_folder_regex_list is skipped and file is kept."""
+        torrent = {
+            "torrent_save_path": str(tmp_path),
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 8_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, self._config(folder_regex=[r"(invalid"]))
+        assert len(result) == 1
+        assert result[0].endswith("movie.mkv")
+
     def test_empty_file_list_returns_empty(self, tmp_path: Path) -> None:
         torrent = {
             "torrent_save_path": str(tmp_path),

@@ -125,21 +125,69 @@ class TestFilterByIndexTv:
         assert out["result"] != "Passed"
 
 
-# filter_by_index: bad keywords
+# filter_by_index: reject group
 
 
-class TestFilterByIndexBadKeywords:
-    """Titles containing bad keywords must be rejected."""
+class TestFilterByIndexRejectGroup:
+    """Release group rejection filter."""
 
-    def test_bad_keyword_rejects_result(self) -> None:
+    def test_matching_group_fails(self) -> None:
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Failed"
+        details = " ".join(out.get("result_details", []))
+        assert "fgt" in details.lower()
+
+    def test_non_matching_group_passes(self) -> None:
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay SPARKS")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+
+    def test_empty_list_skips_check(self) -> None:
+        cfg = Config()  # reject_index_group_list = []
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+
+    def test_case_insensitive_match(self) -> None:
+        cfg = _make_config(reject_index_group_list=["fgt"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay FGT")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Failed"
+
+    def test_non_matching_quality_token_passes(self) -> None:
+        """extract_group returns the last token (e.g. 'bluray') when no group is present."""
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie 2020 1080p BluRay")
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"
+        assert "bluray" in " ".join(out.get("result_details", [])).lower()
+
+    def test_no_group_detected_no_year_passes(self) -> None:
+        """Titles without a year have no after-year segment → no group detected."""
+        cfg = _make_config(reject_index_group_list=["FGT"])
+        result = _index_result(index_title="Movie")
+        out = filter_by_index(result, _default_site_dict(criteria=""), cfg)
+        assert out["result"] == "Passed"
+
+
+# filter_by_index: reject keywords
+
+
+class TestFilterByIndexRejectKeywords:
+    """Titles containing rejected keywords must be rejected."""
+
+    def test_reject_keyword_rejects_result(self) -> None:
         cfg = Config()
-        cfg.filters.bad_index_title_list = ["CAM"]
+        cfg.filters.reject_index_title_list = ["CAM"]
         result = _index_result(index_title="Movie 2020 CAM 1080p BluRay")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] != "Passed"
 
-    def test_no_bad_keywords_passes(self) -> None:
-        cfg = Config()  # default — empty bad_index_title_list
+    def test_no_reject_keywords_passes(self) -> None:
+        cfg = Config()  # default — empty reject_index_title_list
         result = _index_result()
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
@@ -242,7 +290,7 @@ class TestFilterByIndexBitrate:
     def test_passes_when_bitrate_meets_minimum(self) -> None:
         # 8000 MB / 120 min = ~66 MB/min, min = 50
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             index_size=str(8_000_000_000),
             imdb_running_time_in_minutes="120",
         )
@@ -253,7 +301,7 @@ class TestFilterByIndexBitrate:
     def test_fails_when_bitrate_below_minimum(self) -> None:
         # 1000 MB / 120 min = ~8 MB/min, min = 50
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             index_size=str(1_000_000_000),
             imdb_running_time_in_minutes="120",
         )
@@ -269,7 +317,7 @@ class TestFilterByIndexBitrate:
 
     def test_fails_when_no_index_size_available(self) -> None:
         result = _imdb_result(
-            _filter_minimum_bitrate_mb="50",
+            _filter_minimum_bitrate_mb=50,
             imdb_running_time_in_minutes="120",
         )
         result.pop("index_size", None)
@@ -351,29 +399,29 @@ class TestFilterByIndexLibraryDedup:
 # filter_by_imdb: genre gate
 
 
-class TestFilterByImdbGenre:
-    """Genre exclusion filter (bad_genre_list)."""
+class TestFilterByImdbRejectGenre:
+    """Genre exclusion filter (reject_genre_list)."""
 
     def test_excluded_genre_rejects_result(self) -> None:
-        cfg = _make_config(bad_genre_list=["Horror"])
+        cfg = _make_config(reject_genre_list=["Horror"])
         result = _imdb_result(imdb_genres_list=["Horror", "Thriller"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
     def test_no_excluded_genres_passes(self) -> None:
-        cfg = _make_config(bad_genre_list=["Horror"])
+        cfg = _make_config(reject_genre_list=["Horror"])
         result = _imdb_result(imdb_genres_list=["Action", "Drama"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_empty_bad_genre_list_always_passes(self) -> None:
-        cfg = Config()  # empty bad_genre_list
+    def test_empty_reject_genre_list_always_passes(self) -> None:
+        cfg = Config()  # empty reject_genre_list
         result = _imdb_result(imdb_genres_list=["Horror", "Gore"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
     def test_case_insensitive_genre_match(self) -> None:
-        cfg = _make_config(bad_genre_list=["horror"])
+        cfg = _make_config(reject_genre_list=["horror"])
         result = _imdb_result(imdb_genres_list=["Horror"])
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
@@ -675,33 +723,33 @@ class TestFilterByIndexSizeEdgeCases:
         assert out["result"] != "Passed"
 
 
-# filter_by_index: bad keyword no-match path
+# filter_by_index: reject keyword no-match path
 
 
-class TestFilterByIndexBadKeywordNoMatch:
-    """Non-empty bad keyword list with no match must still pass."""
+class TestFilterByIndexRejectKeywordNoMatch:
+    """Non-empty reject keyword list with no match must still pass."""
 
-    def test_non_empty_bad_keyword_list_no_match_passes(self) -> None:
-        cfg = _make_config(bad_index_title_list=["CAM"])
+    def test_non_empty_reject_keyword_list_no_match_passes(self) -> None:
+        cfg = _make_config(reject_index_title_list=["CAM"])
         result = _index_result()
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
 
 
-# filter_by_index: bad movie title list
+# filter_by_index: reject movie title list
 
 
-class TestFilterByIndexBadMovieTitles:
-    """Bad movie title list rejects matched titles and passes others."""
+class TestFilterByIndexRejectMovieTitles:
+    """Reject movie title list rejects matched titles and passes others."""
 
-    def test_bad_movie_title_match_fails(self) -> None:
-        cfg = _make_config(bad_movie_title_list=["thedarkknight"])
+    def test_reject_movie_title_match_fails(self) -> None:
+        cfg = _make_config(reject_movie_title_list=["thedarkknight"])
         result = _index_result(movie_title_and_year_compare="thedarkknight2008")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] != "Passed"
 
-    def test_bad_movie_title_no_match_passes(self) -> None:
-        cfg = _make_config(bad_movie_title_list=["terminator"])
+    def test_reject_movie_title_no_match_passes(self) -> None:
+        cfg = _make_config(reject_movie_title_list=["terminator"])
         result = _index_result(movie_title_and_year_compare="thedarkknight2008")
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
@@ -727,7 +775,7 @@ class TestFilterByImdbBitrateNoRuntime:
     """Bitrate check fails when runtime is absent."""
 
     def test_fails_when_minimum_bitrate_set_but_no_runtime(self) -> None:
-        result = _imdb_result(_filter_minimum_bitrate_mb="50")
+        result = _imdb_result(_filter_minimum_bitrate_mb=50)
         result.pop("imdb_running_time_in_minutes", None)
         out = filter_by_imdb(result, Config())
         assert out["result"] != "Passed"
@@ -752,6 +800,13 @@ class TestFilterByImdbYearEdgeCases:
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
+    def test_fails_when_year_is_invalid_string(self) -> None:
+        """Non-numeric year string cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_year=2000)
+        result = _imdb_result(movie_title_year="abc")
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
 
 # filter_by_imdb: runtime edge cases
 
@@ -769,6 +824,13 @@ class TestFilterByImdbRuntimeEdgeCases:
         cfg = _make_config(minimum_runtime_mins=60)
         result = _imdb_result()
         result.pop("imdb_running_time_in_minutes", None)
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_fails_when_runtime_is_empty_string(self) -> None:
+        """Empty-string runtime cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_runtime_mins=60)
+        result = _imdb_result(imdb_running_time_in_minutes="")
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
@@ -798,6 +860,13 @@ class TestFilterByImdbRatingEdgeCases:
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
+    def test_fails_when_rating_is_invalid_string(self) -> None:
+        """Non-numeric rating string cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_rating=7.0, minimum_votes=0)
+        result = _imdb_result(imdb_rating="abc")
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
 
 # filter_by_imdb: votes edge cases
 
@@ -815,6 +884,13 @@ class TestFilterByImdbVotesEdgeCases:
         cfg = _make_config(minimum_rating=0, minimum_votes=5000)
         result = _imdb_result()
         result.pop("imdb_votes", None)
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_fails_when_votes_is_empty_string(self) -> None:
+        """Empty-string votes cannot be parsed and should fail the gate."""
+        cfg = _make_config(minimum_rating=0, minimum_votes=5000)
+        result = _imdb_result(imdb_votes="")
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
@@ -940,6 +1016,19 @@ class TestFilterByIndexLibraryWalkEdgeCases:
         library_walk: list[tuple[str, list[str], list[str]]] = [
             ("/library", [], ["The Dark Knight 2099 1080p BluRay.mkv"])
         ]
+        out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+
+    def test_library_file_normalise_returns_none_skipped(self) -> None:
+        """File whose title normalises to None is skipped (covers _match_library_file line 496)."""
+        cfg = Config()
+        cfg.general.library_path_list = ["/library"]
+        result = _index_result(
+            index_title_resolution="1080",
+            movie_title_compare="thedarkknight",
+            movie_title_year="2008",
+        )
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["imdb 2008 1080p.mkv"])]
         out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
         assert out["result"] == "Passed"
 
@@ -1117,7 +1206,16 @@ class TestCheckBitrateEdgeCases:
 
         result = _imdb_result(imdb_running_time_in_minutes="0")
         # _check_bitrate reads _filter_minimum_bitrate_mb directly from the result dict
-        result["_filter_minimum_bitrate_mb"] = "50"
+        result["_filter_minimum_bitrate_mb"] = 50
+        result["index_size"] = "8000000000"
+        out = _check_bitrate(result)
+        assert out["result"] == "Failed"
+
+    def test_empty_string_runtime_sets_failed(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result = _imdb_result(imdb_running_time_in_minutes="")
+        result["_filter_minimum_bitrate_mb"] = 50
         result["index_size"] = "8000000000"
         out = _check_bitrate(result)
         assert out["result"] == "Failed"

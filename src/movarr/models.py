@@ -43,7 +43,7 @@ class ResultDict(TypedDict, total=False):
     magnet_url: str
     torrent_hash: str
     category: str
-    _filter_minimum_bitrate_mb: str
+    _filter_minimum_bitrate_mb: int
     torrent_tag: str
 
     # --- IMDb metadata ---

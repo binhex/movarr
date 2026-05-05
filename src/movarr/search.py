@@ -119,6 +119,7 @@ def _process_criteria(  # noqa: PLR0912
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(raw_result)
+        result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
 
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer

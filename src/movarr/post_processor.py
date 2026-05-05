@@ -48,7 +48,7 @@ def _apply_path_remapping(path: str, remappings: list[PathRemappingConfig]) -> s
     Handles both forward-slash and OS-native separators so mappings work
     whether the qBittorrent host is Linux or Windows.
     """
-    for remap in remappings:
+    for remap in sorted(remappings, key=lambda r: len(r.from_path), reverse=True):
         src = remap.from_path.rstrip("/\\")
         dst = remap.to_path.rstrip("/\\")
         if not src:
@@ -165,8 +165,18 @@ def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     file_list = torrent.get("torrent_file_list") or []
 
     exclude_min_kb = pp.exclude_file_min_kb or 0
-    exclude_file_regexes = [re.compile(r, re.IGNORECASE) for r in (pp.exclude_file_regex_list or [])]
-    exclude_folder_regexes = [re.compile(r, re.IGNORECASE) for r in (pp.exclude_folder_regex_list or [])]
+    exclude_file_regexes: list[re.Pattern[str]] = []
+    for r in pp.exclude_file_regex_list or []:
+        try:
+            exclude_file_regexes.append(re.compile(r, re.IGNORECASE))
+        except re.error:
+            logger.warning("Invalid file-exclude regex '{}'; skipping.", r)
+    exclude_folder_regexes: list[re.Pattern[str]] = []
+    for r in pp.exclude_folder_regex_list or []:
+        try:
+            exclude_folder_regexes.append(re.compile(r, re.IGNORECASE))
+        except re.error:
+            logger.warning("Invalid folder-exclude regex '{}'; skipping.", r)
 
     result: list[str] = []
     save_root = pathlib.Path(save_path).resolve()
