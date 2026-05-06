@@ -103,6 +103,20 @@ class TestCheckAndNotifyStreakStart:
         check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
         assert db.kv_get("index_proxy.zero_results_since") == first_ts
 
+    def test_corrupt_timestamp_resets_streak(self, tmp_path: Path) -> None:
+        """Corrupt zero_results_since value resets the streak start time."""
+        db = _db(tmp_path)
+        db.kv_set("index_proxy.zero_results_since", "not-a-timestamp")
+        config = _config(alert_hours=2.0, urls=["ntfy://t"])
+        check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
+        ts = db.kv_get("index_proxy.zero_results_since")
+        assert ts is not None
+        assert ts != "not-a-timestamp"  # replaced with a valid ISO stamp
+        assert db.kv_get("index_proxy.alert_sent") is None  # alert NOT sent yet
+        with patch("movarr.index_proxy_health.send_index_proxy_alert") as mock_alert:
+            check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
+        mock_alert.assert_not_called()  # threshold not yet reached after reset
+
 
 class TestCheckAndNotifyAlertFiring:
     """Alert fires exactly once when threshold is exceeded."""
@@ -159,6 +173,15 @@ class TestCheckAndNotifyAlertFiring:
         with patch("movarr.index_proxy_health.send_index_proxy_alert") as mock_alert:
             check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
         mock_alert.assert_not_called()
+
+    def test_failed_alert_does_not_set_alert_sent_flag(self, tmp_path: Path) -> None:
+        """If send_index_proxy_alert returns False, alert_sent is NOT written (retry on next cycle)."""
+        db = _db(tmp_path)
+        db.kv_set("index_proxy.zero_results_since", self._past_iso(3.0))
+        config = _config(alert_hours=2.0, urls=["ntfy://t"])
+        with patch("movarr.index_proxy_health.send_index_proxy_alert", return_value=False):
+            check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
+        assert db.kv_get("index_proxy.alert_sent") is None
 
     def test_new_outage_alerts_after_streak_reset(self, tmp_path: Path) -> None:
         """After a streak reset, a new outage can trigger a fresh alert."""
