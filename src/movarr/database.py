@@ -15,13 +15,14 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 if TYPE_CHECKING:
     from movarr.models import ResultDict
 
-__all__ = ["Database", "HistoryRecord"]
+__all__ = ["Database", "HistoryRecord", "KvRecord"]
 
-_DB_VERSION = 10
+_DB_VERSION = 11
 _SCHEMA_V7_CERT_FIELDS = 7
 _SCHEMA_V8_INDEX_TITLE_IDX = 8
 _SCHEMA_V9_STALLED_AT = 9
 _SCHEMA_V10_CREATED_AT = 10
+_SCHEMA_V11_KV_STORE = 11
 
 
 def _encode_field(value: object) -> str | None:
@@ -91,6 +92,16 @@ class HistoryRecord(Base):
     imdb_cert_source = Column(String)
     stalled_at = Column(String)
     created_at = Column(String)
+
+
+class KvRecord(Base):
+    """A single key-value entry in the persistent kv_store table."""
+
+    __tablename__ = "kv_store"
+
+    key: Any = Column(String, primary_key=True)
+    value: Any = Column(String, nullable=True)
+    updated_at: Any = Column(String, nullable=True)
 
 
 class Database:
@@ -178,6 +189,14 @@ class Database:
                 existing_cols = {row[1] for row in cursor.fetchall()}
                 if "created_at" not in existing_cols:
                     conn.execute(text("ALTER TABLE history ADD COLUMN created_at TEXT"))
+                conn.commit()
+            if from_version < _SCHEMA_V11_KV_STORE:
+                conn.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS kv_store "
+                        "(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
+                    )
+                )
                 conn.commit()
         self._set_user_version(_DB_VERSION)
 
@@ -526,3 +545,49 @@ class Database:
         with self._engine.connect() as conn:
             conn.execute(text("VACUUM"))
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Key-value store
+    # ------------------------------------------------------------------
+
+    def kv_get(self, key: str) -> str | None:
+        """Return the stored string for *key*, or ``None`` if absent.
+
+        Args:
+            key: Dot-namespaced key string (e.g. ``"index_proxy.zero_results_since"``).
+
+        Returns:
+            The stored value, or ``None`` if the key does not exist.
+        """
+        with Session(self._engine) as session:
+            record = session.get(KvRecord, key)
+            return record.value if record is not None else None
+
+    def kv_set(self, key: str, value: str) -> None:
+        """Upsert *value* for *key* in the persistent kv store.
+
+        Args:
+            key: Dot-namespaced key string.
+            value: String value to store.
+        """
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        with Session(self._engine) as session:
+            record = session.get(KvRecord, key)
+            if record is None:
+                session.add(KvRecord(key=key, value=value, updated_at=now))
+            else:
+                record.value = value
+                record.updated_at = now
+            session.commit()
+
+    def kv_delete(self, key: str) -> None:
+        """Delete the entry for *key* if it exists (no-op if absent).
+
+        Args:
+            key: Dot-namespaced key string.
+        """
+        with Session(self._engine) as session:
+            record = session.get(KvRecord, key)
+            if record is not None:
+                session.delete(record)
+                session.commit()

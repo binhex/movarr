@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.8.0"
+_CONFIG_VERSION = "2.9.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +103,14 @@ def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v28_to_v29(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.8.0 -> v2.9.0: add notification.index_proxy_alert_hours (default 0 = disabled)."""
+    notification = raw.setdefault("notification", {})
+    notification.setdefault("index_proxy_alert_hours", 0)
+    raw.setdefault("general", {})["config_version"] = "2.9.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -113,6 +121,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.5.0": _migrate_v25_to_v26,
     "2.6.0": _migrate_v26_to_v27,
     "2.7.0": _migrate_v27_to_v28,
+    "2.8.0": _migrate_v28_to_v29,
 }
 
 
@@ -211,9 +220,14 @@ class NotificationConfig(BaseModel):
     Specify one or more `apprise <https://github.com/caronc/apprise>`_ service URLs.
     An empty list disables notifications.  Any apprise-supported service works:
     ``ntfy://topic``, ``discord://id/token``, ``mailtos://user:pass@host:587/``, etc.
+
+    ``index_proxy_alert_hours``: send an alert after the index proxy returns no results
+    (or is unreachable) for this many hours.  Requires ``apprise_urls`` to be non-empty.
+    ``0`` disables the feature.
     """
 
     apprise_urls: list[str] = Field(default_factory=list)
+    index_proxy_alert_hours: float = 0
 
 
 class JackettConfig(BaseModel):

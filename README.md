@@ -157,6 +157,7 @@ Controls which torrents pass the IMDb quality gate.
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `apprise_urls` | List of [apprise](https://github.com/caronc/apprise) service URLs. Leave empty to disable. | `[]` |
+| `index_proxy_alert_hours` | Send an alert if the index proxy returns no results or is unreachable for this many consecutive hours. Set to `0` to disable. | `0` |
 
 Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services. Example:
 `ntfy://my-topic`, `discord://webhook-id/webhook-token`.
