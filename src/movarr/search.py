@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from movarr import torrent_client_health
 from movarr.file_utils import walk_library
 from movarr.filters import filter_by_imdb, filter_by_index
 from movarr.imdb_metadata import fetch_metadata
@@ -69,7 +70,9 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
 
     if not qbt.is_connected():
         logger.warning("qBittorrent is unreachable; skipping search.")
+        torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
+    torrent_client_health.check_and_notify(is_reachable=True, db=db, config=config)
 
     proxy_name = config.index_proxy.selected.capitalize()
 

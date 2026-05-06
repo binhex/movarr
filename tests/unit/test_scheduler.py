@@ -351,19 +351,18 @@ class TestConnectQbt:
 class TestRunDaemon:
     """Tests for _run_daemon — APScheduler-based background loop."""
 
-    def test_starts_three_scheduled_jobs_then_exits_on_keyboard_interrupt(self, mocker: MockerFixture) -> None:
-        """All three tasks are registered then the loop exits on KeyboardInterrupt."""
+    def test_starts_three_scheduled_jobs(self, mocker: MockerFixture) -> None:
+        """All three tasks are registered and the scheduler is started."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
         assert mock_sched.add_job.call_count == 3
         mock_sched.start.assert_called_once()
-        mock_sched.shutdown.assert_called()
 
     def test_job_ids_are_correct(self, mocker: MockerFixture) -> None:
         """The three scheduled jobs have the expected IDs."""
@@ -371,7 +370,7 @@ class TestRunDaemon:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -383,13 +382,14 @@ class TestRunDaemon:
 class TestRunDaemonSignalHandler:
     """Tests that _shutdown signal handler is properly invoked."""
 
-    def test_shutdown_handler_calls_sys_exit(self, mocker: MockerFixture) -> None:
-        """The _shutdown inner function calls scheduler.shutdown and sys.exit(0)."""
+    def test_shutdown_handler_shuts_down_scheduler_and_sets_stop_event(self, mocker: MockerFixture) -> None:
+        """The _shutdown inner function shuts down the scheduler and sets the stop event."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mock_sys_exit = mocker.patch("movarr.scheduler.sys.exit")
+        mock_event = mocker.MagicMock()
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mock_event)
 
         captured_handlers: dict = {}
 
@@ -397,8 +397,6 @@ class TestRunDaemonSignalHandler:
             captured_handlers[sig] = handler
 
         mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)
-        # After handlers are registered, raise SystemExit to stop the sleep loop.
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
 
         _run_daemon(Config())
 
@@ -407,20 +405,20 @@ class TestRunDaemonSignalHandler:
         handler = captured_handlers.get(signal_mod.SIGTERM)
         assert handler is not None
 
-        # Call the captured handler directly.
         handler(signal_mod.SIGTERM, None)
 
         mock_sched.shutdown.assert_called()
-        mock_sys_exit.assert_called_with(0)
+        mock_event.set.assert_called()
 
     def test_signal_handler_when_scheduler_already_stopped_does_not_raise(self, mocker: MockerFixture) -> None:
-        """If _shutdown is called a second time (double signal) after the scheduler
-        is already stopped, it must not raise SchedulerNotRunningError."""
+        """If _shutdown is called after the scheduler is already stopped,
+        it must not raise SchedulerNotRunningError."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mock_sys_exit = mocker.patch("movarr.scheduler.sys.exit")
+        mock_event = mocker.MagicMock()
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mock_event)
 
         captured_handlers: dict = {}
 
@@ -428,7 +426,6 @@ class TestRunDaemonSignalHandler:
             captured_handlers[sig] = handler
 
         mocker.patch("movarr.scheduler.signal.signal", side_effect=capture_signal)
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
 
         _run_daemon(Config())
 
@@ -437,27 +434,24 @@ class TestRunDaemonSignalHandler:
         handler = captured_handlers.get(signal_mod.SIGINT)
         assert handler is not None
 
-        # Simulate scheduler already stopped when handler fires a second time.
+        # Simulate scheduler already stopped when handler fires.
         mock_sched.shutdown.side_effect = SchedulerNotRunningError
 
         # Must not raise SchedulerNotRunningError.
         handler(signal_mod.SIGINT, None)
-        mock_sys_exit.assert_called_with(0)
+        mock_event.set.assert_called()
 
-    def test_clean_exit_does_not_raise(self, mocker: MockerFixture) -> None:
-        """When SystemExit escapes time.sleep (from _shutdown's sys.exit call)
-        and the scheduler is already stopped, the except block must not raise
-        SchedulerNotRunningError — _run_daemon returns normally."""
+    def test_stop_event_wait_is_called(self, mocker: MockerFixture) -> None:
+        """_run_daemon blocks on stop_event.wait() until signalled."""
         mocker.patch("movarr.scheduler.Database")
         mocker.patch("movarr.scheduler._connect_qbt")
-        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
-        mock_sched = mock_sched_cls.return_value
-        mock_sched.shutdown.side_effect = SchedulerNotRunningError
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=SystemExit)
-        mocker.patch("movarr.scheduler.sys.exit")
+        mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_event = mocker.MagicMock()
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mock_event)
 
-        # Must complete without raising SchedulerNotRunningError.
         _run_daemon(Config())
+
+        mock_event.wait.assert_called_once()
 
 
 # _run_daemon — run_on_start
@@ -478,7 +472,7 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         config = Config()
         config.schedule.acquisition.run_on_start = False
@@ -498,7 +492,7 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         config = Config()
         config.schedule.acquisition.run_on_start = True
@@ -517,7 +511,7 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         config = Config()
         config.schedule.queue_management.run_on_start = True
@@ -536,7 +530,7 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         config = Config()
         config.schedule.post_processing.run_on_start = True
@@ -553,7 +547,7 @@ class TestRunDaemonRunOnStart:
         mocker.patch("movarr.scheduler._connect_qbt")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         config = Config()
         config.schedule.acquisition.run_on_start = True
@@ -630,7 +624,7 @@ class TestLogNextRun:
         mock_log_next_run = mocker.patch("movarr.scheduler._log_next_run")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -654,7 +648,7 @@ class TestLogNextRun:
         mock_log_next_run = mocker.patch("movarr.scheduler._log_next_run")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -677,7 +671,7 @@ class TestLogNextRun:
         mock_log_next_run = mocker.patch("movarr.scheduler._log_next_run")
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -706,7 +700,7 @@ class TestLogNextRun:
         mocker.patch("movarr.scheduler._log_next_run", side_effect=RuntimeError("scheduler gone"))
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -721,7 +715,7 @@ class TestLogNextRun:
         mocker.patch("movarr.scheduler._log_next_run", side_effect=RuntimeError("scheduler gone"))
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 
@@ -735,7 +729,7 @@ class TestLogNextRun:
         mocker.patch("movarr.scheduler._log_next_run", side_effect=RuntimeError("scheduler gone"))
         mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
         mock_sched = mock_sched_cls.return_value
-        mocker.patch("movarr.scheduler.time.sleep", side_effect=KeyboardInterrupt)
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
 
         _run_daemon(Config())
 

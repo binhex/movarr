@@ -17,12 +17,13 @@ if TYPE_CHECKING:
 
 __all__ = ["Database", "HistoryRecord", "KvRecord"]
 
-_DB_VERSION = 11
+_DB_VERSION = 12
 _SCHEMA_V7_CERT_FIELDS = 7
 _SCHEMA_V8_INDEX_TITLE_IDX = 8
 _SCHEMA_V9_STALLED_AT = 9
 _SCHEMA_V10_CREATED_AT = 10
 _SCHEMA_V11_KV_STORE = 11
+_SCHEMA_V12_KV_KEY_RENAME = 12
 
 
 def _encode_field(value: object) -> str | None:
@@ -195,6 +196,14 @@ class Database:
                     text(
                         "CREATE TABLE IF NOT EXISTS kv_store "
                         "(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
+                    )
+                )
+                conn.commit()
+            if from_version < _SCHEMA_V12_KV_KEY_RENAME:
+                conn.execute(
+                    text(
+                        "UPDATE kv_store SET key = 'index_proxy.unavailable_since' "
+                        "WHERE key = 'index_proxy.zero_results_since'"
                     )
                 )
                 conn.commit()
