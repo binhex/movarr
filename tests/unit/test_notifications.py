@@ -308,3 +308,83 @@ class TestSendIndexProxyAlert:
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
             result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=1.0, config=config)
         assert result is False
+
+
+class TestSendServiceAlert:
+    """Tests for the generic send_service_alert() function."""
+
+    def _make_config(self, urls: list[str]) -> Config:
+        from movarr.config import NotificationConfig
+        config = Config()
+        return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
+
+    def test_returns_false_when_no_urls_configured(self) -> None:
+        """Returns False immediately when apprise_urls is empty."""
+        from movarr.notifications import send_service_alert
+        config = self._make_config([])
+        assert send_service_alert(service_name="qBittorrent", hours_elapsed=3.0, config=config) is False
+
+    def test_calls_apprise_when_urls_configured(self) -> None:
+        """Calls apprise.Apprise.notify() and returns True on success."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_service_alert
+        config = self._make_config(["ntfy://t"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            assert send_service_alert(service_name="qBittorrent", hours_elapsed=2.0, config=config) is True
+        mock_ap.notify.assert_called_once()
+
+    def test_subject_contains_service_name_and_hours(self) -> None:
+        """Subject line includes service name and elapsed hours."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_service_alert
+        config = self._make_config(["ntfy://t"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            send_service_alert(service_name="qBittorrent", hours_elapsed=4.0, config=config)
+        _, kwargs = mock_ap.notify.call_args
+        assert "qBittorrent" in kwargs["title"]
+        assert "4" in kwargs["title"]
+
+    def test_returns_false_when_apprise_returns_false(self) -> None:
+        """Returns False when apprise.notify() returns False."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_service_alert
+        config = self._make_config(["ntfy://t"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = False
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            assert send_service_alert(service_name="qBittorrent", hours_elapsed=1.0, config=config) is False
+
+    def test_returns_false_when_apprise_raises(self) -> None:
+        """Returns False and does not propagate when apprise raises."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_service_alert
+        config = self._make_config(["ntfy://t"])
+        mock_ap = MagicMock()
+        mock_ap.notify.side_effect = RuntimeError("boom")
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            assert send_service_alert(service_name="qBittorrent", hours_elapsed=1.0, config=config) is False
+
+
+class TestSendIndexProxyAlertDelegates:
+    """send_index_proxy_alert() must delegate to send_service_alert()."""
+
+    def test_delegates_to_send_service_alert(self) -> None:
+        """send_index_proxy_alert() calls send_service_alert() with correct args."""
+        from unittest.mock import patch
+
+        from movarr.notifications import send_index_proxy_alert
+        config = Config()
+        with patch("movarr.notifications.send_service_alert", return_value=True) as mock_generic:
+            result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
+        mock_generic.assert_called_once_with(
+            service_name="Prowlarr", hours_elapsed=3.0, config=config
+        )
+        assert result is True

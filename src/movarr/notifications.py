@@ -18,15 +18,18 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["send_index_proxy_alert", "send_queued_notification"]
+__all__ = ["send_index_proxy_alert", "send_queued_notification", "send_service_alert"]
 
 
-def send_index_proxy_alert(proxy_name: str, hours_elapsed: float, config: Config) -> bool:
-    """Send an alert notification when the index proxy has returned no results for too long.
+def send_service_alert(service_name: str, hours_elapsed: float, config: Config) -> bool:
+    """Send an alert notification when a monitored service has been unavailable.
+
+    Generic function used by all service health monitors (index proxy,
+    torrent client, etc.).
 
     Args:
-        proxy_name: Human-readable proxy name, e.g. ``"Prowlarr"`` or ``"Jackett"``.
-        hours_elapsed: How many hours the zero-results streak has lasted.
+        service_name: Human-readable service name, e.g. ``"Prowlarr"`` or ``"qBittorrent"``.
+        hours_elapsed: How many hours the unavailability streak has lasted.
         config: Application configuration.
 
     Returns:
@@ -35,17 +38,17 @@ def send_index_proxy_alert(proxy_name: str, hours_elapsed: float, config: Config
     """
     urls = config.notification.apprise_urls
     if not urls:
-        logger.debug("No apprise URLs configured; skipping index proxy alert.")
+        logger.debug("No apprise URLs configured; skipping service alert.")
         return False
 
     hours_str = f"{hours_elapsed:.1f}"
-    subject = f"movarr: {proxy_name} returned no results for {hours_str}h \u2014 possible outage"
+    subject = f"movarr: {service_name} has been unavailable for {hours_str}h \u2014 possible outage"
     body = (
-        f"<p><strong>movarr index proxy alert</strong></p>"
-        f"<p><strong>Proxy:</strong> {proxy_name}</p>"
-        f"<p><strong>Duration:</strong> No results returned for {hours_str} hours.</p>"
-        f"<p>movarr will keep retrying every search cycle. "
-        f"Check that {proxy_name} is running and its indexers are healthy.</p>"
+        f"<p><strong>movarr service health alert</strong></p>"
+        f"<p><strong>Service:</strong> {service_name}</p>"
+        f"<p><strong>Duration:</strong> Unavailable for {hours_str} hours.</p>"
+        f"<p>movarr will keep retrying every cycle. "
+        f"Check that {service_name} is running and accessible.</p>"
     )
 
     ap = apprise.Apprise()
@@ -55,15 +58,31 @@ def send_index_proxy_alert(proxy_name: str, hours_elapsed: float, config: Config
     try:
         sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
     except Exception:
-        logger.exception("Index proxy alert send failed.")
+        logger.exception("Service alert send failed.")
         return False
 
     if not sent:
-        logger.warning("Index proxy alert was not delivered (apprise returned False).")
+        logger.warning("Service alert was not delivered (apprise returned False).")
         return False
 
-    logger.warning("Index proxy alert sent: {}", subject)
+    logger.warning("Service alert sent: {}", subject)
     return True
+
+
+def send_index_proxy_alert(proxy_name: str, hours_elapsed: float, config: Config) -> bool:
+    """Send an alert for an index proxy outage.
+
+    Delegates to :func:`send_service_alert`. Kept for backwards compatibility.
+
+    Args:
+        proxy_name: Human-readable proxy name, e.g. ``"Prowlarr"`` or ``"Jackett"``.
+        hours_elapsed: How many hours the zero-results streak has lasted.
+        config: Application configuration.
+
+    Returns:
+        ``True`` if the notification was delivered, ``False`` otherwise.
+    """
+    return send_service_alert(service_name=proxy_name, hours_elapsed=hours_elapsed, config=config)
 
 
 def send_queued_notification(result: ResultDict, config: Config) -> bool:
