@@ -104,9 +104,9 @@ def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _migrate_v28_to_v29(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.8.0 -> v2.9.0: add notification.index_proxy_alert_hours (default null)."""
+    """Migrate v2.8.0 -> v2.9.0: add notification.index_proxy_alert_hours (default 0 = disabled)."""
     notification = raw.setdefault("notification", {})
-    notification.setdefault("index_proxy_alert_hours", None)
+    notification.setdefault("index_proxy_alert_hours", 0)
     raw.setdefault("general", {})["config_version"] = "2.9.0"
     return raw
 
@@ -221,13 +221,13 @@ class NotificationConfig(BaseModel):
     An empty list disables notifications.  Any apprise-supported service works:
     ``ntfy://topic``, ``discord://id/token``, ``mailtos://user:pass@host:587/``, etc.
 
-    ``index_proxy_alert_hours``: if set, send an alert after the index proxy returns
-    no results (or is unreachable) for this many hours.  Requires ``apprise_urls``
-    to be non-empty.  ``None`` disables the feature.
+    ``index_proxy_alert_hours``: send an alert after the index proxy returns no results
+    (or is unreachable) for this many hours.  Requires ``apprise_urls`` to be non-empty.
+    ``0`` disables the feature.
     """
 
     apprise_urls: list[str] = Field(default_factory=list)
-    index_proxy_alert_hours: float | None = None
+    index_proxy_alert_hours: float = 0
 
 
 class JackettConfig(BaseModel):

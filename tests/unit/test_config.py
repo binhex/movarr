@@ -482,7 +482,7 @@ class TestMigrationV25toV26:
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
         assert cfg.general.config_version == "2.9.0"
-        assert cfg.notification.index_proxy_alert_hours is None
+        assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
 
@@ -532,10 +532,10 @@ class TestIndexProxySelectedValidator:
 class TestIndexProxyAlertHoursConfig:
     """Tests for notification.index_proxy_alert_hours config field."""
 
-    def test_default_is_none(self) -> None:
-        """index_proxy_alert_hours defaults to None (feature disabled)."""
+    def test_default_is_zero(self) -> None:
+        """index_proxy_alert_hours defaults to 0 (feature disabled)."""
         config = Config()
-        assert config.notification.index_proxy_alert_hours is None
+        assert config.notification.index_proxy_alert_hours == 0
 
     def test_parses_float_value(self) -> None:
         """A float value is parsed and stored correctly."""
@@ -551,12 +551,12 @@ class TestIndexProxyAlertHoursConfig:
         )
         assert config.notification.index_proxy_alert_hours == 2.0  # noqa: PLR2004
 
-    def test_parses_null_explicitly(self) -> None:
-        """Explicitly setting null keeps the feature disabled."""
+    def test_parses_zero_disables_feature(self) -> None:
+        """Explicitly setting 0 keeps the feature disabled."""
         config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "index_proxy_alert_hours": None}}
+            {"notification": {"apprise_urls": [], "index_proxy_alert_hours": 0}}
         )
-        assert config.notification.index_proxy_alert_hours is None
+        assert config.notification.index_proxy_alert_hours == 0
 
 
 # Migration v2.8.0 -> v2.9.0
@@ -565,11 +565,11 @@ class TestIndexProxyAlertHoursConfig:
 class TestMigrationV28ToV29:
     """Tests for the v2.8.0 -> v2.9.0 config migration."""
 
-    def test_adds_index_proxy_alert_hours_null(self) -> None:
-        """Migration inserts index_proxy_alert_hours: null into notification block."""
+    def test_adds_index_proxy_alert_hours_zero(self) -> None:
+        """Migration inserts index_proxy_alert_hours: 0 into notification block."""
         raw = {"general": {"config_version": "2.8.0"}, "notification": {"apprise_urls": []}}
         result = _migrate_v28_to_v29(raw)
-        assert result["notification"]["index_proxy_alert_hours"] is None
+        assert result["notification"]["index_proxy_alert_hours"] == 0
 
     def test_bumps_version_to_v29(self) -> None:
         """Migration sets config_version to 2.9.0."""

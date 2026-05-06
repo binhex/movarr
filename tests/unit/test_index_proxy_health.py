@@ -33,16 +33,16 @@ class TestCheckAndNotifyFeatureDisabled:
     """When the feature is disabled, nothing is written to the DB."""
 
     def test_no_alert_hours_configured_has_results(self, tmp_path: Path) -> None:
-        """No DB writes when alert_hours is None and proxy has results."""
+        """No DB writes when alert_hours is 0 (disabled) and proxy has results."""
         db = _db(tmp_path)
-        config = _config(alert_hours=None)
+        config = _config(alert_hours=0)
         check_and_notify(has_results=True, proxy_name="Prowlarr", db=db, config=config)
         assert db.kv_get("index_proxy.zero_results_since") is None
 
     def test_no_alert_hours_configured_no_results(self, tmp_path: Path) -> None:
-        """No DB writes when alert_hours is None and proxy has no results."""
+        """No DB writes when alert_hours is 0 (disabled) and proxy has no results."""
         db = _db(tmp_path)
-        config = _config(alert_hours=None)
+        config = _config(alert_hours=0)
         check_and_notify(has_results=False, proxy_name="Prowlarr", db=db, config=config)
         assert db.kv_get("index_proxy.zero_results_since") is None
 

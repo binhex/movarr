@@ -74,7 +74,7 @@ def _reset_streak(db: Database) -> None:
 def _on_zero_results(proxy_name: str, db: Database, config: Config) -> None:
     """Record or advance a zero-results streak; fire alert when due."""
     alert_hours = config.notification.index_proxy_alert_hours
-    if alert_hours is None:
+    if alert_hours <= 0:
         return
 
     since_raw = db.kv_get(_KEY_SINCE)
