@@ -15,8 +15,7 @@ from __future__ import annotations
 import datetime
 import os
 import signal
-import sys
-import time
+import threading
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -158,21 +157,19 @@ def _run_daemon(config: Config) -> None:
     )
 
     # Block until SIGTERM or SIGINT.
+    stop_event = threading.Event()
+
     def _shutdown(signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal {}; shutting down.", signum)
         with suppress(SchedulerNotRunningError):
             scheduler.shutdown(wait=False)
-        sys.exit(0)
+        stop_event.set()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    try:
-        while True:
-            time.sleep(30)
-    except (KeyboardInterrupt, SystemExit):
-        with suppress(SchedulerNotRunningError):
-            scheduler.shutdown(wait=False)
+    stop_event.wait()
+    logger.info("movarr stopped.")
 
 
 # Task wrappers — catch all exceptions so one bad run doesn't kill the scheduler
