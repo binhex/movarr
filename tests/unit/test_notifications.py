@@ -241,3 +241,70 @@ class TestNotificationConfigDefaults:
 
         nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
         assert len(nc.apprise_urls) == 2
+
+
+class TestSendIndexProxyAlert:
+    """Tests for send_index_proxy_alert()."""
+
+    def _make_config(self, urls: list[str]) -> Config:
+        from movarr.config import NotificationConfig
+        config = Config()
+        return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
+
+    def test_returns_false_when_no_urls_configured(self) -> None:
+        """Returns False immediately when apprise_urls is empty."""
+        from movarr.notifications import send_index_proxy_alert
+        config = self._make_config([])
+        result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
+        assert result is False
+
+    def test_calls_apprise_when_urls_configured(self) -> None:
+        """Calls apprise.Apprise.notify() when URLs are present."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_index_proxy_alert
+        config = self._make_config(["ntfy://test-topic"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            result = send_index_proxy_alert(proxy_name="Jackett", hours_elapsed=2.5, config=config)
+        assert result is True
+        mock_ap.notify.assert_called_once()
+
+    def test_subject_contains_proxy_name_and_hours(self) -> None:
+        """Notification subject includes the proxy name and elapsed hours."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_index_proxy_alert
+        config = self._make_config(["ntfy://test-topic"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=4.0, config=config)
+        _, kwargs = mock_ap.notify.call_args
+        assert "Prowlarr" in kwargs["title"]
+        assert "4" in kwargs["title"]
+
+    def test_returns_false_when_apprise_returns_false(self) -> None:
+        """Returns False when apprise.notify() returns False."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_index_proxy_alert
+        config = self._make_config(["ntfy://test-topic"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = False
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=1.0, config=config)
+        assert result is False
+
+    def test_returns_false_when_apprise_raises(self) -> None:
+        """Returns False (does not propagate) when apprise.notify() raises."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.notifications import send_index_proxy_alert
+        config = self._make_config(["ntfy://test-topic"])
+        mock_ap = MagicMock()
+        mock_ap.notify.side_effect = RuntimeError("boom")
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=1.0, config=config)
+        assert result is False
