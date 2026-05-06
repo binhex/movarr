@@ -948,3 +948,60 @@ class TestRunSearchHealthMonitor:
             run_search(config, qbt, db)
 
         mock_health.assert_not_called()
+
+
+class TestRunSearchTorrentClientHealthMonitor:
+    """Tests that run_search() calls torrent_client_health.check_and_notify() correctly."""
+
+    def _make_config(self) -> Config:
+        from movarr.config import NotificationConfig
+        config = Config()
+        return config.model_copy(
+            update={"notification": NotificationConfig(
+                apprise_urls=["ntfy://t"],
+                torrent_client_alert_hours=2.0,
+            )}
+        )
+
+    def test_called_with_false_when_qbt_unreachable(self, tmp_path: Path) -> None:
+        """When qBittorrent is unreachable, check_and_notify called with is_reachable=False."""
+        from unittest.mock import MagicMock, patch
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = False
+
+        with patch("movarr.search.torrent_client_health") as mock_health:
+            run_search(config, qbt, db)
+
+        mock_health.check_and_notify.assert_called_once_with(
+            is_reachable=False, db=db, config=config
+        )
+
+    def test_called_with_true_when_qbt_reachable(self, tmp_path: Path) -> None:
+        """When qBittorrent is reachable, check_and_notify called with is_reachable=True."""
+        from unittest.mock import MagicMock, patch
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+        mock_indexer.search.return_value = iter([])
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify"),
+            patch("movarr.search.torrent_client_health") as mock_health,
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        mock_health.check_and_notify.assert_called_once_with(
+            is_reachable=True, db=db, config=config
+        )
