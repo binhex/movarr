@@ -706,3 +706,22 @@ class TestKvStore:
         """New database is created at schema version 11."""
         db = Database(tmp_path / "test.db")
         assert db._get_user_version() == 11
+
+    def test_kv_store_migration_from_v10(self, tmp_path: Path) -> None:
+        """kv_store table is created and usable when upgrading a v10 database."""
+        import sqlite3
+
+        db_path = tmp_path / "legacy.db"
+        # Create a bare v10 DB (history table exists, no kv_store)
+        raw = sqlite3.connect(str(db_path))
+        raw.execute(
+            "CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)"
+        )
+        raw.execute("PRAGMA user_version = 10")
+        raw.commit()
+        raw.close()
+
+        db = Database(db_path)
+        assert db._get_user_version() == 11
+        db.kv_set("k", "v")
+        assert db.kv_get("k") == "v"
