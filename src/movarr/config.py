@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.9.0"
+_CONFIG_VERSION = "2.10.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -111,6 +111,13 @@ def _migrate_v28_to_v29(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v29_to_v210(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.9.0 -> v2.10.0: add notification.torrent_client_alert_hours (default 0)."""
+    raw.setdefault("notification", {}).setdefault("torrent_client_alert_hours", 0)
+    raw.setdefault("general", {})["config_version"] = "2.10.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -122,6 +129,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.6.0": _migrate_v26_to_v27,
     "2.7.0": _migrate_v27_to_v28,
     "2.8.0": _migrate_v28_to_v29,
+    "2.9.0": _migrate_v29_to_v210,
 }
 
 
@@ -228,6 +236,7 @@ class NotificationConfig(BaseModel):
 
     apprise_urls: list[str] = Field(default_factory=list)
     index_proxy_alert_hours: float = 0
+    torrent_client_alert_hours: float = 0
 
 
 class JackettConfig(BaseModel):

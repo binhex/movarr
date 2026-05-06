@@ -16,6 +16,7 @@ from movarr.config import (
     QueueManagementConfig,
     ScheduleTaskConfig,
     _migrate_v28_to_v29,
+    _migrate_v29_to_v210,
     load_config,
 )
 
@@ -151,7 +152,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -176,14 +177,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -194,7 +195,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -205,7 +206,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -216,7 +217,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -377,7 +378,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -416,7 +417,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -436,7 +437,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -451,7 +452,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -469,7 +470,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -481,7 +482,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.9.0"
+        assert cfg.general.config_version == "2.10.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -585,3 +586,48 @@ class TestMigrationV28ToV29:
         }
         result = _migrate_v28_to_v29(raw)
         assert result["notification"]["index_proxy_alert_hours"] == 4.0  # noqa: PLR2004
+
+
+class TestTorrentClientAlertHoursConfig:
+    """Tests for notification.torrent_client_alert_hours config field."""
+
+    def test_default_is_zero(self) -> None:
+        """torrent_client_alert_hours defaults to 0 (feature disabled)."""
+        assert Config().notification.torrent_client_alert_hours == 0
+
+    def test_parses_float_value(self) -> None:
+        """A float value is parsed and stored correctly."""
+        config = Config.model_validate(
+            {"notification": {"apprise_urls": [], "torrent_client_alert_hours": 3.5}}
+        )
+        assert config.notification.torrent_client_alert_hours == 3.5  # noqa: PLR2004
+
+    def test_parses_zero_disables(self) -> None:
+        """Zero keeps the feature disabled."""
+        config = Config.model_validate(
+            {"notification": {"apprise_urls": [], "torrent_client_alert_hours": 0}}
+        )
+        assert config.notification.torrent_client_alert_hours == 0
+
+
+class TestMigrationV29ToV210:
+    """Tests for the v2.9.0 -> v2.10.0 config migration."""
+
+    def test_adds_torrent_client_alert_hours_zero(self) -> None:
+        """Migration inserts torrent_client_alert_hours: 0 into notification block."""
+        raw = {"general": {"config_version": "2.9.0"}, "notification": {"apprise_urls": []}}
+        result = _migrate_v29_to_v210(raw)
+        assert result["notification"]["torrent_client_alert_hours"] == 0
+
+    def test_bumps_version_to_v210(self) -> None:
+        """Migration sets config_version to 2.10.0."""
+        raw = {"general": {"config_version": "2.9.0"}}
+        assert _migrate_v29_to_v210(raw)["general"]["config_version"] == "2.10.0"
+
+    def test_does_not_overwrite_existing_value(self) -> None:
+        """Migration does not clobber a pre-existing torrent_client_alert_hours value."""
+        raw = {
+            "general": {"config_version": "2.9.0"},
+            "notification": {"apprise_urls": [], "torrent_client_alert_hours": 4.0},
+        }
+        assert _migrate_v29_to_v210(raw)["notification"]["torrent_client_alert_hours"] == 4.0  # noqa: PLR2004
