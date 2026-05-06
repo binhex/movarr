@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
     from pytest_mock import MockerFixture
@@ -12,6 +15,7 @@ if TYPE_CHECKING:
 from loguru import logger as _loguru_logger
 
 from movarr.config import Config, SearchCriteriaConfig
+from movarr.database import Database
 from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, run_search
 
 # Helpers
@@ -152,7 +156,8 @@ class TestRunSearch:
         cfg = Config()
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_factory.return_value.is_reachable.return_value = True
-        mock_process = mocker.patch("movarr.search._process_criteria")
+        mock_process = mocker.patch("movarr.search._process_criteria", return_value=0)
+        mocker.patch("movarr.search.check_and_notify")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
 
@@ -164,7 +169,8 @@ class TestRunSearch:
         cfg = Config()
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_factory.return_value.is_reachable.return_value = True
-        mock_process = mocker.patch("movarr.search._process_criteria")
+        mock_process = mocker.patch("movarr.search._process_criteria", return_value=0)
+        mocker.patch("movarr.search.check_and_notify")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
 
@@ -753,7 +759,8 @@ class TestRunSearchLibraryWalkAndOverride:
         cfg = Config()
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_factory.return_value.is_reachable.return_value = True
-        mocker.patch("movarr.search._process_criteria")
+        mocker.patch("movarr.search._process_criteria", return_value=0)
+        mocker.patch("movarr.search.check_and_notify")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
         return cfg, qbt, db
@@ -771,7 +778,7 @@ class TestRunSearchLibraryWalkAndOverride:
         cfg, qbt, db = self._make_base(mocker)
         indexer = cfg.index_site.jackett_indexer
         cfg.index_site.override_search = {indexer: {"category": "9999"}}
-        mock_process = mocker.patch("movarr.search._process_criteria")
+        mock_process = mocker.patch("movarr.search._process_criteria", return_value=0)
         mocker.patch("movarr.search.get_indexer_client").return_value.is_reachable.return_value = True
         run_search(cfg, qbt, db)
         called_categories = [call[1]["category"] for call in mock_process.call_args_list]
@@ -817,3 +824,127 @@ class TestProcessCriteriaNoYear:
             session=session,
         )
         session.db.write.assert_not_called()  # type: ignore[attr-defined]
+
+
+class TestRunSearchHealthMonitor:
+    """Tests that run_search() calls check_and_notify() correctly."""
+
+    def _make_config(self) -> Config:
+        from movarr.config import NotificationConfig
+        config = Config()
+        return config.model_copy(
+            update={
+                "notification": NotificationConfig(
+                    apprise_urls=["ntfy://t"],
+                    index_proxy_alert_hours=2.0,
+                )
+            }
+        )
+
+    def test_check_and_notify_called_with_false_when_not_reachable(
+        self, tmp_path: Path
+    ) -> None:
+        """When indexer is unreachable, check_and_notify called with has_results=False."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = False
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify") as mock_health,
+        ):
+            run_search(config, qbt, db)
+
+        mock_health.assert_called_once()
+        call_kwargs = mock_health.call_args.kwargs
+        assert call_kwargs["has_results"] is False
+
+    def test_check_and_notify_called_with_true_when_results_returned(
+        self, tmp_path: Path
+    ) -> None:
+        """When indexer returns results, check_and_notify called with has_results=True."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        # A minimal ResultDict that IS yielded as a raw result from the indexer
+        # (it will fail filters and not be queued, but it still counts as a raw result)
+        raw_result = {
+            "index_title": "Some.Movie.2020.1080p",
+            "result": "Passed",
+            "result_details": [],
+        }
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+        mock_indexer.search.return_value = iter([raw_result])
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify") as mock_health,
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        mock_health.assert_called_once()
+        call_kwargs = mock_health.call_args.kwargs
+        assert call_kwargs["has_results"] is True
+
+    def test_check_and_notify_called_with_false_when_indexer_returns_empty(
+        self, tmp_path: Path
+    ) -> None:
+        """When indexer returns zero raw results, check_and_notify called with has_results=False."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+        mock_indexer.search.return_value = iter([])  # empty generator
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify") as mock_health,
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        mock_health.assert_called_once()
+        call_kwargs = mock_health.call_args.kwargs
+        assert call_kwargs["has_results"] is False
+
+    def test_check_and_notify_not_called_when_qbt_unreachable(
+        self, tmp_path: Path
+    ) -> None:
+        """When qBittorrent is unreachable, search exits early — check_and_notify not called."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = False
+
+        with patch("movarr.search.check_and_notify") as mock_health:
+            run_search(config, qbt, db)
+
+        mock_health.assert_not_called()

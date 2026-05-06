@@ -22,6 +22,7 @@ from movarr.file_utils import walk_library
 from movarr.filters import filter_by_imdb, filter_by_index
 from movarr.imdb_metadata import fetch_metadata
 from movarr.imdb_search import search_for_imdb_id
+from movarr.index_proxy_health import check_and_notify
 from movarr.indexer import IndexProxyProtocol, get_indexer_client
 from movarr.notifications import send_queued_notification
 from movarr.parsing import (
@@ -70,12 +71,15 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         logger.warning("qBittorrent is unreachable; skipping search.")
         return
 
+    proxy_name = config.index_proxy.selected.capitalize()
+
     indexer_client = get_indexer_client(config)
     if not indexer_client.is_reachable():
         logger.warning(
             "{} is not reachable; skipping search.",
-            config.index_proxy.selected.capitalize(),
+            proxy_name,
         )
+        check_and_notify(has_results=False, proxy_name=proxy_name, db=db, config=config)
         return
 
     library_walk: list[tuple[str, list[str], list[str]]] | None = None
@@ -90,6 +94,7 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         library_walk=library_walk,
     )
 
+    total_raw = 0
     for criteria_cfg in site_cfg.search:
         # Select the indexer slug/id based on the configured proxy.
         index_site = site_cfg.jackett_indexer if config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
@@ -105,7 +110,9 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
             criteria_cfg.criteria,
             category,
         )
-        _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session)
+        total_raw += _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session)
+
+    check_and_notify(has_results=total_raw > 0, proxy_name=proxy_name, db=db, config=config)
 
 
 def _process_criteria(  # noqa: PLR0912
@@ -113,11 +120,17 @@ def _process_criteria(  # noqa: PLR0912
     category: str,
     indexer: str,
     session: _SearchSession,
-) -> None:
-    """Fetch and process all indexer results for one criteria tier."""
+) -> int:
+    """Fetch and process all indexer results for one criteria tier.
+
+    Returns:
+        The number of raw results yielded by the indexer (before any filtering).
+    """
     site_dict = criteria_cfg.model_dump()
+    raw_count = 0
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
+        raw_count += 1
         result = _enrich_index_metadata(raw_result)
         result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
 
@@ -177,6 +190,8 @@ def _process_criteria(  # noqa: PLR0912
             if updated is not None:
                 result = updated
             session.db.write(result)
+
+    return raw_count
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:

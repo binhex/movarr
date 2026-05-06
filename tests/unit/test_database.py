@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import text
 
 from movarr.database import Database
 
@@ -657,3 +658,70 @@ class TestExpirePassed:
         count = db.expire_passed(days=30)
 
         assert count == 2
+
+
+class TestKvStore:
+    """Tests for the kv_get / kv_set / kv_delete methods."""
+
+    def test_kv_get_missing_key_returns_none(self, tmp_path: Path) -> None:
+        """Getting a non-existent key returns None."""
+        db = Database(tmp_path / "test.db")
+        assert db.kv_get("missing.key") is None
+
+    def test_kv_set_and_get_roundtrip(self, tmp_path: Path) -> None:
+        """A value written with kv_set is readable via kv_get."""
+        db = Database(tmp_path / "test.db")
+        db.kv_set("some.key", "hello")
+        assert db.kv_get("some.key") == "hello"
+
+    def test_kv_set_overwrites_existing_value(self, tmp_path: Path) -> None:
+        """A second kv_set on the same key replaces the previous value."""
+        db = Database(tmp_path / "test.db")
+        db.kv_set("k", "v1")
+        db.kv_set("k", "v2")
+        assert db.kv_get("k") == "v2"
+
+    def test_kv_delete_removes_key(self, tmp_path: Path) -> None:
+        """kv_delete removes the key; subsequent kv_get returns None."""
+        db = Database(tmp_path / "test.db")
+        db.kv_set("k", "v")
+        db.kv_delete("k")
+        assert db.kv_get("k") is None
+
+    def test_kv_delete_missing_key_is_noop(self, tmp_path: Path) -> None:
+        """kv_delete on a non-existent key raises no error."""
+        db = Database(tmp_path / "test.db")
+        db.kv_delete("never.existed")  # must not raise
+
+    def test_kv_store_table_created_on_new_db(self, tmp_path: Path) -> None:
+        """kv_store table exists after Database init."""
+        db = Database(tmp_path / "test.db")
+        with db._engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'")
+            )
+            assert result.fetchone() is not None
+
+    def test_db_version_is_11(self, tmp_path: Path) -> None:
+        """New database is created at schema version 11."""
+        db = Database(tmp_path / "test.db")
+        assert db._get_user_version() == 11
+
+    def test_kv_store_migration_from_v10(self, tmp_path: Path) -> None:
+        """kv_store table is created and usable when upgrading a v10 database."""
+        import sqlite3
+
+        db_path = tmp_path / "legacy.db"
+        # Create a bare v10 DB (history table exists, no kv_store)
+        raw = sqlite3.connect(str(db_path))
+        raw.execute(
+            "CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)"
+        )
+        raw.execute("PRAGMA user_version = 10")
+        raw.commit()
+        raw.close()
+
+        db = Database(db_path)
+        assert db._get_user_version() == 11
+        db.kv_set("k", "v")
+        assert db.kv_get("k") == "v"

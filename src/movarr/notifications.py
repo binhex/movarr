@@ -18,7 +18,52 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["send_queued_notification"]
+__all__ = ["send_index_proxy_alert", "send_queued_notification"]
+
+
+def send_index_proxy_alert(proxy_name: str, hours_elapsed: float, config: Config) -> bool:
+    """Send an alert notification when the index proxy has returned no results for too long.
+
+    Args:
+        proxy_name: Human-readable proxy name, e.g. ``"Prowlarr"`` or ``"Jackett"``.
+        hours_elapsed: How many hours the zero-results streak has lasted.
+        config: Application configuration.
+
+    Returns:
+        ``True`` if the notification was delivered, ``False`` otherwise (including
+        when no apprise URLs are configured).
+    """
+    urls = config.notification.apprise_urls
+    if not urls:
+        logger.debug("No apprise URLs configured; skipping index proxy alert.")
+        return False
+
+    hours_str = f"{hours_elapsed:.1f}"
+    subject = f"movarr: {proxy_name} returned no results for {hours_str}h \u2014 possible outage"
+    body = (
+        f"<p><strong>movarr index proxy alert</strong></p>"
+        f"<p><strong>Proxy:</strong> {proxy_name}</p>"
+        f"<p><strong>Duration:</strong> No results returned for {hours_str} hours.</p>"
+        f"<p>movarr will keep retrying every search cycle. "
+        f"Check that {proxy_name} is running and its indexers are healthy.</p>"
+    )
+
+    ap = apprise.Apprise()
+    for url in urls:
+        ap.add(url)
+
+    try:
+        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
+    except Exception:
+        logger.exception("Index proxy alert send failed.")
+        return False
+
+    if not sent:
+        logger.warning("Index proxy alert was not delivered (apprise returned False).")
+        return False
+
+    logger.warning("Index proxy alert sent: {}", subject)
+    return True
 
 
 def send_queued_notification(result: ResultDict, config: Config) -> bool:
