@@ -6,6 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, cast
 
 import click
+from loguru import logger as _logger
 
 from movarr.logger import create_logger
 
@@ -260,6 +261,7 @@ def cli(
         log_level=effective_log_level,
         log_path=effective_log_path,
     )
+    _logger.info("movarr v{}", _VERSION)
 
     if test:
         click.echo("Configuration loaded successfully. Test mode — exiting.")

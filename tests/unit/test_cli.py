@@ -97,8 +97,23 @@ class TestCliHelp:
 # --test (config-validation / dry-run mode)
 
 
-class TestCliTestMode:
-    """--test validates configuration then exits without running tasks."""
+class TestCliStartupVersionLog:
+    """movarr logs its version as the first line after logger initialisation."""
+
+    def test_version_logged_on_startup(self, mocker: MockerFixture) -> None:
+        """_logger.info is called with the version string before any other work."""
+        mocker.patch("movarr.cli.create_logger")
+        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
+        mock_log = mocker.patch("movarr.cli._logger")
+
+        CliRunner().invoke(cli, ["--test"])
+
+        # First info call must mention the version.
+        first_call = mock_log.info.call_args_list[0]
+        fmt, version_arg = first_call[0][0], first_call[0][1]
+        assert "v" in fmt or "v" in str(version_arg)
+        # Value is either the real version string or 'unknown'.
+        assert any(char.isdigit() for char in str(version_arg)) or version_arg == "unknown"
 
     def test_prints_configuration_loaded(self, mocker: MockerFixture) -> None:
         mocker.patch("movarr.cli.create_logger")
