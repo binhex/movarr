@@ -37,15 +37,17 @@ if TYPE_CHECKING:
 __all__ = ["run", "run_once"]
 
 
-def run(config: Config, pid_path: str | None = None) -> None:
+def run(config: Config) -> None:
     """Start the scheduler in daemon/foreground mode.
 
-    Reads ``config.general.daemon`` to decide between background and single-pass.
+    Reads ``config.general.daemon_mode`` to decide between background and
+    single-pass.  The PID file path is taken from ``config.general.pid_path``;
+    an empty string means no PID file is written.
 
     Args:
         config: Application configuration.
-        pid_path: Optional path to write the PID file.
     """
+    pid_path = config.general.pid_path or None
     if pid_path:
         _write_pid(pid_path)
 
