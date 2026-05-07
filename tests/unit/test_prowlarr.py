@@ -263,19 +263,54 @@ class TestSearch:
 
 
 class TestIsReachable:
-    """Tests for ProwlarrClient.is_reachable."""
+    """Tests for ProwlarrClient.is_reachable.
+
+    is_reachable() uses a direct requests.get() call (no HttpClient backoff)
+    so tests patch 'requests.get' instead of the HttpClient mock.
+    """
 
     def test_returns_true_on_successful_get(self, mocker: MockerFixture) -> None:
-        client, mock_http = _make_client(mocker)
-        mock_http.get.return_value = mocker.MagicMock()
+        """Returns True when the health-check GET returns a 2xx status."""
+        client, _ = _make_client(mocker)
+        mock_resp = mocker.MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mocker.patch("movarr.prowlarr.requests.get", return_value=mock_resp)
         assert client.is_reachable() is True
 
-    def test_returns_false_on_http_error(self, mocker: MockerFixture) -> None:
-        client, mock_http = _make_client(mocker)
-        mock_http.get.side_effect = HttpError("connection refused")
+    def test_returns_false_on_connection_error(self, mocker: MockerFixture) -> None:
+        """Returns False immediately (no retry) when the host is unreachable."""
+        import requests as _requests
+
+        client, _ = _make_client(mocker)
+        mocker.patch(
+            "movarr.prowlarr.requests.get",
+            side_effect=_requests.exceptions.ConnectionError("Connection refused"),
+        )
         assert client.is_reachable() is False
 
-    def test_returns_false_on_generic_exception(self, mocker: MockerFixture) -> None:
-        client, mock_http = _make_client(mocker)
-        mock_http.get.side_effect = OSError("network unreachable")
+    def test_returns_false_on_http_error_status(self, mocker: MockerFixture) -> None:
+        """Returns False when the server returns a non-2xx status."""
+        import requests as _requests
+
+        client, _ = _make_client(mocker)
+        mock_resp = mocker.MagicMock()
+        mock_resp.raise_for_status.side_effect = _requests.exceptions.HTTPError("401 Unauthorized")
+        mocker.patch("movarr.prowlarr.requests.get", return_value=mock_resp)
         assert client.is_reachable() is False
+
+    def test_logs_host_and_port_on_failure(self, mocker: MockerFixture) -> None:
+        """The warning log includes the configured host and port."""
+        import requests as _requests
+
+        client, _ = _make_client(mocker)
+        mocker.patch(
+            "movarr.prowlarr.requests.get",
+            side_effect=_requests.exceptions.ConnectionError("refused"),
+        )
+        mock_warn = mocker.patch("movarr.prowlarr._logger.warning")
+
+        client.is_reachable()
+
+        logged = " ".join(str(a) for a in mock_warn.call_args[0])
+        assert "localhost" in logged
+        assert "9696" in logged
