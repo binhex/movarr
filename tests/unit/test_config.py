@@ -18,6 +18,7 @@ from movarr.config import (
     _migrate_v28_to_v29,
     _migrate_v29_to_v210,
     _migrate_v210_to_v211,
+    _migrate_v211_to_v212,
     load_config,
 )
 
@@ -61,10 +62,16 @@ class TestQueueManagementConfig:
         assert hasattr(cfg, "stalled_delete_torrent_data")
         assert isinstance(cfg.stalled_delete_torrent_data, bool)
 
-    def test_default_delete_data_is_false(self) -> None:
+    def test_default_delete_data_is_true(self) -> None:
+        """Stalled and metaDL torrents must delete their data by default.
+
+        Incomplete partial downloads have no value; leaving them on disk wastes
+        space.  The correct default is True so movarr instructs qBittorrent to
+        remove the files when it removes the torrent from the queue.
+        """
         cfg = QueueManagementConfig()
-        assert cfg.stalled_delete_torrent_data is False
-        assert cfg.metadata_delete_torrent_data is False
+        assert cfg.stalled_delete_torrent_data is True
+        assert cfg.metadata_delete_torrent_data is True
 
 
 # Config construction
@@ -153,7 +160,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -178,14 +185,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -196,7 +203,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -207,7 +214,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -218,7 +225,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -379,7 +386,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -418,7 +425,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -438,7 +445,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -453,7 +460,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -471,7 +478,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -483,7 +490,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.11.0"
+        assert cfg.general.config_version == "2.12.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -667,3 +674,36 @@ class TestDefaultSearchConfig:
     def test_default_search_category_is_2000_5000(self) -> None:
         cfg = Config()
         assert cfg.index_site.search[0].category == "2000,5000"
+
+
+class TestMigrationV211ToV212:
+    """Tests for the v2.11.0 -> v2.12.0 config migration."""
+
+    def test_sets_stalled_delete_torrent_data_true(self) -> None:
+        """Migration corrects the old False default for stalled torrents."""
+        raw: dict = {"general": {"config_version": "2.11.0"}}
+        result = _migrate_v211_to_v212(raw)
+        assert result["queue_management"]["stalled_delete_torrent_data"] is True
+
+    def test_sets_metadata_delete_torrent_data_true(self) -> None:
+        """Migration corrects the old False default for metaDL torrents."""
+        raw: dict = {"general": {"config_version": "2.11.0"}}
+        result = _migrate_v211_to_v212(raw)
+        assert result["queue_management"]["metadata_delete_torrent_data"] is True
+
+    def test_overwrites_explicit_false_value(self) -> None:
+        """Migration explicitly sets True even if the config had False."""
+        raw: dict = {
+            "general": {"config_version": "2.11.0"},
+            "queue_management": {
+                "stalled_delete_torrent_data": False,
+                "metadata_delete_torrent_data": False,
+            },
+        }
+        result = _migrate_v211_to_v212(raw)
+        assert result["queue_management"]["stalled_delete_torrent_data"] is True
+        assert result["queue_management"]["metadata_delete_torrent_data"] is True
+
+    def test_bumps_version_to_v212(self) -> None:
+        raw: dict = {"general": {"config_version": "2.11.0"}}
+        assert _migrate_v211_to_v212(raw)["general"]["config_version"] == "2.12.0"
