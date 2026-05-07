@@ -459,3 +459,71 @@ class TestCliOverrides:
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_proxy.prowlarr.api_key == ""
+
+    def test_all_overrides_applied_together(self, mocker: MockerFixture) -> None:
+        """All CLI overrides can be supplied simultaneously without conflict."""
+        cfg = self._invoke(
+            mocker,
+            [
+                "--db-path",
+                "/data/movarr.db",
+                "--library-path-list",
+                "/media/movies,/media/4k",
+                "--qbt-host",
+                "10.0.0.5",
+                "--qbt-port",
+                "8090",
+                "--qbt-username",
+                "admin2",
+                "--qbt-password",
+                "pass2",
+                "--index-proxy",
+                "prowlarr",
+                "--jackett-host",
+                "10.0.0.6",
+                "--jackett-port",
+                "9118",
+                "--jackett-api-key",
+                "jkey",
+                "--prowlarr-host",
+                "10.0.0.7",
+                "--prowlarr-port",
+                "9697",
+                "--prowlarr-api-key",
+                "pkey",
+                "--test",
+            ],
+        )
+        assert cfg.general.db_path == "/data/movarr.db"
+        assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
+        assert cfg.torrent_client.qbittorrent.host == "10.0.0.5"
+        assert cfg.torrent_client.qbittorrent.port == 8090
+        assert cfg.torrent_client.qbittorrent.username == "admin2"
+        assert cfg.torrent_client.qbittorrent.password == "pass2"
+        assert cfg.index_proxy.selected == "prowlarr"
+        assert cfg.index_proxy.jackett.host == "10.0.0.6"
+        assert cfg.index_proxy.jackett.port == 9118
+        assert cfg.index_proxy.jackett.api_key == "jkey"
+        assert cfg.index_proxy.prowlarr.host == "10.0.0.7"
+        assert cfg.index_proxy.prowlarr.port == 9697
+        assert cfg.index_proxy.prowlarr.api_key == "pkey"
+
+    def test_help_shows_all_new_options(self) -> None:
+        """Every new CLI override option appears in the --help output."""
+        result = CliRunner().invoke(cli, ["--help"])
+        for opt in (
+            "--db-path",
+            "--library-path-list",
+            "--qbt-host",
+            "--qbt-port",
+            "--qbt-username",
+            "--qbt-password",
+            "--index-proxy",
+            "--jackett-host",
+            "--jackett-port",
+            "--jackett-api-key",
+            "--prowlarr-host",
+            "--prowlarr-port",
+            "--prowlarr-api-key",
+        ):
+            assert opt in result.output, f"{opt!r} missing from --help"

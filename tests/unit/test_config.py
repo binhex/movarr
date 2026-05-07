@@ -667,4 +667,3 @@ class TestDefaultSearchConfig:
     def test_default_search_category_is_2000_5000(self) -> None:
         cfg = Config()
         assert cfg.index_site.search[0].category == "2000,5000"
-

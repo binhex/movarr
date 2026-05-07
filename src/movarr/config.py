@@ -348,7 +348,13 @@ class IndexSiteConfig(BaseModel):
     ignore_list: list[str] = Field(default_factory=list)
     search: list[SearchCriteriaConfig] = Field(
         default_factory=lambda: [
-            SearchCriteriaConfig(criteria="1080p", category="2000,5000", minimum_size_mb=3000, maximum_size_mb=20000, minimum_bitrate_mb=50),
+            SearchCriteriaConfig(
+                criteria="1080p",
+                category="2000,5000",
+                minimum_size_mb=3000,
+                maximum_size_mb=20000,
+                minimum_bitrate_mb=50,
+            ),
         ]
     )
     override_search: dict[str, dict[str, str]] = Field(default_factory=dict)
