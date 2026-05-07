@@ -9,6 +9,8 @@ are null-guarded here.
 
 from __future__ import annotations
 
+import html
+import urllib.parse
 from typing import TYPE_CHECKING
 
 import apprise
@@ -42,13 +44,15 @@ def send_service_alert(service_name: str, hours_elapsed: float, config: Config) 
         return False
 
     hours_str = f"{hours_elapsed:.1f}"
+    safe_service = html.escape(service_name)
+    safe_hours = html.escape(hours_str)
     subject = f"movarr: {service_name} has been unavailable for {hours_str}h \u2014 possible outage"
     body = (
         f"<p><strong>movarr service health alert</strong></p>"
-        f"<p><strong>Service:</strong> {service_name}</p>"
-        f"<p><strong>Duration:</strong> Unavailable for {hours_str} hours.</p>"
+        f"<p><strong>Service:</strong> {safe_service}</p>"
+        f"<p><strong>Duration:</strong> Unavailable for {safe_hours} hours.</p>"
         f"<p>movarr will keep retrying every cycle. "
-        f"Check that {service_name} is running and accessible.</p>"
+        f"Check that {safe_service} is running and accessible.</p>"
     )
 
     ap = apprise.Apprise()
@@ -126,44 +130,68 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
 
 
 def _build_subject(result: ResultDict) -> str:
+    """Build the plain-text notification subject line.
+
+    The subject is used as the Apprise `title=` field (plain text),
+    so we must NOT HTML-escape it — doing so produces visible entities
+    like ``&amp;`` in delivered notifications.
+    """
     title = result.get("imdb_title") or "Unknown"
     year = result.get("imdb_year") or ""
     rating = result.get("imdb_rating") or "?"
     year_str = f" ({year})" if year else ""
-    return f"movarr: {title}{year_str} — IMDb {rating} — Queued"
+    return f"movarr: {title}{year_str} \u2014 IMDb {rating} \u2014 Queued"
 
 
 def _build_body(result: ResultDict, config: Config) -> str:
-    title = result.get("imdb_title") or "Unknown"
-    year = result.get("imdb_year") or ""
+    title = html.escape(result.get("imdb_title") or "Unknown")
+    year = html.escape(str(result.get("imdb_year") or ""))
     imdb_id = result.get("imdb_id") or ""
-    rating = result.get("imdb_rating") or "?"
-    votes = result.get("imdb_votes") or "?"
+    rating = html.escape(str(result.get("imdb_rating") or "?"))
+    votes = html.escape(str(result.get("imdb_votes") or "?"))
 
-    # Bug #2 fix: null-guard all list → string conversions.
+    # Bug #2 fix: null-guard all list -> string conversions.
     cast_list: list[str] = result.get("imdb_credits_cast_list") or []
     directors: list[str] = result.get("imdb_credits_director_list") or []
     genres: list[str] = result.get("imdb_genres_list") or []
 
-    actors_str = ", ".join(cast_list[:10]) or "—"
-    directors_str = ", ".join(directors) or "—"
-    genres_str = ", ".join(genres) or "—"
+    actors_str = html.escape(", ".join(cast_list[:10]) or "\u2014")
+    directors_str = html.escape(", ".join(directors) or "\u2014")
+    genres_str = html.escape(", ".join(genres) or "\u2014")
 
-    plot = result.get("imdb_plot_outline") or result.get("imdb_plot_summary") or "—"
+    plot = html.escape(result.get("imdb_plot_outline") or result.get("imdb_plot_summary") or "\u2014")
 
-    index_title = result.get("index_title") or ""
-    index_details = result.get("index_details") or "#"
-    index_size_mb = result.get("index_size_mb") or "?"
+    index_title = html.escape(result.get("index_title") or "")
+    index_size_mb = html.escape(str(result.get("index_size_mb") or "?"))
+
+    # Validate and sanitise URL-like fields.
+    # 1. Accept only http/https scheme.
+    # 2. HTML-escape the URL (with quote=True) so that quote characters in
+    #    the raw URL cannot break out of the href attribute and inject
+    #    arbitrary HTML attributes.
+    def _safe_url(raw: str) -> str:
+        if not raw:
+            return "#"
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            if parsed.scheme not in ("http", "https"):
+                return "#"
+        except Exception:  # noqa: BLE001
+            return "#"
+        return html.escape(raw, quote=True)
+
+    index_details = _safe_url(result.get("index_details") or "")
 
     add_paused = config.torrent_client.qbittorrent.add_paused
     queue_status = "Paused" if add_paused is True else ("Started" if add_paused is False else "Unknown")
 
     result_details_html = _format_result_details(result.get("result_details") or [])
 
-    imdb_url = f"https://imdb.com/title/{imdb_id}" if imdb_id else "#"
+    # Validate IMDb URL.
+    imdb_url = f"https://imdb.com/title/{html.escape(imdb_id)}" if imdb_id else "#"
 
     return f"""
-<p><strong>Title:</strong> <a href="{imdb_url}">{title} ({year})</a> — {rating} from {votes} users</p>
+<p><strong>Title:</strong> <a href="{imdb_url}">{title} ({year})</a> \u2014 {rating} from {votes} users</p>
 <p><strong>Plot:</strong> {plot}</p>
 <p><strong>Actors:</strong> {actors_str}</p>
 <p><strong>Directors:</strong> {directors_str}</p>
@@ -177,12 +205,12 @@ def _build_body(result: ResultDict, config: Config) -> str:
 
 
 def _format_result_details(details: list[str]) -> str:
+    """Format pipeline result_details as an HTML unordered list.
+
+    Each entry is ``"Passed: msg"`` or ``"Failed: msg"`` (exactly one ``": "``
+    separator), so they are always rendered as simple ``<li>`` items.
+    """
     items = ""
     for item in details:
-        parts = item.split(": ", 2)
-        if len(parts) == 3:  # noqa: PLR2004
-            main, sub, detail = parts
-            items += f"<li>{main}: {sub}<ul><li>{detail}</li></ul></li>"
-        else:
-            items += f"<li>{item}</li>"
+        items += f"<li>{html.escape(item)}</li>"
     return f"<ul>{items}</ul>"

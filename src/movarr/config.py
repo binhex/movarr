@@ -161,7 +161,7 @@ class ScheduleTaskConfig(BaseModel):
 
     enabled: bool = True
     schedule_time_units: str = "minutes"
-    schedule_time_mins: int = 30
+    schedule_time_mins: int = Field(default=30, gt=0, description="Interval in minutes (must be > 0).")
     run_on_start: bool = True
 
 
@@ -174,10 +174,13 @@ class ScheduleConfig(BaseModel):
 
 
 class OverrideGenreConfig(BaseModel):
-    """Relaxed thresholds for a specific genre."""
+    """Relaxed thresholds for a specific genre.
 
-    minimum_rating: float = 0.0
-    minimum_votes: int = 0
+    None means "inherit the global threshold"; 0 means "no minimum".
+    """
+
+    minimum_rating: float | None = None
+    minimum_votes: int | None = None
 
 
 class FiltersConfig(BaseModel):
@@ -203,6 +206,20 @@ class FiltersConfig(BaseModel):
     preferred_index_quality_list: list[str] = Field(default_factory=list)
     preferred_index_group_list: list[str] = Field(default_factory=list)
 
+    @field_validator("override_genre", mode="before")
+    @classmethod
+    def _normalise_genre_keys(cls, v: object) -> object:
+        """Normalise override_genre keys to lowercase at config load time.
+
+        IMDb genre names are title-cased ("Action", "Sci-Fi"), but the
+        filter pipeline looks up by lowercase genre to avoid case mismatches.
+        Normalising keys here avoids a silent no-op when users capitalise
+        their YAML keys.
+        """
+        if not isinstance(v, dict):
+            return v
+        return {k.lower(): val for k, val in v.items()}
+
 
 class QbittorrentConfig(BaseModel):
     """qBittorrent connection settings."""
@@ -211,7 +228,7 @@ class QbittorrentConfig(BaseModel):
     port: int = 8080
     username: str = "admin"
     password: str = "adminadmin"
-    add_paused: bool = True
+    add_paused: bool = False
     category: str = "movies-movarr"
 
 
@@ -220,6 +237,15 @@ class TorrentClientConfig(BaseModel):
 
     selected: str = "qbittorrent"
     qbittorrent: QbittorrentConfig = Field(default_factory=QbittorrentConfig)
+
+    @field_validator("selected")
+    @classmethod
+    def _validate_selected(cls, value: str) -> str:
+        """Only qBittorrent is currently supported."""
+        allowed = ("qbittorrent",)
+        if value not in allowed:
+            raise ValueError(f"torrent_client.selected must be one of {allowed!r}, got {value!r}")
+        return value
 
 
 class NotificationConfig(BaseModel):
@@ -455,6 +481,9 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
         raw = MIGRATIONS[current](raw)
         current = raw.get("general", {}).get("config_version", current)
         logger.info("Config migrated from v{} to v{}", previous, current)
+        if current == previous:
+            logger.error("Migration loop detected at version {}; aborting.", current)
+            break
 
     with config_path.open("w", encoding="utf-8") as fh:
         yaml.dump(raw, fh, default_flow_style=False, sort_keys=False)
@@ -498,7 +527,15 @@ def load_config(config_path: str | Path) -> Config:
         create_default_config(path)
 
     with path.open("r", encoding="utf-8") as fh:
-        raw: dict[str, Any] = yaml.safe_load(fh) or {}
+        loaded = yaml.safe_load(fh)
+
+    # yaml.safe_load returns None for an empty file; normalise to empty dict.
+    if loaded is None:
+        raw: dict[str, Any] = {}
+    elif not isinstance(loaded, dict):
+        raise ValueError(f"Config file '{path}' must be a YAML mapping (got {type(loaded).__name__}).")
+    else:
+        raw = loaded
 
     raw = _run_migrations(raw, path)
 

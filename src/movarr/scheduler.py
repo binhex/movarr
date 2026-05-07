@@ -70,9 +70,20 @@ def run_once(config: Config) -> None:
     db = Database(config.general.db_path)
     qbt = _connect_qbt(config)
 
-    _task_search(config, qbt, db)
-    _task_queue_management(config, qbt, db)
-    _task_post_processing(config, qbt, db)
+    if config.schedule.acquisition.enabled:
+        _task_search(config, qbt, db)
+    else:
+        logger.info("Search task disabled; skipping.")
+
+    if config.schedule.queue_management.enabled:
+        _task_queue_management(config, qbt, db)
+    else:
+        logger.info("Queue management task disabled; skipping.")
+
+    if config.schedule.post_processing.enabled:
+        _task_post_processing(config, qbt, db)
+    else:
+        logger.info("Post-processing task disabled; skipping.")
 
     logger.info("Single-pass complete.")
 
@@ -118,35 +129,46 @@ def _run_daemon(config: Config) -> None:
         except Exception:
             logger.exception("Failed to log next post_processing run time.")
 
-    scheduler.add_job(
-        _search_job,
-        trigger="interval",
-        minutes=search_mins,
-        id="search",
-        name="Jackett search + filter + add",
-        max_instances=1,
-        coalesce=True,
-        **_next_run_kwargs(config.schedule.acquisition.run_on_start),
-    )
-    scheduler.add_job(
-        _queue_management_job,
-        trigger="interval",
-        minutes=qm_mins,
-        id="queue_management",
-        max_instances=1,
-        coalesce=True,
-        **_next_run_kwargs(config.schedule.queue_management.run_on_start),
-    )
-    scheduler.add_job(
-        _post_processing_job,
-        trigger="interval",
-        minutes=pp_mins,
-        id="post_processing",
-        name="Post-processing (copy to library)",
-        max_instances=1,
-        coalesce=True,
-        **_next_run_kwargs(config.schedule.post_processing.run_on_start),
-    )
+    if config.schedule.acquisition.enabled:
+        scheduler.add_job(
+            _search_job,
+            trigger="interval",
+            minutes=search_mins,
+            id="search",
+            name="Jackett search + filter + add",
+            max_instances=1,
+            coalesce=True,
+            **_next_run_kwargs(config.schedule.acquisition.run_on_start),
+        )
+    else:
+        logger.info("Search task disabled; not scheduling.")
+
+    if config.schedule.queue_management.enabled:
+        scheduler.add_job(
+            _queue_management_job,
+            trigger="interval",
+            minutes=qm_mins,
+            id="queue_management",
+            max_instances=1,
+            coalesce=True,
+            **_next_run_kwargs(config.schedule.queue_management.run_on_start),
+        )
+    else:
+        logger.info("Queue management task disabled; not scheduling.")
+
+    if config.schedule.post_processing.enabled:
+        scheduler.add_job(
+            _post_processing_job,
+            trigger="interval",
+            minutes=pp_mins,
+            id="post_processing",
+            name="Post-processing (copy to library)",
+            max_instances=1,
+            coalesce=True,
+            **_next_run_kwargs(config.schedule.post_processing.run_on_start),
+        )
+    else:
+        logger.info("Post-processing task disabled; not scheduling.")
 
     scheduler.start()
     logger.info(
@@ -178,11 +200,17 @@ def _run_daemon(config: Config) -> None:
 def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     try:
         if n := db.expire_stalled(config.database.stalled_expiry_days):
-            logger.info(f"Expired {n} stalled history record(s) older than {config.database.stalled_expiry_days} days.")
+            logger.info(
+                "Expired {} stalled history record(s) older than {} days.", n, config.database.stalled_expiry_days
+            )
         if n := db.expire_failed(config.database.failed_expiry_days):
-            logger.info(f"Expired {n} failed history record(s) older than {config.database.failed_expiry_days} days.")
+            logger.info(
+                "Expired {} failed history record(s) older than {} days.", n, config.database.failed_expiry_days
+            )
         if n := db.expire_passed(config.database.passed_expiry_days):
-            logger.info(f"Expired {n} passed history record(s) older than {config.database.passed_expiry_days} days.")
+            logger.info(
+                "Expired {} passed history record(s) older than {} days.", n, config.database.passed_expiry_days
+            )
         run_search(config, qbt, db)
     except Exception:
         logger.exception("Search task failed.")
@@ -216,15 +244,17 @@ def _log_next_run(scheduler: BackgroundScheduler, job_id: str) -> None:
     """Log when the given APScheduler job will next run."""
     job = scheduler.get_job(job_id)
     if job is None or job.next_run_time is None:
-        logger.info(f"Next {job_id} run time unavailable.")
+        logger.info("Next {} run time unavailable.", job_id)
         return
     next_time = job.next_run_time.isoformat(sep=" ", timespec="seconds")
-    logger.info(f"Next {job_id} run at {next_time}.")
+    logger.info("Next {} run at {}.", job_id, next_time)
 
 
 def _write_pid(pid_path: str) -> None:
     try:
-        os.makedirs(os.path.dirname(pid_path), exist_ok=True)
+        pid_dir = os.path.dirname(pid_path)
+        if pid_dir:
+            os.makedirs(pid_dir, exist_ok=True)
         with open(pid_path, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
         logger.debug("PID {} written to '{}'.", os.getpid(), pid_path)

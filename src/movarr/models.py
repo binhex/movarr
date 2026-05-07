@@ -29,7 +29,6 @@ class ResultDict(TypedDict, total=False):
     index_title_group: str
     index_title_resolution: str | None
     index_title_after_year_to_end: str | None
-    index_title_compare: str | None
 
     # --- Parsed movie fields ---
     movie_title: str | None
@@ -62,7 +61,7 @@ class ResultDict(TypedDict, total=False):
     imdb_language_list: list[str] | None
     imdb_country_list: list[str] | None
     imdb_certification: str | None
-    imdb_cert_source: str | None  # "bbfc" | "mpaa" | None — tracks cert origin
+    imdb_cert_source: str | None  # "imdbpie" | "omdb" | None — tracks cert origin
     imdb_poster_url: str | None
     imdb_trailer_url: str | None
     imdb_plot_summary: str | None

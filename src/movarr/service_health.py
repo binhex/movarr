@@ -116,6 +116,10 @@ def _on_unhealthy(
 
     try:
         since = datetime.datetime.fromisoformat(since_raw)
+        # If the stored timestamp is timezone-naive, treat it as corrupt
+        # to avoid a TypeError when subtracting from the aware UTC `now`.
+        if since.tzinfo is None:
+            raise ValueError(f"timezone-naive timestamp: {since_raw!r}")
     except ValueError:
         logger.warning(
             "Corrupt {} value '{}'; resetting streak for '{}'.",
@@ -148,8 +152,7 @@ def _on_unhealthy(
 
     if not config.notification.apprise_urls:
         logger.warning(
-            "{} unavailability streak {:.1f}h exceeded threshold — "
-            "no apprise URLs configured, cannot send alert.",
+            "{} unavailability streak {:.1f}h exceeded threshold — no apprise URLs configured, cannot send alert.",
             service_name,
             elapsed_hours,
         )

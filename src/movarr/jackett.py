@@ -55,7 +55,7 @@ class JackettClient:
         try:
             self._http.get(url, read_timeout=self._cfg.read_timeout)
             return True
-        except (HttpError, Exception) as exc:
+        except Exception as exc:  # noqa: BLE001
             _logger.warning("Jackett health check failed: {}.", exc)
             return False
 
@@ -126,10 +126,16 @@ class JackettClient:
 
         try:
             parsed = xmltodict.parse(response.content, process_namespaces=True)
-            items = parsed["rss"]["channel"]["item"]
-        except (ValueError, TypeError, KeyError):
-            _logger.warning("Cannot parse Torznab feed for indexer '{}'.", index_site)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Cannot parse Torznab feed for indexer '{}': {}.", index_site, exc)
             return None
+
+        try:
+            items = parsed["rss"]["channel"]["item"]
+        except KeyError:
+            # A valid feed with no results returns no <item> elements.
+            # This is not a parse error — return an empty list.
+            return []
 
         # xmltodict returns a dict (not a list) when there is exactly one item.
         if isinstance(items, dict):

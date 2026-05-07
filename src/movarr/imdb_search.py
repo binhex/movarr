@@ -43,7 +43,7 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
 
     Args:
         result: Pipeline dict with ``movie_title_and_year_search``,
-                ``movie_title``, ``index_title_compare``, ``movie_title_year``.
+                ``movie_title``, ``movie_title_compare``, ``movie_title_year``.
         config: Application configuration.
 
     Returns:
@@ -63,7 +63,7 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
 
 def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     search_term = result.get("movie_title_and_year_search", "")
-    title_compare = result.get("index_title_compare") or ""
+    movie_title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
 
     try:
@@ -84,7 +84,9 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
         if not imdb_title:
             continue
         norm = normalise_for_compare(imdb_title)
-        if not norm or norm not in title_compare:
+        # Use exact equality against the normalised movie title to prevent
+        # shorter titles (e.g. "Ring") from matching longer ones ("The Ring").
+        if not norm or norm != movie_title_compare:
             continue
         hit_year = hit.get("year")
         if hit_year is None:
@@ -117,7 +119,7 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
 
     title = result.get("movie_title") or ""
     year = result.get("movie_title_year") or ""
-    index_compare = result.get("index_title_compare") or ""
+    movie_title_compare = result.get("movie_title_compare") or ""
 
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?query={encoded_title}&year={year}&api_key={api_key}"
@@ -134,7 +136,8 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
             candidate = hit.get(field, "")
             if candidate:
                 norm = normalise_for_compare(candidate)
-                if norm and norm in index_compare:
+                # Exact match prevents shorter titles from matching via substring.
+                if norm and norm == movie_title_compare:
                     break
         else:
             continue
@@ -180,10 +183,10 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR
 
     title = result.get("movie_title") or ""
     year = result.get("movie_title_year") or ""
-    index_compare = result.get("index_title_compare") or ""
+    movie_title_compare = result.get("movie_title_compare") or ""
 
     encoded_title = urllib.parse.quote(title)
-    url = f"http://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
+    url = f"https://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
     http = HttpClient()
     try:
         resp = http.get(url)
@@ -201,11 +204,14 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR
         else:
             _fail(result, f"OMDb: no result for '{title}' ({year}).")
         return result
-    if omdb_norm not in index_compare:
+    # Use exact equality to prevent shorter titles (e.g. "Ring") from matching
+    # longer ones ("The Ring") via substring containment.
+    if omdb_norm != movie_title_compare:
         _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
         return result
 
-    raw_year = re.sub(r"\D+", "", data.get("Year", ""))
+    # Guard against JSON null (Python None) which re.sub cannot handle.
+    raw_year = re.sub(r"\D+", "", data.get("Year") or "")
     try:
         if int(raw_year) != int(year):
             _fail(result, f"OMDb: year '{raw_year}' != '{year}'.")
@@ -267,10 +273,11 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
 
     Uses ``duckduckgo-search`` (a maintained, scraper-friendly alternative
     to the fragile Google HTML scraper).  Returns the first IMDb URL whose
-    normalised title is contained in ``index_title_compare``.
+    normalised title matches ``movie_title_compare`` or ``movie_title_and_year_compare``.
     """
     search_term = result.get("movie_title_and_year_search", "")
-    index_compare = result.get("index_title_compare") or ""
+    movie_title_compare = result.get("movie_title_compare") or ""
+    movie_title_and_year_compare = result.get("movie_title_and_year_compare") or ""
     year = result.get("movie_title_year") or ""
 
     try:
@@ -306,7 +313,10 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
             if not san:
                 continue
             norm = normalise_for_compare(san)
-            if not norm or norm not in index_compare:
+            # Accept match when the DDG snippet title exactly equals the
+            # normalised title OR the normalised title+year form.  Snippets
+            # often include the year, so both forms must be accepted.
+            if not norm or norm not in (movie_title_compare, movie_title_and_year_compare):
                 continue
 
             match = _IMDB_ID_RE.search(d_url)
