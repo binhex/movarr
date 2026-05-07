@@ -338,31 +338,20 @@ class TestCliOverrides:
         pid_path: str = "",
         daemon_mode: str = "foreground",
     ) -> "MagicMock":
-        """Invoke CLI, return the config mock passed to scheduler.run()."""
+        """Invoke CLI with *args*, return the config mock that cli() operated on."""
         mocker.patch("movarr.cli.create_logger")
-        cfg = MagicMock()
-        cfg.general.log_level_console = log_level_console
-        cfg.general.log_path = log_path
-        cfg.general.pid_path = pid_path
-        cfg.general.daemon_mode = daemon_mode
-        cfg.general.library_path_list = []
+        cfg = _make_config_mock(
+            log_level_console=log_level_console,
+            log_path=log_path,
+            pid_path=pid_path,
+            daemon_mode=daemon_mode,
+        )
         cfg.general.db_path = "db/movarr.db"
-        cfg.torrent_client.qbittorrent.host = "localhost"
-        cfg.torrent_client.qbittorrent.port = 8080
-        cfg.torrent_client.qbittorrent.username = "admin"
-        cfg.torrent_client.qbittorrent.password = "adminadmin"
-        cfg.index_proxy.selected = "jackett"
-        cfg.index_proxy.jackett.host = "localhost"
-        cfg.index_proxy.jackett.port = 9117
-        cfg.index_proxy.jackett.api_key = ""
-        cfg.index_proxy.prowlarr.host = "localhost"
-        cfg.index_proxy.prowlarr.port = 9696
-        cfg.index_proxy.prowlarr.api_key = ""
         mocker.patch("movarr.config.load_config", return_value=cfg)
-        mock_run = mocker.patch("movarr.scheduler.run")
+        mocker.patch("movarr.scheduler.run")
+        from click.testing import CliRunner
+        from movarr.cli import cli
         CliRunner().invoke(cli, args)
-        if mock_run.called:
-            return mock_run.call_args[0][0]
         return cfg
 
     def test_db_path_overrides_config(self, mocker: "MockerFixture") -> None:

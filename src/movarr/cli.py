@@ -18,7 +18,7 @@ except PackageNotFoundError:
     _VERSION = "unknown"
 
 
-def _apply_cli_overrides(config: "Config", **overrides: object) -> None:
+def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     """Apply non-None CLI override values onto *config* in-place.
 
     Any kwarg whose value is ``None`` is skipped (user did not supply it).
