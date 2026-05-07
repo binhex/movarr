@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import click
 
@@ -32,7 +32,7 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     if overrides.get("qbt_host") is not None:
         config.torrent_client.qbittorrent.host = str(overrides["qbt_host"])
     if overrides.get("qbt_port") is not None:
-        config.torrent_client.qbittorrent.port = int(overrides["qbt_port"])  # type: ignore[arg-type]
+        config.torrent_client.qbittorrent.port = cast("int", overrides["qbt_port"])
     if overrides.get("qbt_username") is not None:
         config.torrent_client.qbittorrent.username = str(overrides["qbt_username"])
     if overrides.get("qbt_password") is not None:

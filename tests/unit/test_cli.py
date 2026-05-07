@@ -331,13 +331,13 @@ class TestCliOverrides:
 
     def _invoke(
         self,
-        mocker: "MockerFixture",
+        mocker: MockerFixture,
         args: list[str],
         log_level_console: str = "info",
         log_path: str = "",
         pid_path: str = "",
         daemon_mode: str = "foreground",
-    ) -> "MagicMock":
+    ) -> MagicMock:
         """Invoke CLI with *args*, return the config mock that cli() operated on."""
         mocker.patch("movarr.cli.create_logger")
         cfg = _make_config_mock(
@@ -354,52 +354,50 @@ class TestCliOverrides:
         cfg.torrent_client.qbittorrent.password = "adminadmin"
         mocker.patch("movarr.config.load_config", return_value=cfg)
         mocker.patch("movarr.scheduler.run")
-        from click.testing import CliRunner
-        from movarr.cli import cli
         CliRunner().invoke(cli, args)
         return cfg
 
-    def test_db_path_overrides_config(self, mocker: "MockerFixture") -> None:
+    def test_db_path_overrides_config(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--db-path", "/data/movarr.db", "--test"])
         assert cfg.general.db_path == "/data/movarr.db"
 
-    def test_db_path_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
+    def test_db_path_absent_leaves_config_unchanged(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--test"])
         assert cfg.general.db_path == "db/movarr.db"
 
-    def test_library_path_list_single_path(self, mocker: "MockerFixture") -> None:
+    def test_library_path_list_single_path(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--library-path-list", "/media/movies", "--test"])
         assert cfg.general.library_path_list == ["/media/movies"]
 
-    def test_library_path_list_multiple_paths(self, mocker: "MockerFixture") -> None:
+    def test_library_path_list_multiple_paths(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--library-path-list", "/media/movies,/media/4k", "--test"])
         assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
-    def test_library_path_list_strips_whitespace(self, mocker: "MockerFixture") -> None:
+    def test_library_path_list_strips_whitespace(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--library-path-list", "/media/movies, /media/4k", "--test"])
         assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
-    def test_library_path_list_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
+    def test_library_path_list_absent_leaves_config_unchanged(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--test"])
         assert cfg.general.library_path_list == []
 
-    def test_qbt_host_overrides_config(self, mocker: "MockerFixture") -> None:
+    def test_qbt_host_overrides_config(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--qbt-host", "192.168.1.50", "--test"])
         assert cfg.torrent_client.qbittorrent.host == "192.168.1.50"
 
-    def test_qbt_port_overrides_config(self, mocker: "MockerFixture") -> None:
+    def test_qbt_port_overrides_config(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--qbt-port", "8090", "--test"])
         assert cfg.torrent_client.qbittorrent.port == 8090
 
-    def test_qbt_username_overrides_config(self, mocker: "MockerFixture") -> None:
+    def test_qbt_username_overrides_config(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--qbt-username", "myuser", "--test"])
         assert cfg.torrent_client.qbittorrent.username == "myuser"
 
-    def test_qbt_password_overrides_config(self, mocker: "MockerFixture") -> None:
+    def test_qbt_password_overrides_config(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--qbt-password", "s3cr3t", "--test"])
         assert cfg.torrent_client.qbittorrent.password == "s3cr3t"
 
-    def test_qbt_options_absent_leave_config_unchanged(self, mocker: "MockerFixture") -> None:
+    def test_qbt_options_absent_leave_config_unchanged(self, mocker: MockerFixture) -> None:
         cfg = self._invoke(mocker, ["--test"])
         assert cfg.torrent_client.qbittorrent.host == "localhost"
         assert cfg.torrent_client.qbittorrent.port == 8080
