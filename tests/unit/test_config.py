@@ -651,3 +651,20 @@ class TestMigrationV210ToV211:
     def test_does_not_overwrite_existing_pid_path(self) -> None:
         raw: dict = {"general": {"config_version": "2.10.0", "pid_path": "/run/movarr.pid"}}
         assert _migrate_v210_to_v211(raw)["general"]["pid_path"] == "/run/movarr.pid"
+
+
+class TestDefaultSearchConfig:
+    """Auto-generated config has a single 1080p search tier."""
+
+    def test_default_search_has_one_tier(self) -> None:
+        cfg = Config()
+        assert len(cfg.index_site.search) == 1
+
+    def test_default_search_criteria_is_1080p(self) -> None:
+        cfg = Config()
+        assert cfg.index_site.search[0].criteria == "1080p"
+
+    def test_default_search_category_is_2000_5000(self) -> None:
+        cfg = Config()
+        assert cfg.index_site.search[0].category == "2000,5000"
+
