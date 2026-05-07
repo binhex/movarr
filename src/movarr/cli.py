@@ -29,6 +29,14 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.general.library_path_list = [
             p.strip() for p in str(overrides["library_path_list"]).split(",") if p.strip()
         ]
+    if overrides.get("qbt_host") is not None:
+        config.torrent_client.qbittorrent.host = str(overrides["qbt_host"])
+    if overrides.get("qbt_port") is not None:
+        config.torrent_client.qbittorrent.port = int(overrides["qbt_port"])  # type: ignore[arg-type]
+    if overrides.get("qbt_username") is not None:
+        config.torrent_client.qbittorrent.username = str(overrides["qbt_username"])
+    if overrides.get("qbt_password") is not None:
+        config.torrent_client.qbittorrent.password = str(overrides["qbt_password"])
 
 
 @click.command()
@@ -72,6 +80,35 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Comma-separated library paths, overrides config (e.g. /media/movies,/media/4k).",
 )
 @click.option(
+    "--qbt-host",
+    default=None,
+    show_default=False,
+    metavar="<host>",
+    help="Override qBittorrent host from config.",
+)
+@click.option(
+    "--qbt-port",
+    type=int,
+    default=None,
+    show_default=False,
+    metavar="<port>",
+    help="Override qBittorrent WebUI port from config.",
+)
+@click.option(
+    "--qbt-username",
+    default=None,
+    show_default=False,
+    metavar="<user>",
+    help="Override qBittorrent username from config.",
+)
+@click.option(
+    "--qbt-password",
+    default=None,
+    show_default=False,
+    metavar="<pass>",
+    help="Override qBittorrent password from config.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -90,6 +127,10 @@ def cli(
     log_level: str | None,
     db_path: str | None,
     library_path_list: str | None,
+    qbt_host: str | None,
+    qbt_port: int | None,
+    qbt_username: str | None,
+    qbt_password: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -111,7 +152,15 @@ def cli(
     if daemon:
         config.general.daemon_mode = "background"
 
-    _apply_cli_overrides(config, db_path=db_path, library_path_list=library_path_list)
+    _apply_cli_overrides(
+        config,
+        db_path=db_path,
+        library_path_list=library_path_list,
+        qbt_host=qbt_host,
+        qbt_port=qbt_port,
+        qbt_username=qbt_username,
+        qbt_password=qbt_password,
+    )
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")

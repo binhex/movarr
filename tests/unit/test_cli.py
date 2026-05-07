@@ -348,6 +348,10 @@ class TestCliOverrides:
         )
         cfg.general.db_path = "db/movarr.db"
         cfg.general.library_path_list = []
+        cfg.torrent_client.qbittorrent.host = "localhost"
+        cfg.torrent_client.qbittorrent.port = 8080
+        cfg.torrent_client.qbittorrent.username = "admin"
+        cfg.torrent_client.qbittorrent.password = "adminadmin"
         mocker.patch("movarr.config.load_config", return_value=cfg)
         mocker.patch("movarr.scheduler.run")
         from click.testing import CliRunner
@@ -378,3 +382,26 @@ class TestCliOverrides:
     def test_library_path_list_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
         cfg = self._invoke(mocker, ["--test"])
         assert cfg.general.library_path_list == []
+
+    def test_qbt_host_overrides_config(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--qbt-host", "192.168.1.50", "--test"])
+        assert cfg.torrent_client.qbittorrent.host == "192.168.1.50"
+
+    def test_qbt_port_overrides_config(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--qbt-port", "8090", "--test"])
+        assert cfg.torrent_client.qbittorrent.port == 8090
+
+    def test_qbt_username_overrides_config(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--qbt-username", "myuser", "--test"])
+        assert cfg.torrent_client.qbittorrent.username == "myuser"
+
+    def test_qbt_password_overrides_config(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--qbt-password", "s3cr3t", "--test"])
+        assert cfg.torrent_client.qbittorrent.password == "s3cr3t"
+
+    def test_qbt_options_absent_leave_config_unchanged(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--test"])
+        assert cfg.torrent_client.qbittorrent.host == "localhost"
+        assert cfg.torrent_client.qbittorrent.port == 8080
+        assert cfg.torrent_client.qbittorrent.username == "admin"
+        assert cfg.torrent_client.qbittorrent.password == "adminadmin"
