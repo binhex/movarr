@@ -25,6 +25,10 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     """
     if overrides.get("db_path") is not None:
         config.general.db_path = str(overrides["db_path"])
+    if overrides.get("library_path_list") is not None:
+        config.general.library_path_list = [
+            p.strip() for p in str(overrides["library_path_list"]).split(",") if p.strip()
+        ]
 
 
 @click.command()
@@ -61,6 +65,13 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override the database file path from config.",
 )
 @click.option(
+    "--library-path-list",
+    default=None,
+    show_default=False,
+    metavar="<path[,path...]>",
+    help="Comma-separated library paths, overrides config (e.g. /media/movies,/media/4k).",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -78,6 +89,7 @@ def cli(
     log_path: str | None,
     log_level: str | None,
     db_path: str | None,
+    library_path_list: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -99,7 +111,7 @@ def cli(
     if daemon:
         config.general.daemon_mode = "background"
 
-    _apply_cli_overrides(config, db_path=db_path)
+    _apply_cli_overrides(config, db_path=db_path, library_path_list=library_path_list)
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")

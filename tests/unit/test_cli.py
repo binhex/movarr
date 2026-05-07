@@ -347,6 +347,7 @@ class TestCliOverrides:
             daemon_mode=daemon_mode,
         )
         cfg.general.db_path = "db/movarr.db"
+        cfg.general.library_path_list = []
         mocker.patch("movarr.config.load_config", return_value=cfg)
         mocker.patch("movarr.scheduler.run")
         from click.testing import CliRunner
@@ -361,3 +362,19 @@ class TestCliOverrides:
     def test_db_path_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
         cfg = self._invoke(mocker, ["--test"])
         assert cfg.general.db_path == "db/movarr.db"
+
+    def test_library_path_list_single_path(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies", "--test"])
+        assert cfg.general.library_path_list == ["/media/movies"]
+
+    def test_library_path_list_multiple_paths(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies,/media/4k", "--test"])
+        assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
+
+    def test_library_path_list_strips_whitespace(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies, /media/4k", "--test"])
+        assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
+
+    def test_library_path_list_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--test"])
+        assert cfg.general.library_path_list == []
