@@ -352,6 +352,10 @@ class TestCliOverrides:
         cfg.torrent_client.qbittorrent.port = 8080
         cfg.torrent_client.qbittorrent.username = "admin"
         cfg.torrent_client.qbittorrent.password = "adminadmin"
+        cfg.index_proxy.selected = "jackett"
+        cfg.index_proxy.jackett.host = "localhost"
+        cfg.index_proxy.jackett.port = 9117
+        cfg.index_proxy.jackett.api_key = ""
         mocker.patch("movarr.config.load_config", return_value=cfg)
         mocker.patch("movarr.scheduler.run")
         CliRunner().invoke(cli, args)
@@ -403,3 +407,29 @@ class TestCliOverrides:
         assert cfg.torrent_client.qbittorrent.port == 8080
         assert cfg.torrent_client.qbittorrent.username == "admin"
         assert cfg.torrent_client.qbittorrent.password == "adminadmin"
+
+    def test_index_proxy_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--index-proxy", "prowlarr", "--test"])
+        assert cfg.index_proxy.selected == "prowlarr"
+
+    def test_index_proxy_invalid_choice_exits_nonzero(self) -> None:
+        result = CliRunner().invoke(cli, ["--index-proxy", "sonarr"])
+        assert result.exit_code != 0
+
+    def test_jackett_host_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--jackett-host", "192.168.1.60", "--test"])
+        assert cfg.index_proxy.jackett.host == "192.168.1.60"
+
+    def test_jackett_port_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--jackett-port", "9118", "--test"])
+        assert cfg.index_proxy.jackett.port == 9118
+
+    def test_jackett_api_key_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--jackett-api-key", "abc123", "--test"])
+        assert cfg.index_proxy.jackett.api_key == "abc123"
+
+    def test_jackett_options_absent_leave_config_unchanged(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--test"])
+        assert cfg.index_proxy.jackett.host == "localhost"
+        assert cfg.index_proxy.jackett.port == 9117
+        assert cfg.index_proxy.jackett.api_key == ""

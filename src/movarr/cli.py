@@ -37,6 +37,14 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.torrent_client.qbittorrent.username = str(overrides["qbt_username"])
     if overrides.get("qbt_password") is not None:
         config.torrent_client.qbittorrent.password = str(overrides["qbt_password"])
+    if overrides.get("index_proxy") is not None:
+        config.index_proxy.selected = str(overrides["index_proxy"]).lower()
+    if overrides.get("jackett_host") is not None:
+        config.index_proxy.jackett.host = str(overrides["jackett_host"])
+    if overrides.get("jackett_port") is not None:
+        config.index_proxy.jackett.port = cast("int", overrides["jackett_port"])
+    if overrides.get("jackett_api_key") is not None:
+        config.index_proxy.jackett.api_key = str(overrides["jackett_api_key"])
 
 
 @click.command()
@@ -109,6 +117,36 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override qBittorrent password from config.",
 )
 @click.option(
+    "--index-proxy",
+    type=click.Choice(["jackett", "prowlarr"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    metavar="<proxy>",
+    help="Override index proxy selection from config (jackett or prowlarr).",
+)
+@click.option(
+    "--jackett-host",
+    default=None,
+    show_default=False,
+    metavar="<host>",
+    help="Override Jackett host from config.",
+)
+@click.option(
+    "--jackett-port",
+    type=int,
+    default=None,
+    show_default=False,
+    metavar="<port>",
+    help="Override Jackett port from config.",
+)
+@click.option(
+    "--jackett-api-key",
+    default=None,
+    show_default=False,
+    metavar="<key>",
+    help="Override Jackett API key from config.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -131,6 +169,10 @@ def cli(
     qbt_port: int | None,
     qbt_username: str | None,
     qbt_password: str | None,
+    index_proxy: str | None,
+    jackett_host: str | None,
+    jackett_port: int | None,
+    jackett_api_key: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -160,6 +202,10 @@ def cli(
         qbt_port=qbt_port,
         qbt_username=qbt_username,
         qbt_password=qbt_password,
+        index_proxy=index_proxy,
+        jackett_host=jackett_host,
+        jackett_port=jackett_port,
+        jackett_api_key=jackett_api_key,
     )
 
     def _log_format(record: dict) -> str:
