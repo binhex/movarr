@@ -540,23 +540,17 @@ class TestIndexProxyAlertHoursConfig:
 
     def test_parses_float_value(self) -> None:
         """A float value is parsed and stored correctly."""
-        config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "index_proxy_alert_hours": 2.5}}
-        )
+        config = Config.model_validate({"notification": {"apprise_urls": [], "index_proxy_alert_hours": 2.5}})
         assert config.notification.index_proxy_alert_hours == 2.5  # noqa: PLR2004
 
     def test_parses_integer_as_float(self) -> None:
         """An integer value (e.g. 2) is accepted and stored as float."""
-        config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "index_proxy_alert_hours": 2}}
-        )
+        config = Config.model_validate({"notification": {"apprise_urls": [], "index_proxy_alert_hours": 2}})
         assert config.notification.index_proxy_alert_hours == 2.0  # noqa: PLR2004
 
     def test_parses_zero_disables_feature(self) -> None:
         """Explicitly setting 0 keeps the feature disabled."""
-        config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "index_proxy_alert_hours": 0}}
-        )
+        config = Config.model_validate({"notification": {"apprise_urls": [], "index_proxy_alert_hours": 0}})
         assert config.notification.index_proxy_alert_hours == 0
 
 
@@ -597,16 +591,12 @@ class TestTorrentClientAlertHoursConfig:
 
     def test_parses_float_value(self) -> None:
         """A float value is parsed and stored correctly."""
-        config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "torrent_client_alert_hours": 3.5}}
-        )
+        config = Config.model_validate({"notification": {"apprise_urls": [], "torrent_client_alert_hours": 3.5}})
         assert config.notification.torrent_client_alert_hours == 3.5  # noqa: PLR2004
 
     def test_parses_zero_disables(self) -> None:
         """Zero keeps the feature disabled."""
-        config = Config.model_validate(
-            {"notification": {"apprise_urls": [], "torrent_client_alert_hours": 0}}
-        )
+        config = Config.model_validate({"notification": {"apprise_urls": [], "torrent_client_alert_hours": 0}})
         assert config.notification.torrent_client_alert_hours == 0
 
 

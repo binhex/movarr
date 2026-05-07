@@ -193,10 +193,7 @@ class Database:
                 conn.commit()
             if from_version < _SCHEMA_V11_KV_STORE:
                 conn.execute(
-                    text(
-                        "CREATE TABLE IF NOT EXISTS kv_store "
-                        "(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"
-                    )
+                    text("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
                 )
                 conn.commit()
             if from_version < _SCHEMA_V12_KV_KEY_RENAME:
@@ -461,11 +458,20 @@ class Database:
     def find_by_tag(self, torrent_tag: str) -> HistoryRecord | None:
         """Fetch a history record by its torrent tag.
 
+        The returned ``HistoryRecord`` is explicitly expunged from the session
+        before it is returned.  This avoids ``DetachedInstanceError`` on any
+        attribute access that would otherwise trigger a lazy load after the
+        session has closed.  All scalar columns are loaded eagerly by the
+        initial SELECT, so expunged instances are safe to read.
+
         Args:
             torrent_tag: The UUID tag that identifies the torrent.
         """
         with Session(self._engine) as session:
-            return session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).first()
+            row = session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).first()
+            if row is not None:
+                session.expunge(row)
+            return row
 
     def find_imdb_metadata(self, imdb_id: str) -> dict[str, Any] | None:
         """Return cached IMDb metadata for *imdb_id* if available.
@@ -490,6 +496,8 @@ class Database:
                 .order_by(HistoryRecord.id.desc())
                 .first()
             )
+            if row is not None:
+                session.expunge(row)
         if row is None:
             return None
 

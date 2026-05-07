@@ -244,16 +244,47 @@ class TestIdentifyForDeletion:
 
         assert "hash1" not in result
 
-    def test_zero_last_activity_treated_as_infinitely_old(self, mocker: MockerFixture) -> None:
-        """Torrent with last_activity=0 (never had network activity) is treated as very old."""
+    def test_zero_last_activity_falls_back_to_added_on(self, mocker: MockerFixture) -> None:
+        """Torrent with last_activity=0 falls back to added_on for age calculation.
+
+        Previously this treated age_mins as infinite, immediately deleting
+        brand-new torrents that had never connected to a peer. The fix uses
+        added_on as a fallback so newly queued torrents get a grace period.
+        """
+        import datetime
+
         client, _ = _make_client(mocker)
+        # added_on set to 2 hours ago so the torrent is eligible after the 30 min threshold.
+        two_hours_ago = int((datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(hours=2)).timestamp())
         torrent_map = {
-            "hash1": {"state": "stalledDL", "name": "Never Active", "last_activity": 0},
+            "hash1": {
+                "state": "stalledDL",
+                "name": "Never Active",
+                "last_activity": 0,
+                "added_on": two_hours_ago,
+            },
         }
         result = client.identify_for_deletion(torrent_map, "stalledDL", 30, "last_activity")
 
         assert "hash1" in result
-        assert result["hash1"]["age_mins"] == float("inf")
+        # Age should be roughly 120 minutes, not infinity.
+        assert result["hash1"]["age_mins"] < float("inf")
+        assert result["hash1"]["age_mins"] > 30
+
+    def test_zero_last_activity_zero_added_on_skipped(self, mocker: MockerFixture) -> None:
+        """Torrent with both last_activity=0 and added_on=0 is skipped (age unknowable)."""
+        client, _ = _make_client(mocker)
+        torrent_map = {
+            "hash1": {
+                "state": "stalledDL",
+                "name": "No Timestamps",
+                "last_activity": 0,
+                "added_on": 0,
+            },
+        }
+        result = client.identify_for_deletion(torrent_map, "stalledDL", 30, "last_activity")
+
+        assert "hash1" not in result
 
     def test_none_last_activity_skipped(self, mocker: MockerFixture) -> None:
         """Torrent with last_activity=None is skipped."""
@@ -410,3 +441,37 @@ class TestDeleteStalledWarning:
         stalled_map = {"hash1": {"name": "Stuck Movie", "age_mins": 500, "state": "stalledDL"}}
         client.delete_stalled(stalled_map, state="stalledDL", delete_data=False)
         mock_warning.assert_called_once()
+
+    def test_returns_seeding_torrents_not_just_stopped(self, mocker: MockerFixture) -> None:
+        """list_completed must include 100%-complete torrents in any state.
+
+        With add_paused=False (the default), a finished torrent will often be
+        in an uploading/seeding state rather than 'stopped'.  The old
+        implementation used status_filter='stopped' and silently missed them.
+        The fix queries all torrents in the movarr category and filters by
+        amount_left == 0 regardless of state.
+        """
+        client, mock_api = _make_client(mocker)
+        # Simulate an uploading torrent (100% done, add_paused was False).
+        torrent = _make_torrent(mocker, tag="movarr-abc123", amount_left=0)
+
+        mock_file = mocker.MagicMock()
+        mock_file.name = "movie.mkv"
+        mock_file.size = 5_000_000_000
+
+        mock_props = mocker.MagicMock()
+        mock_props.save_path = "/downloads/movies"
+
+        mock_api.torrents_info.return_value = [torrent]
+        mock_api.torrents_files.return_value = [mock_file]
+        mock_api.torrents_properties.return_value = mock_props
+
+        results = client.list_completed()
+
+        # Must be returned regardless of the 'stopped' state filter.
+        assert len(results) == 1
+        assert results[0]["torrent_hash"] == "abc123"
+
+        # Confirm torrents_info was NOT called with status_filter='stopped'.
+        call_kwargs = mock_api.torrents_info.call_args
+        assert call_kwargs.kwargs.get("status_filter") != "stopped"

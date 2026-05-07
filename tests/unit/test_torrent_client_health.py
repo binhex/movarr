@@ -1,8 +1,9 @@
 """Tests for the torrent_client_health wrapper module."""
+
 from __future__ import annotations
 
 import datetime
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 from unittest.mock import patch
 
 from movarr.config import Config, NotificationConfig, QbittorrentConfig, TorrentClientConfig
@@ -71,13 +72,13 @@ class TestTorrentClientHealthWrapper:
             check_and_notify(is_reachable=False, db=db, config=config)
         assert mock_engine.call_args.kwargs["service_name"] == "qBittorrent"
 
-    def test_unknown_client_falls_back_to_capitalize(self, tmp_path: Path) -> None:
-        """Unknown client names fall back to .capitalize() for the display name."""
+    def test_qbittorrent_client_displays_correctly(self, tmp_path: Path) -> None:
+        """qbittorrent selected maps to 'qBittorrent' display name."""
         db = _db(tmp_path)
-        config = _config(2.0, selected="myclient")
+        config = _config(2.0, selected="qbittorrent")
         with patch("movarr.torrent_client_health.check_service_health") as mock_engine:
             check_and_notify(is_reachable=False, db=db, config=config)
-        assert mock_engine.call_args.kwargs["service_name"] == "Myclient"
+        assert mock_engine.call_args.kwargs["service_name"] == "qBittorrent"
 
     def test_end_to_end_alert_fires(self, tmp_path: Path) -> None:
         """Integration: unreachable streak exceeds threshold -> apprise called."""

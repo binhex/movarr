@@ -697,9 +697,7 @@ class TestKvStore:
         """kv_store table exists after Database init."""
         db = Database(tmp_path / "test.db")
         with db._engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'")
-            )
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'"))
             assert result.fetchone() is not None
 
     def test_db_version_is_12(self, tmp_path: Path) -> None:
@@ -714,16 +712,13 @@ class TestKvStore:
         db_path = tmp_path / "legacy.db"
         # Create a bare v10 DB (history table exists, no kv_store)
         raw = sqlite3.connect(str(db_path))
-        raw.execute(
-            "CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)"
-        )
+        raw.execute("CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)")
         raw.execute("PRAGMA user_version = 10")
         raw.commit()
         raw.close()
 
         db = Database(db_path)
         assert db._get_user_version() == 12
-
 
     def test_kv_rename_migration_v11_to_v12(self, tmp_path: Path) -> None:
         """v11->v12 migration renames index_proxy.zero_results_since to index_proxy.unavailable_since."""
@@ -734,8 +729,7 @@ class TestKvStore:
         raw.execute("CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)")
         raw.execute("CREATE TABLE kv_store (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
         raw.execute(
-            "INSERT INTO kv_store (key, value) VALUES "
-            "('index_proxy.zero_results_since', '2026-01-01T00:00:00+00:00')"
+            "INSERT INTO kv_store (key, value) VALUES ('index_proxy.zero_results_since', '2026-01-01T00:00:00+00:00')"
         )
         raw.execute("PRAGMA user_version = 11")
         raw.commit()

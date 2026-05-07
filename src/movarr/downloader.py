@@ -52,7 +52,9 @@ class HttpClient:
         (
             socket.timeout,
             requests.exceptions.Timeout,
-            requests.exceptions.HTTPError,
+            # Note: requests.exceptions.HTTPError is NOT listed here because it is
+            # never raised by _request (we raise HttpError instead). Only
+            # network-level transient errors are retried.
             requests.exceptions.ConnectionError,
         ),
         max_tries=10,
@@ -65,6 +67,7 @@ class HttpClient:
         headers: dict[str, str] | None = None,
         data: Any = None,
         auth: tuple[str, str] | None = None,
+        read_timeout: float | None = None,
     ) -> requests.Response:
         """Execute an HTTP request, retrying on transient errors.
 
@@ -88,10 +91,11 @@ class HttpClient:
             if auth:
                 session.auth = auth
 
+            rt = read_timeout if read_timeout is not None else self._read_timeout
             response = session.request(
                 method=method,
                 url=url,
-                timeout=(self._connect_timeout, self._read_timeout),
+                timeout=(self._connect_timeout, rt),
                 allow_redirects=True,
                 verify=self._verify_ssl,
                 data=data,
@@ -119,12 +123,7 @@ class HttpClient:
             headers: Extra request headers.
             auth: Optional ``(username, password)`` tuple.
             read_timeout: Override the default read timeout for this call.
+                Passed directly to ``_request`` rather than mutating
+                instance state to avoid a thread-safety race condition.
         """
-        if read_timeout is not None:
-            original = self._read_timeout
-            self._read_timeout = read_timeout
-            try:
-                return self._request("get", url, headers=headers, auth=auth)
-            finally:
-                self._read_timeout = original
-        return self._request("get", url, headers=headers, auth=auth)
+        return self._request("get", url, headers=headers, auth=auth, read_timeout=read_timeout)

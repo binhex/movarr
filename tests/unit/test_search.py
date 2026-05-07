@@ -55,16 +55,22 @@ class TestEnrichIndexMetadata:
         result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
         assert result.get("movie_title_and_year_search") == "The Matrix 1999"
 
-    def test_index_title_compare_set(self) -> None:
-        """index_title_compare must be set — all IMDb strategies use it to verify matches."""
+    def test_movie_title_compare_set(self) -> None:
+        """movie_title_compare must be set — IMDb strategies use it to verify matches."""
         result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
-        assert result.get("index_title_compare") is not None
-        assert len(result["index_title_compare"]) > 0  # type: ignore[arg-type]
+        assert result.get("movie_title_compare") is not None
+        assert len(result["movie_title_compare"]) > 0  # type: ignore[arg-type]
 
-    def test_index_title_compare_set_even_without_year(self) -> None:
-        """index_title_compare is always set from the sanitised title, regardless of year."""
+    def test_movie_title_compare_set_even_without_year(self) -> None:
+        """movie_title_compare is only set when both title and year are parseable.
+
+        If the index title has no extractable year, the compare fields are not
+        set (to avoid false-positive matches on year-less titles).
+        """
         result = _enrich_index_metadata(_base_result("SomeTitle NoYear BluRay"))
-        assert result.get("index_title_compare") is not None
+        # Without a year, compare fields are intentionally absent.
+        assert result.get("movie_title_compare") is None
+        assert result.get("movie_title_and_year_compare") is None
 
     def test_result_set_to_passed(self) -> None:
         result = _enrich_index_metadata(_base_result("The Matrix 1999 1080p BluRay"))
@@ -141,16 +147,19 @@ class TestRunSearch:
         mock_process.assert_not_called()
 
     def test_jackett_not_reachable_skips_criteria_processing(self, mocker: MockerFixture) -> None:
+        """When the indexer is unreachable, _process_criteria must not be called."""
         cfg = Config()
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_factory.return_value.is_reachable.return_value = False
-        mocker.patch("movarr.search._process_criteria")
+        # Store the mock BEFORE calling run_search so the assertion is against
+        # the same mock object that wrapped the function during the call.
+        mock_process = mocker.patch("movarr.search._process_criteria")
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
 
         run_search(cfg, qbt, db)
 
-        mocker.patch("movarr.search._process_criteria").assert_not_called()
+        mock_process.assert_not_called()
 
     def test_processes_each_criteria_tier(self, mocker: MockerFixture) -> None:
         cfg = Config()
@@ -212,7 +221,7 @@ class TestProcessCriteria:
         )
 
     def test_happy_path_full_pipeline(self, mocker: MockerFixture) -> None:
-        """All pipeline stages pass → notification sent, torrent added, DB written."""
+        """All pipeline stages pass → torrent added, notification sent, DB written."""
         mock_filter_index = mocker.patch(
             "movarr.search.filter_by_index",
             side_effect=lambda r, *a, **kw: {**r, "result": "Passed"},
@@ -233,7 +242,9 @@ class TestProcessCriteria:
         jackett = mocker.MagicMock()
         jackett.search.return_value = iter([_base_result()])
         qbt = mocker.MagicMock()
-        qbt.add_torrent.return_value = None
+        # add_torrent must return non-None for a successful add.
+        added_result: dict[str, Any] = {**_base_result(), "result": "Passed", "torrent_tag": "movarr-uuid"}
+        qbt.add_torrent.return_value = added_result
         db = mocker.MagicMock()
         db.is_duplicate_exact.return_value = False
         db.find_imdb_metadata.return_value = None
@@ -247,6 +258,33 @@ class TestProcessCriteria:
         mock_notify.assert_called_once()
         qbt.add_torrent.assert_called_once()
         db.write.assert_called_once()
+
+    def test_add_torrent_failure_writes_failed_result_no_notification(self, mocker: MockerFixture) -> None:
+        """When add_torrent returns None, result is marked Failed, no notification is sent."""
+        mocker.patch("movarr.search.filter_by_index", side_effect=lambda r, *a, **kw: {**r, "result": "Passed"})
+        mocker.patch(
+            "movarr.search.search_for_imdb_id",
+            side_effect=lambda r, *a, **kw: {**r, "imdb_id": "tt0133093", "result": "Passed"},
+        )
+        mocker.patch("movarr.search.fetch_metadata", side_effect=lambda r, *a, **kw: {**r, "result": "Passed"})
+        mocker.patch("movarr.search.filter_by_imdb", side_effect=lambda r, *a, **kw: {**r, "result": "Passed"})
+        mock_notify = mocker.patch("movarr.search.send_queued_notification")
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter([_base_result()])
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.return_value = None  # add_torrent failed
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+        db.find_imdb_metadata.return_value = None
+
+        self._call(mocker, jackett, qbt, db)
+
+        # Notification must NOT be sent when add_torrent fails.
+        mock_notify.assert_not_called()
+        # DB write must record the failure.
+        db.write.assert_called_once()
+        written_result = db.write.call_args[0][0]
+        assert written_result.get("result") == "Failed"
 
     def test_index_filter_failure_writes_db_skips_imdb_lookup(self, mocker: MockerFixture) -> None:
         """When index filter fails, result is persisted and IMDb lookup is skipped."""
@@ -831,6 +869,7 @@ class TestRunSearchHealthMonitor:
 
     def _make_config(self) -> Config:
         from movarr.config import NotificationConfig
+
         config = Config()
         return config.model_copy(
             update={
@@ -841,9 +880,7 @@ class TestRunSearchHealthMonitor:
             }
         )
 
-    def test_check_and_notify_called_with_false_when_not_reachable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_check_and_notify_called_with_false_when_not_reachable(self, tmp_path: Path) -> None:
         """When indexer is unreachable, check_and_notify called with has_results=False."""
         from unittest.mock import MagicMock, patch
 
@@ -867,9 +904,7 @@ class TestRunSearchHealthMonitor:
         call_kwargs = mock_health.call_args.kwargs
         assert call_kwargs["has_results"] is False
 
-    def test_check_and_notify_called_with_true_when_results_returned(
-        self, tmp_path: Path
-    ) -> None:
+    def test_check_and_notify_called_with_true_when_results_returned(self, tmp_path: Path) -> None:
         """When indexer returns results, check_and_notify called with has_results=True."""
         from unittest.mock import MagicMock, patch
 
@@ -903,9 +938,7 @@ class TestRunSearchHealthMonitor:
         call_kwargs = mock_health.call_args.kwargs
         assert call_kwargs["has_results"] is True
 
-    def test_check_and_notify_called_with_false_when_indexer_returns_empty(
-        self, tmp_path: Path
-    ) -> None:
+    def test_check_and_notify_called_with_false_when_indexer_returns_empty(self, tmp_path: Path) -> None:
         """When indexer returns zero raw results, check_and_notify called with has_results=False."""
         from unittest.mock import MagicMock, patch
 
@@ -931,9 +964,7 @@ class TestRunSearchHealthMonitor:
         call_kwargs = mock_health.call_args.kwargs
         assert call_kwargs["has_results"] is False
 
-    def test_check_and_notify_not_called_when_qbt_unreachable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_check_and_notify_not_called_when_qbt_unreachable(self, tmp_path: Path) -> None:
         """When qBittorrent is unreachable, search exits early — check_and_notify not called."""
         from unittest.mock import MagicMock, patch
 
@@ -955,17 +986,21 @@ class TestRunSearchTorrentClientHealthMonitor:
 
     def _make_config(self) -> Config:
         from movarr.config import NotificationConfig
+
         config = Config()
         return config.model_copy(
-            update={"notification": NotificationConfig(
-                apprise_urls=["ntfy://t"],
-                torrent_client_alert_hours=2.0,
-            )}
+            update={
+                "notification": NotificationConfig(
+                    apprise_urls=["ntfy://t"],
+                    torrent_client_alert_hours=2.0,
+                )
+            }
         )
 
     def test_called_with_false_when_qbt_unreachable(self, tmp_path: Path) -> None:
         """When qBittorrent is unreachable, check_and_notify called with is_reachable=False."""
         from unittest.mock import MagicMock, patch
+
         from movarr.search import run_search
 
         config = self._make_config()
@@ -976,13 +1011,12 @@ class TestRunSearchTorrentClientHealthMonitor:
         with patch("movarr.search.torrent_client_health") as mock_health:
             run_search(config, qbt, db)
 
-        mock_health.check_and_notify.assert_called_once_with(
-            is_reachable=False, db=db, config=config
-        )
+        mock_health.check_and_notify.assert_called_once_with(is_reachable=False, db=db, config=config)
 
     def test_called_with_true_when_qbt_reachable(self, tmp_path: Path) -> None:
         """When qBittorrent is reachable, check_and_notify called with is_reachable=True."""
         from unittest.mock import MagicMock, patch
+
         from movarr.search import run_search
 
         config = self._make_config()
@@ -1002,6 +1036,4 @@ class TestRunSearchTorrentClientHealthMonitor:
         ):
             run_search(config, qbt, db)
 
-        mock_health.check_and_notify.assert_called_once_with(
-            is_reachable=True, db=db, config=config
-        )
+        mock_health.check_and_notify.assert_called_once_with(is_reachable=True, db=db, config=config)

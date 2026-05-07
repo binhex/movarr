@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from movarr import torrent_client_health
+
 if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.database import Database
@@ -48,7 +50,9 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
 
     if not qbt.is_connected():
         logger.warning("qBittorrent is unreachable; skipping queue management.")
+        torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
+    torrent_client_health.check_and_notify(is_reachable=True, db=db, config=config)
 
     if qm_cfg.metadata_monitor_enabled:
         _delete_stuck(
@@ -94,9 +98,9 @@ def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> No
         return
 
     logger.info("Deleting {} {} torrent(s) in state '{}'.", len(to_delete), cfg.label, cfg.state)
-    qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
+    deleted_hashes = qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
 
-    for torrent_hash in to_delete:
+    for torrent_hash in deleted_hashes:
         torrent_info = torrent_map.get(torrent_hash, {})
         raw_tags: str = torrent_info.get("tags", "") or ""
         tag = next(

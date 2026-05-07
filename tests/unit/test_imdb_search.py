@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from movarr.parsing import normalise_for_compare
+
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
@@ -26,12 +28,22 @@ from movarr.imdb_search import (
 
 
 def _make_result(**overrides: Any) -> ResultDict:
-    """Build a minimal pipeline result dict for search tests."""
+    """Build a minimal pipeline result dict for search tests.
+
+    Automatically computes ``movie_title_compare`` and
+    ``movie_title_and_year_compare`` from ``movie_title`` and
+    ``movie_title_year`` so that the new exact-match search strategies work
+    correctly in tests. Override either field explicitly when testing
+    non-standard compare values.
+    """
+    title = overrides.get("movie_title", "The Matrix")
+    year = overrides.get("movie_title_year", "1999")
     base: ResultDict = {
-        "movie_title": "The Matrix",
-        "movie_title_year": "1999",
-        "movie_title_and_year_search": "The Matrix 1999",
-        "index_title_compare": "thematrix 1999",
+        "movie_title": title,
+        "movie_title_year": year,
+        "movie_title_and_year_search": f"{title} {year}",
+        "movie_title_compare": normalise_for_compare(title) or "",
+        "movie_title_and_year_compare": normalise_for_compare(f"{title} {year}") or "",
         "result": "Passed",
         "result_details": [],
     }
@@ -345,7 +357,7 @@ class TestSearchDuckDuckGo:
         mock_ddgs.return_value = _MockDDGS(
             [{"title": "The Matrix 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
         )
-        result = _make_result(index_title_compare="thematrix1999")
+        result = _make_result()
         cfg = Config()
         out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Passed"
@@ -362,7 +374,7 @@ class TestSearchDuckDuckGo:
         mock_ddgs.return_value = _MockDDGS(
             [{"title": "The Matrix 1999", "href": "https://www.somesite.com/the-matrix"}], mocker
         )
-        result = _make_result(index_title_compare="thematrix1999")
+        result = _make_result()
         cfg = Config()
         out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Failed"
@@ -373,7 +385,7 @@ class TestSearchDuckDuckGo:
         mock_ddgs.return_value = _MockDDGS(
             [{"title": "The Matrix IMDb", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
         )
-        result = _make_result(index_title_compare="thematrix")
+        result = _make_result()
         cfg = Config()
         out = _search_duckduckgo(result, cfg)
         assert out["result"] == "Passed"
@@ -392,7 +404,7 @@ class TestSearchDuckDuckGo:
             [{"title": "The Matrix 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
         )
         mock_ddgs.return_value = mock_instance
-        result = _make_result(index_title_compare="thematrix1999")
+        result = _make_result()
         _search_duckduckgo(result, Config())
 
         call_kwargs = mock_instance.text.call_args.kwargs
@@ -408,7 +420,7 @@ class TestSearchDuckDuckGo:
             ],
             mocker,
         )
-        result = _make_result(index_title_compare="thematrix1999")
+        result = _make_result()
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
         assert out["imdb_id"] == "tt0133093"
@@ -433,7 +445,6 @@ class TestSearchDuckDuckGo:
             movie_title="Little Amelie or the Character of Rain",
             movie_title_year="2025",
             movie_title_and_year_search="Little Amelie or the Character of Rain 2025",
-            index_title_compare="littleamelieorthecharacterofrain2025",
         )
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
@@ -453,7 +464,6 @@ class TestSearchDuckDuckGo:
             movie_title="The Matrix Resurrections",
             movie_title_year="2021",
             movie_title_and_year_search="The Matrix Resurrections 2021",
-            index_title_compare="thematrixresurrections2021",
         )
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
@@ -469,7 +479,6 @@ class TestSearchDuckDuckGo:
             movie_title="1917",
             movie_title_year="2019",
             movie_title_and_year_search="1917 2019",
-            index_title_compare="19172019",
         )
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
@@ -491,7 +500,6 @@ class TestSearchDuckDuckGo:
             movie_title="Les Enquetes du Departement V LEffet Papillon",
             movie_title_year="2021",
             movie_title_and_year_search="Les Enquetes du Departement V LEffet Papillon 2021",
-            index_title_compare="lesenquetesdudepartement5leffetpapillon2021",
         )
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Passed"
@@ -758,6 +766,6 @@ class TestSearchDuckDuckGoEdgeCases:
         mock_ddgs.return_value = _MockDDGS(
             [{"title": "Something Completely Different 1999", "href": "https://www.imdb.com/title/tt0133093/"}], mocker
         )
-        result = _make_result(index_title_compare="thematrix1999")
+        result = _make_result()
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Failed"

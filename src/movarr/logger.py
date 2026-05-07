@@ -38,7 +38,9 @@ def create_logger(
 
     # File sink
     if log_path:
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        log_dir = os.path.dirname(log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         _logger.add(
             sink=log_path,
             level=log_level.upper(),
