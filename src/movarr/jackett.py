@@ -5,6 +5,7 @@ from __future__ import annotations
 import urllib.parse
 from typing import TYPE_CHECKING, Any, cast
 
+import requests
 import xmltodict
 from loguru import logger as _logger
 
@@ -46,17 +47,33 @@ class JackettClient:
     # ------------------------------------------------------------------
 
     def is_reachable(self) -> bool:
-        """Return True if the Jackett API responds to a basic indexer list request."""
+        """Return True if the Jackett API responds to a basic indexer list request.
+
+        Uses a single-attempt direct HTTP call with a short timeout so the
+        caller gets immediate feedback.  The retry logic in ``HttpClient`` is
+        intentionally bypassed here — retrying a connectivity probe would
+        cause silent multi-minute hangs when the host is unreachable.
+        """
         url = (
             f"http://{self._cfg.host}:{self._cfg.port}"
             f"/api/v2.0/indexers/all/results/torznab/api"
             f"?configured=true&apikey={self._cfg.api_key}&t=indexers&q="
         )
+        _logger.info("Checking Jackett connectivity at {}:{}...", self._cfg.host, self._cfg.port)
         try:
-            self._http.get(url, read_timeout=self._cfg.read_timeout)
+            resp = requests.get(
+                url,
+                timeout=(5.0, 10.0),  # connect / read — single attempt, no backoff
+            )
+            resp.raise_for_status()
             return True
         except Exception as exc:  # noqa: BLE001
-            _logger.warning("Jackett health check failed: {}.", exc)
+            _logger.warning(
+                "Jackett is not reachable at {}:{} — {}.",
+                self._cfg.host,
+                self._cfg.port,
+                exc,
+            )
             return False
 
     def search(
