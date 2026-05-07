@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.11.0"
+_CONFIG_VERSION = "2.12.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +130,23 @@ def _migrate_v210_to_v211(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.11.0 -> v2.12.0: fix stalled/metadata delete_data defaults.
+
+    The old default was ``False`` (leave partial files on disk when deleting a
+    stalled or metaDL torrent).  The correct behaviour is to remove the
+    incomplete data via qBittorrent when movarr deletes the torrent, so both
+    fields are updated to ``True``.
+
+    This migration explicitly writes ``True`` so that existing configs that
+    relied on the old ``False`` default are also corrected.
+    """
+    raw.setdefault("queue_management", {})["stalled_delete_torrent_data"] = True
+    raw.setdefault("queue_management", {})["metadata_delete_torrent_data"] = True
+    raw.setdefault("general", {})["config_version"] = "2.12.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -143,6 +160,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.8.0": _migrate_v28_to_v29,
     "2.9.0": _migrate_v29_to_v210,
     "2.10.0": _migrate_v210_to_v211,
+    "2.11.0": _migrate_v211_to_v212,
 }
 
 
@@ -378,8 +396,8 @@ class QueueManagementConfig(BaseModel):
     queue_management_enabled: bool = True
     metadata_monitor_enabled: bool = True
     stalled_monitor_enabled: bool = True
-    stalled_delete_torrent_data: bool = False
-    metadata_delete_torrent_data: bool = False
+    stalled_delete_torrent_data: bool = True
+    metadata_delete_torrent_data: bool = True
     stalled_delete_torrent_max_mins: int = 120
     metadata_delete_torrent_max_mins: int = 30
     connection_down_grace_mins: int = 30

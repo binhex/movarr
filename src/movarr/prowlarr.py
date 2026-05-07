@@ -6,6 +6,7 @@ import contextlib
 import urllib.parse
 from typing import TYPE_CHECKING
 
+import requests
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
@@ -43,13 +44,30 @@ class ProwlarrClient:
     # ------------------------------------------------------------------
 
     def is_reachable(self) -> bool:
-        """Return True if the Prowlarr API responds to the indexer list request."""
+        """Return True if the Prowlarr API responds to the indexer list request.
+
+        Uses a single-attempt direct HTTP call with a short timeout so the
+        caller gets immediate feedback.  The retry logic in ``HttpClient`` is
+        intentionally bypassed here — retrying a connectivity probe would
+        cause silent multi-minute hangs when the host is unreachable.
+        """
         url = f"http://{self._cfg.host}:{self._cfg.port}/api/v1/indexer"
+        _logger.info("Checking Prowlarr connectivity at {}:{}...", self._cfg.host, self._cfg.port)
         try:
-            self._http.get(url, headers=self._auth_headers(), read_timeout=self._cfg.read_timeout)
+            resp = requests.get(
+                url,
+                headers=self._auth_headers(),
+                timeout=(5.0, 10.0),  # connect / read — single attempt, no backoff
+            )
+            resp.raise_for_status()
             return True
         except Exception as exc:  # noqa: BLE001
-            _logger.warning("Prowlarr health check failed: {}.", exc)
+            _logger.warning(
+                "Prowlarr is not reachable at {}:{} — {}.",
+                self._cfg.host,
+                self._cfg.port,
+                exc,
+            )
             return False
 
     def search(
