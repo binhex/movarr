@@ -72,17 +72,44 @@ movarr --help
 
 ## Options
 
+All options are optional overrides. When an option is omitted, the value from `movarr.yml` is used.
+
+### General
+
 | Option | Description | Default |
 | ------ | ----------- | ------- |
 | `--config-path <path>` | Path to the YAML configuration file. | `configs/movarr.yml` |
-| `--db-path <path>` | Path to the SQLite database file. | `db/movarr.db` |
-| `--log-path <path>` | Path to the log file. | `logs/movarr.log` |
-| `--log-level <level>` | Logging level for console output. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. | `INFO` |
-| `--pid-path <path>` | Path to PID file (daemon mode only). | `<config-dir>/movarr.pid` |
-
+| `--log-path <path>` | Override the log file path from config. | *(from config)* |
+| `--log-level <level>` | Override the console log level. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. Useful for temporary debugging without editing the config file. | *(from config)* |
+| `--db-path <path>` | Override the database file path from config. | *(from config)* |
+| `--library-path-list <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
 | `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
+
+### qBittorrent
+
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `--qbt-host <host>` | Override qBittorrent WebUI host from config. | *(from config)* |
+| `--qbt-port <port>` | Override qBittorrent WebUI port from config. | *(from config)* |
+| `--qbt-username <user>` | Override qBittorrent username from config. | *(from config)* |
+| `--qbt-password <pass>` | Override qBittorrent password from config. | *(from config)* |
+
+### Index Proxy
+
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `--index-proxy <proxy>` | Override index proxy selection. Choices: `jackett`, `prowlarr`. | *(from config)* |
+| `--jackett-host <host>` | Override Jackett host from config. | *(from config)* |
+| `--jackett-port <port>` | Override Jackett port from config. | *(from config)* |
+| `--jackett-api-key <key>` | Override Jackett API key from config. | *(from config)* |
+| `--prowlarr-host <host>` | Override Prowlarr host from config. | *(from config)* |
+| `--prowlarr-port <port>` | Override Prowlarr port from config. | *(from config)* |
+| `--prowlarr-api-key <key>` | Override Prowlarr API key from config. | *(from config)* |
+
+> **Unraid users:** map container environment variables directly to these flags so a working
+> deployment requires no manual config file editing.
 
 ## Configuration
 
@@ -95,11 +122,12 @@ automatically on first run. The file is divided into the sections below.
 | --- | ----------- | ------- |
 | `config_version` | Schema version — managed automatically; do not edit. | *(current)* |
 | `daemon_mode` | `foreground` or `background`. Overridden by `--daemon` CLI flag. | `foreground` |
-| `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). | `info` |
-| `log_level_file` | File logging level. | `debug` |
-| `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. | `[]` |
-| `db_path` | Path to the SQLite history database. | `db/movarr.db` |
-
+| `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). Overridden by `--log-level`. | `info` |
+| `log_level_file` | File logging level. | `info` |
+| `log_path` | Path to the log file. Empty string disables file logging. Overridden by `--log-path`. | `""` |
+| `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path-list`. | `[]` |
+| `db_path` | Path to the SQLite history database. Overridden by `--db-path`. | `db/movarr.db` |
+| `pid_path` | Path to the PID file written in daemon mode. Empty string disables PID file creation. | `""` |
 
 ### `schedule`
 
