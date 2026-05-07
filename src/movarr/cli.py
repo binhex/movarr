@@ -1,15 +1,30 @@
 """Command-line interface for movarr."""
 
+from __future__ import annotations
+
 from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING
 
 import click
 
 from movarr.logger import create_logger
 
+if TYPE_CHECKING:
+    from movarr.config import Config
+
 try:
     _VERSION = version("movarr")
 except PackageNotFoundError:
     _VERSION = "unknown"
+
+
+def _apply_cli_overrides(config: "Config", **overrides: object) -> None:
+    """Apply non-None CLI override values onto *config* in-place.
+
+    Any kwarg whose value is ``None`` is skipped (user did not supply it).
+    """
+    if overrides.get("db_path") is not None:
+        config.general.db_path = str(overrides["db_path"])
 
 
 @click.command()
@@ -38,6 +53,14 @@ except PackageNotFoundError:
     help="Override the log level from config (useful for debugging).",
 )
 @click.option(
+    "--db-path",
+    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    default=None,
+    show_default=False,
+    metavar="<path>",
+    help="Override the database file path from config.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -54,6 +77,7 @@ def cli(
     config_path: str,
     log_path: str | None,
     log_level: str | None,
+    db_path: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -74,6 +98,8 @@ def cli(
     # --daemon flag overrides general.daemon_mode in config.
     if daemon:
         config.general.daemon_mode = "background"
+
+    _apply_cli_overrides(config, db_path=db_path)
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")

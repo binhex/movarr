@@ -80,9 +80,9 @@ class TestCliHelp:
         assert "--test" in result.output
 
     def test_help_does_not_mention_removed_options(self) -> None:
-        """--db-path and --pid-path have been removed; --log-path and --log-level are kept."""
+        """--pid-path has been removed; --log-path, --log-level, and --db-path are kept."""
         result = CliRunner().invoke(cli, ["--help"])
-        for removed in ("--db-path", "--pid-path"):
+        for removed in ("--pid-path",):
             assert removed not in result.output, f"removed option {removed!r} still in help"
 
     def test_help_mentions_log_path(self) -> None:
@@ -324,3 +324,51 @@ class TestLogFormat:
         record_without_tracker = {"extra": {}, "message": "hello"}
         output_no_prefix = log_format_fn(record_without_tracker)
         assert "[" not in output_no_prefix.split("|")[-1].split("{")[0]
+
+
+class TestCliOverrides:
+    """CLI options override the corresponding config values when supplied."""
+
+    def _invoke(
+        self,
+        mocker: "MockerFixture",
+        args: list[str],
+        log_level_console: str = "info",
+        log_path: str = "",
+        pid_path: str = "",
+        daemon_mode: str = "foreground",
+    ) -> "MagicMock":
+        """Invoke CLI, return the config mock passed to scheduler.run()."""
+        mocker.patch("movarr.cli.create_logger")
+        cfg = MagicMock()
+        cfg.general.log_level_console = log_level_console
+        cfg.general.log_path = log_path
+        cfg.general.pid_path = pid_path
+        cfg.general.daemon_mode = daemon_mode
+        cfg.general.library_path_list = []
+        cfg.general.db_path = "db/movarr.db"
+        cfg.torrent_client.qbittorrent.host = "localhost"
+        cfg.torrent_client.qbittorrent.port = 8080
+        cfg.torrent_client.qbittorrent.username = "admin"
+        cfg.torrent_client.qbittorrent.password = "adminadmin"
+        cfg.index_proxy.selected = "jackett"
+        cfg.index_proxy.jackett.host = "localhost"
+        cfg.index_proxy.jackett.port = 9117
+        cfg.index_proxy.jackett.api_key = ""
+        cfg.index_proxy.prowlarr.host = "localhost"
+        cfg.index_proxy.prowlarr.port = 9696
+        cfg.index_proxy.prowlarr.api_key = ""
+        mocker.patch("movarr.config.load_config", return_value=cfg)
+        mock_run = mocker.patch("movarr.scheduler.run")
+        CliRunner().invoke(cli, args)
+        if mock_run.called:
+            return mock_run.call_args[0][0]
+        return cfg
+
+    def test_db_path_overrides_config(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--db-path", "/data/movarr.db", "--test"])
+        assert cfg.general.db_path == "/data/movarr.db"
+
+    def test_db_path_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
+        cfg = self._invoke(mocker, ["--test"])
+        assert cfg.general.db_path == "db/movarr.db"
