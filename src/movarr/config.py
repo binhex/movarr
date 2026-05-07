@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.10.0"
+_CONFIG_VERSION = "2.11.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +118,18 @@ def _migrate_v29_to_v210(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v210_to_v211(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.10.0 -> v2.11.0: add general.log_path and general.pid_path.
+
+    These settings previously only existed as CLI flags.  They are now part of
+    the YAML config so the daemon can be configured entirely from movarr.yml.
+    """
+    raw.setdefault("general", {}).setdefault("log_path", "")
+    raw.setdefault("general", {}).setdefault("pid_path", "")
+    raw["general"]["config_version"] = "2.11.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -130,6 +142,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.7.0": _migrate_v27_to_v28,
     "2.8.0": _migrate_v28_to_v29,
     "2.9.0": _migrate_v29_to_v210,
+    "2.10.0": _migrate_v210_to_v211,
 }
 
 
@@ -143,8 +156,10 @@ class GeneralConfig(BaseModel):
     daemon_mode: str = "foreground"
     log_level_console: str = "info"
     log_level_file: str = "info"
+    log_path: str = ""
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db/movarr.db"
+    pid_path: str = ""
 
     @field_validator("daemon_mode")
     @classmethod
@@ -333,9 +348,12 @@ class IndexSiteConfig(BaseModel):
     ignore_list: list[str] = Field(default_factory=list)
     search: list[SearchCriteriaConfig] = Field(
         default_factory=lambda: [
-            SearchCriteriaConfig(criteria="1080p", minimum_size_mb=3000, maximum_size_mb=20000, minimum_bitrate_mb=50),
             SearchCriteriaConfig(
-                criteria="2160p", minimum_size_mb=7000, maximum_size_mb=170000, minimum_bitrate_mb=115
+                criteria="1080p",
+                category="2000,5000",
+                minimum_size_mb=3000,
+                maximum_size_mb=20000,
+                minimum_bitrate_mb=50,
             ),
         ]
     )

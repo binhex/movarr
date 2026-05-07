@@ -494,16 +494,57 @@ def _convert_countries(raw: str | None) -> list[str] | None:
 
 
 def _convert_languages(raw: str | None) -> list[str] | None:
+    """Convert a comma-separated string of language names or codes to ISO 639-1 alpha-2 codes.
+
+    Tries multiple lookup strategies so that both full names ("English") and
+    ISO codes already present in the data ("en", "eng") are handled correctly.
+    The name-only lookup must NOT be used alone because pycountry will match
+    short strings like "en" against obscure language names (e.g. Endo, alpha_3
+    ="enc") instead of treating them as codes.
+    """
     if not raw:
         return None
     result = []
     for raw_name in raw.split(","):
         name = raw_name.strip()
+        if not name:
+            continue
+
+        # 1. Try as an ISO 639-1 alpha-2 code (e.g. "en", "de") first.
+        #    This must come before the name lookup to avoid false matches
+        #    where pycountry finds an obscure language by its short name.
+        lang = pycountry.languages.get(alpha_2=name.lower())
+        if lang:
+            result.append(lang.alpha_2.lower())
+            continue
+
+        # 2. Try as an ISO 639-2/3 alpha-3 code (e.g. "eng", "deu").
+        lang = pycountry.languages.get(alpha_3=name.lower())
+        if lang:
+            code = getattr(lang, "alpha_2", None) or lang.alpha_3
+            result.append(code.lower())
+            continue
+
+        # 3. Try as an ISO 639-2/B bibliographic alpha-3 code (e.g. "ger" for German).
+        lang = pycountry.languages.get(bibliographic=name.lower())
+        if lang:
+            code = getattr(lang, "alpha_2", None) or lang.alpha_3
+            result.append(code.lower())
+            continue
+
+        # 3. Try by official name (e.g. "English", "German").
         lang = pycountry.languages.get(name=name)
         if lang:
-            # Prefer alpha_2 (ISO 639-1); fall back to alpha_3 (ISO 639-2/3)
-            # for languages that have no ISO 639-1 code (e.g. Latin, Sanskrit).
             code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
             if code:
                 result.append(code.lower())
+            continue
+
+        # 4. Try case-insensitive name match (OMDb/IMDbPie sometimes lowercases).
+        lang = pycountry.languages.get(name=name.title())
+        if lang:
+            code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
+            if code:
+                result.append(code.lower())
+
     return result or None

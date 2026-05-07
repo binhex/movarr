@@ -129,31 +129,24 @@ class TestRun:
         mock_run_daemon.assert_called_once_with(config)
         mock_run_once.assert_not_called()
 
-    def test_writes_pid_when_pid_path_provided(self, mocker: MockerFixture, tmp_path: Path) -> None:
+    def test_writes_pid_when_pid_path_set_in_config(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """PID file is written when general.pid_path is non-empty in config."""
         mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
         mocker.patch("movarr.scheduler.run_once")
         pid_path = str(tmp_path / "run" / "movarr.pid")
-        config = Config()
-
-        run(config, pid_path=pid_path)
-
-        mock_write_pid.assert_called_once_with(pid_path)
-
-    def test_no_pid_written_when_pid_path_is_none(self, mocker: MockerFixture) -> None:
-        mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
-        mocker.patch("movarr.scheduler.run_once")
-        config = Config()
+        config = Config(general=GeneralConfig(pid_path=pid_path))
 
         run(config)
 
-        mock_write_pid.assert_not_called()
+        mock_write_pid.assert_called_once_with(pid_path)
 
-    def test_no_pid_written_when_pid_path_falsy(self, mocker: MockerFixture) -> None:
+    def test_no_pid_written_when_pid_path_empty_in_config(self, mocker: MockerFixture) -> None:
+        """No PID file is written when general.pid_path is empty string."""
         mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
         mocker.patch("movarr.scheduler.run_once")
-        config = Config()
+        config = Config()  # pid_path="" by default
 
-        run(config, pid_path=None)
+        run(config)
 
         mock_write_pid.assert_not_called()
 
@@ -161,9 +154,9 @@ class TestRun:
         """PID file is deleted in the finally block after run_once completes."""
         mocker.patch("movarr.scheduler.run_once")
         pid_path = str(tmp_path / "run" / "movarr.pid")
-        config = Config()
+        config = Config(general=GeneralConfig(pid_path=pid_path))
 
-        run(config, pid_path=pid_path)
+        run(config)
 
         assert not Path(pid_path).exists()
 
@@ -171,10 +164,10 @@ class TestRun:
         """PID file is deleted in the finally block even when an exception is raised."""
         mocker.patch("movarr.scheduler.run_once", side_effect=RuntimeError("boom"))
         pid_path = str(tmp_path / "run" / "movarr.pid")
-        config = Config()
+        config = Config(general=GeneralConfig(pid_path=pid_path))
 
         with pytest.raises(RuntimeError):
-            run(config, pid_path=pid_path)
+            run(config)
 
         assert not Path(pid_path).exists()
 
