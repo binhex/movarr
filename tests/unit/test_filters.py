@@ -385,7 +385,12 @@ class TestFilterByIndexLibraryDedup:
         out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
         assert out["result"] != "Passed"
 
-    def test_fails_when_no_resolution_in_index_result(self) -> None:
+    def test_passes_when_no_resolution_in_index_result(self) -> None:
+        """No resolution token skips the library check (passes) rather than failing.
+
+        A torrent without a resolution token should not be permanently rejected
+        by the library check; other filters should still evaluate it.
+        """
         cfg = Config()
         cfg.general.library_path_list = ["/library"]
         result = _index_result(index_title_resolution="")
@@ -393,7 +398,7 @@ class TestFilterByIndexLibraryDedup:
             ("/library", [], ["The Dark Knight 2008 1080p BluRay.mkv"])
         ]
         out = filter_by_index(result, _default_site_dict(), cfg, library_walk=library_walk)
-        assert out["result"] != "Passed"
+        assert out["result"] == "Passed"
 
 
 # filter_by_imdb: genre gate
@@ -451,11 +456,16 @@ class TestFilterByImdbLanguage:
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_no_imdb_language_data_passes(self) -> None:
+    def test_no_imdb_language_data_fails_closed(self) -> None:
+        """When allow_language_list is configured but metadata is missing, fail closed.
+
+        Previously this passed ("assuming OK"), which silently defeated the
+        allow-list on bad data. The correct behaviour is to fail closed.
+        """
         cfg = _make_config(allow_language_list=["english"])
         result = _imdb_result(imdb_language_list=None)
         out = filter_by_imdb(result, cfg)
-        assert out["result"] == "Passed"
+        assert out["result"] != "Passed"
 
 
 # filter_by_imdb: country gate
@@ -482,11 +492,16 @@ class TestFilterByImdbCountry:
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
 
-    def test_no_imdb_country_data_passes(self) -> None:
+    def test_no_imdb_country_data_fails_closed(self) -> None:
+        """When allow_country_list is configured but metadata is missing, fail closed.
+
+        Previously this passed ("assuming OK"), which silently defeated the
+        allow-list on bad data. The correct behaviour is to fail closed.
+        """
         cfg = _make_config(allow_country_list=["us"])
         result = _imdb_result(imdb_country_list=None)
         out = filter_by_imdb(result, cfg)
-        assert out["result"] == "Passed"
+        assert out["result"] != "Passed"
 
 
 # filter_by_imdb: certification (not filtered; stored only)
@@ -646,6 +661,7 @@ class TestFilterByImdbOverrides:
             override_movie_title_list=["The Dark Knight"],
         )
         result = _imdb_result(
+            movie_title_compare="thedarkknight",
             movie_title_and_year_compare="thedarkknight2008",
             imdb_rating="3.0",
             imdb_votes="100",
@@ -742,9 +758,23 @@ class TestFilterByIndexRejectKeywordNoMatch:
 class TestFilterByIndexRejectMovieTitles:
     """Reject movie title list rejects matched titles and passes others."""
 
-    def test_reject_movie_title_match_fails(self) -> None:
+    def test_reject_movie_title_exact_title_match_fails(self) -> None:
+        """An entry matching the exact normalised title (no year) is rejected."""
         cfg = _make_config(reject_movie_title_list=["thedarkknight"])
-        result = _index_result(movie_title_and_year_compare="thedarkknight2008")
+        result = _index_result(
+            movie_title_compare="thedarkknight",
+            movie_title_and_year_compare="thedarkknight2008",
+        )
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] != "Passed"
+
+    def test_reject_movie_title_with_year_match_fails(self) -> None:
+        """An entry matching the normalised title+year string is rejected."""
+        cfg = _make_config(reject_movie_title_list=["The Dark Knight 2008"])
+        result = _index_result(
+            movie_title_compare="thedarkknight",
+            movie_title_and_year_compare="thedarkknight2008",
+        )
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] != "Passed"
 
@@ -794,16 +824,17 @@ class TestFilterByImdbYearEdgeCases:
         assert out["result"] == "Passed"
 
     def test_fails_when_minimum_year_set_and_year_absent(self) -> None:
+        """When minimum_year is set but imdb_year is missing, the check must fail."""
         cfg = _make_config(minimum_year=2000)
         result = _imdb_result()
-        result.pop("movie_title_year", None)
+        result.pop("imdb_year", None)
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 
     def test_fails_when_year_is_invalid_string(self) -> None:
         """Non-numeric year string cannot be parsed and should fail the gate."""
         cfg = _make_config(minimum_year=2000)
-        result = _imdb_result(movie_title_year="abc")
+        result = _imdb_result(imdb_year="abc")
         out = filter_by_imdb(result, cfg)
         assert out["result"] != "Passed"
 

@@ -162,8 +162,11 @@ def _build_imdbpie_payload(client: Any, imdb_id: str) -> dict[str, Any] | None:
         "trailer_url": _extract_trailer(aux_data),
         "genres": _extract_list_or_none(genres_data, "genres"),
         "cert": _extract_cert_imdbpie(aux_data),
-        "languages": _extract_list_or_none(aux_data, "spokenLanguages"),
-        "countries": _extract_list_or_none(aux_data, "origins"),
+        # Convert spoken language names to ISO 639-1 codes so they match the
+        # allow-list format documented in the README (e.g. ["en"], not ["English"]).
+        # _convert_languages and _convert_countries accept comma-separated strings.
+        "languages": _convert_languages(", ".join(_extract_list_or_none(aux_data, "spokenLanguages") or [])) or None,
+        "countries": _convert_countries(", ".join(_extract_list_or_none(aux_data, "origins") or [])) or None,
         "directors": _credits_names(credits_data, "director"),
         "writers": _credits_names(credits_data, "writer"),
         "cast": _credits_names(credits_data, "cast"),
@@ -258,6 +261,18 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         data = omdb_client.imdbid(imdb_id, timeout=30)
     except Exception as exc:  # noqa: BLE001
         msg = f"OMDb fetch failed for '{imdb_id}': {exc}"
+        _logger.warning(msg)
+        details.append(f"Failed: {msg}")
+        result["result"] = "Failed"
+        result["result_details"] = details
+        return result
+
+    # The omdb library converts OMDb error responses (e.g., invalid API key,
+    # not found) to an empty dict rather than raising.  Detect that here so
+    # callers see a clean failure instead of a misleading "Passed" with all
+    # metadata fields set to None.
+    if not data or not (data.get("title") or data.get("imdb_id")):
+        msg = f"OMDb returned no usable data for '{imdb_id}' (empty or error response)."
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
         result["result"] = "Failed"
@@ -367,7 +382,11 @@ def _credits_characters(credits: dict) -> list[str] | None:
 def _extract_list_or_none(data: dict, key: str) -> list | None:
     try:
         val = data[key]
-        return val if val else None
+        # Guard against non-list values (e.g. strings, dicts) which would
+        # propagate a wrong type into fields that expect list[str].
+        if not isinstance(val, list) or not val:
+            return None
+        return val
     except (KeyError, TypeError):
         return None
 
@@ -392,6 +411,9 @@ def _extract_cert_imdbpie(aux: dict) -> str | None:
     """Try multiple paths in the auxiliary data for a UK certificate."""
     try:
         val = aux["certificate"]["certificate"]
+        # Guard against JSON null (Python None) — str(None) == "None" is wrong.
+        if val is None:
+            return None
         return str(val)
     except (KeyError, TypeError):
         pass
@@ -417,15 +439,57 @@ def _extract_trailer(aux: dict) -> str | None:
     return None
 
 
+# Common OMDb country name aliases that pycountry's official `name` field
+# does not recognise.  Keys are OMDb values; values are ISO 3166-1 alpha-2 codes.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "USA": "us",
+    "UK": "gb",
+    "Russia": "ru",
+    "South Korea": "kr",
+    "Iran": "ir",
+    "Syria": "sy",
+    "Taiwan": "tw",
+    "Bolivia": "bo",
+    "Tanzania": "tz",
+    "Venezuela": "ve",
+    "Vietnam": "vn",
+    "Moldova": "md",
+    "Macedonia": "mk",
+    "Palestinian Territory": "ps",
+    "Kosovo": "xk",
+}
+
+
 def _convert_countries(raw: str | None) -> list[str] | None:
     if not raw:
         return None
     result = []
     for raw_name in raw.split(","):
         name = raw_name.strip()
+        # 1. Try pycountry's official name (e.g. "United States", "United Kingdom").
         country = pycountry.countries.get(name=name)
         if country:
             result.append(country.alpha_2.lower())
+            continue
+        # 2. Try alpha_2 directly (e.g. "US", "GB").
+        country = pycountry.countries.get(alpha_2=name.upper())
+        if country:
+            result.append(country.alpha_2.lower())
+            continue
+        # 3. Try alpha_3 (e.g. "USA").
+        country = pycountry.countries.get(alpha_3=name.upper())
+        if country:
+            result.append(country.alpha_2.lower())
+            continue
+        # 4. Try common_name (e.g. "Iran", "South Korea").
+        country = pycountry.countries.get(common_name=name)
+        if country:
+            result.append(country.alpha_2.lower())
+            continue
+        # 5. Fall back to manual alias table for values that pycountry doesn't cover.
+        alias = _COUNTRY_ALIASES.get(name)
+        if alias:
+            result.append(alias)
     return result or None
 
 
@@ -437,6 +501,9 @@ def _convert_languages(raw: str | None) -> list[str] | None:
         name = raw_name.strip()
         lang = pycountry.languages.get(name=name)
         if lang:
-            with contextlib.suppress(AttributeError):
-                result.append(lang.alpha_2.lower())
+            # Prefer alpha_2 (ISO 639-1); fall back to alpha_3 (ISO 639-2/3)
+            # for languages that have no ISO 639-1 code (e.g. Latin, Sanskrit).
+            code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
+            if code:
+                result.append(code.lower())
     return result or None

@@ -48,7 +48,7 @@ class ProwlarrClient:
         try:
             self._http.get(url, headers=self._auth_headers(), read_timeout=self._cfg.read_timeout)
             return True
-        except (HttpError, Exception) as exc:
+        except Exception as exc:  # noqa: BLE001
             _logger.warning("Prowlarr health check failed: {}.", exc)
             return False
 

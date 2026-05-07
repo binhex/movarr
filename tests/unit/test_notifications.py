@@ -135,29 +135,33 @@ class TestBuildBody:
 class TestFormatResultDetails:
     """Tests for the _format_result_details pure helper."""
 
-    def test_three_part_entry_renders_nested_list(self) -> None:
-        """A 'main: sub: detail' entry produces a nested <ul>."""
-        html = _format_result_details(["Check: Rating: 8.8"])
-        assert "<ul>" in html
-        assert "Check" in html
-        assert "Rating" in html
-        assert "8.8" in html
-        assert "<ul><li>8.8</li></ul>" in html
+    def test_three_part_entry_renders_flat_item(self) -> None:
+        """All result_details entries render as plain <li> items.
+
+        The old 3-part nested-list branch was an unreachable code path
+        (result_details entries always have exactly one ": " separator).
+        It has been removed; all entries now render as flat <li> items.
+        """
+        result = _format_result_details(["Check: Rating: 8.8"])
+        assert "Check: Rating: 8.8" in result
+        assert "<li>" in result
+        # Confirm no nested <ul> is generated for this input.
+        assert result.count("<ul>") == 1  # only the outer <ul>
 
     def test_non_three_part_entry_renders_flat_item(self) -> None:
         """An entry without two colons renders as a plain <li>."""
-        html = _format_result_details(["Passed simple check"])
-        assert "<li>Passed simple check</li>" in html
+        result = _format_result_details(["Passed simple check"])
+        assert "<li>Passed simple check</li>" in result
 
     def test_empty_list_produces_empty_ul(self) -> None:
         """Empty input produces an empty <ul> wrapper."""
         assert _format_result_details([]) == "<ul></ul>"
 
     def test_mixed_entries_both_rendered(self) -> None:
-        """A mix of 3-part and simple entries are all rendered."""
-        html = _format_result_details(["A: B: C", "simple"])
-        assert "A" in html
-        assert "simple" in html
+        """Multiple entries are all rendered as separate <li> elements."""
+        result = _format_result_details(["A: B: C", "simple"])
+        assert "A: B: C" in result
+        assert "simple" in result
 
 
 # send_queued_notification
@@ -248,12 +252,14 @@ class TestSendIndexProxyAlert:
 
     def _make_config(self, urls: list[str]) -> Config:
         from movarr.config import NotificationConfig
+
         config = Config()
         return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
 
     def test_returns_false_when_no_urls_configured(self) -> None:
         """Returns False immediately when apprise_urls is empty."""
         from movarr.notifications import send_index_proxy_alert
+
         config = self._make_config([])
         result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
         assert result is False
@@ -263,6 +269,7 @@ class TestSendIndexProxyAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_index_proxy_alert
+
         config = self._make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
@@ -276,6 +283,7 @@ class TestSendIndexProxyAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_index_proxy_alert
+
         config = self._make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
@@ -290,6 +298,7 @@ class TestSendIndexProxyAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_index_proxy_alert
+
         config = self._make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = False
@@ -302,6 +311,7 @@ class TestSendIndexProxyAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_index_proxy_alert
+
         config = self._make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.side_effect = RuntimeError("boom")
@@ -315,12 +325,14 @@ class TestSendServiceAlert:
 
     def _make_config(self, urls: list[str]) -> Config:
         from movarr.config import NotificationConfig
+
         config = Config()
         return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
 
     def test_returns_false_when_no_urls_configured(self) -> None:
         """Returns False immediately when apprise_urls is empty."""
         from movarr.notifications import send_service_alert
+
         config = self._make_config([])
         assert send_service_alert(service_name="qBittorrent", hours_elapsed=3.0, config=config) is False
 
@@ -329,6 +341,7 @@ class TestSendServiceAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_service_alert
+
         config = self._make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
@@ -341,6 +354,7 @@ class TestSendServiceAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_service_alert
+
         config = self._make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
@@ -355,6 +369,7 @@ class TestSendServiceAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_service_alert
+
         config = self._make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = False
@@ -366,6 +381,7 @@ class TestSendServiceAlert:
         from unittest.mock import MagicMock, patch
 
         from movarr.notifications import send_service_alert
+
         config = self._make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.side_effect = RuntimeError("boom")
@@ -381,10 +397,9 @@ class TestSendIndexProxyAlertDelegates:
         from unittest.mock import patch
 
         from movarr.notifications import send_index_proxy_alert
+
         config = Config()
         with patch("movarr.notifications.send_service_alert", return_value=True) as mock_generic:
             result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
-        mock_generic.assert_called_once_with(
-            service_name="Prowlarr", hours_elapsed=3.0, config=config
-        )
+        mock_generic.assert_called_once_with(service_name="Prowlarr", hours_elapsed=3.0, config=config)
         assert result is True

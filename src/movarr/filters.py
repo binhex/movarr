@@ -194,14 +194,16 @@ def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> Resu
     """Compare raw index size against a threshold."""
     raw_size = result.get("index_size")
     if not raw_size:
-        return _fail(result, "No index size available; assuming below threshold.")
+        direction = "below minimum" if bound == "minimum" else "unknown (cannot verify maximum)"
+        return _fail(result, f"No index size available; {direction} threshold assumed.")
 
     try:
         size_mb = int(raw_size) // 1_000_000
     except (ValueError, TypeError):
         return _fail(result, f"Could not parse index size '{raw_size}'.")
     ok = (size_mb >= threshold_mb) if bound == "minimum" else (size_mb <= threshold_mb)
-    msg = f"Size {size_mb} MB {'≥' if bound == 'minimum' else '≤'} {threshold_mb} MB."
+    op = ("\u2265" if bound == "minimum" else "\u2264") if ok else ("<" if bound == "minimum" else ">")
+    msg = f"Size {size_mb} MB {op} {threshold_mb} MB."
     return _pass(result, msg) if ok else _fail(result, msg)
 
 
@@ -231,10 +233,15 @@ def _check_reject_movie_titles(result: ResultDict, config: Config) -> ResultDict
     if not reject_list:
         return _pass(result, "No reject movie titles defined.")
 
+    title_compare = result.get("movie_title_compare") or ""
     title_and_year_compare = result.get("movie_title_and_year_compare") or ""
     for reject_title in reject_list:
         norm = normalise_for_compare(reject_title)
-        if norm and norm in title_and_year_compare:
+        if not norm:
+            continue
+        # Require exact match against title or title+year to prevent false
+        # substring rejections (e.g. "Ring" matching "Missing Ring 2022").
+        if norm in (title_compare, title_and_year_compare):
             return _fail(result, f"Index title matches reject movie title '{reject_title}'.")
     return _pass(result, "Index title passes reject movie title check.")
 
@@ -250,7 +257,9 @@ def _check_library(
     index_title = result.get("index_title") or ""
     index_resolution = result.get("index_title_resolution") or ""
     if not index_resolution:
-        return _fail(result, f"Cannot determine resolution for '{index_title}'; skipping.")
+        # No resolution token in the index title - skip the library check rather
+        # than rejecting the torrent, so it can be evaluated by other filters.
+        return _pass(result, f"Cannot determine resolution for '{index_title}'; skipping library check.")
 
     matches = _library_files_for_title(result, library_walk)
     if not matches:
@@ -322,9 +331,12 @@ def _check_year(result: ResultDict, config: Config) -> ResultDict:
     if not min_year:
         return _pass(result, "No minimum year defined.")
 
-    year = result.get("movie_title_year")
+    # Use the canonical IMDb year (available after fetch_metadata) rather than
+    # the year parsed from the torrent release name to avoid mislabelled releases
+    # bypassing or incorrectly failing the year gate.
+    year = result.get("imdb_year")
     if not year:
-        return _fail(result, "No movie year available for year check.")
+        return _fail(result, "No IMDb year available for year check.")
 
     try:
         year_int = int(year)
@@ -362,7 +374,9 @@ def _check_language_country(result: ResultDict, config: Config, kind: str) -> Re
 
     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
-        return _pass(result, f"No IMDb {kind} found; assuming OK.")
+        # Fail closed: allow-list is configured but metadata is missing or
+        # unmappable. Passing silently would defeat the allow-list on bad data.
+        return _fail(result, f"No IMDb {kind} data available; failing closed (allow_{kind}_list is configured).")
 
     imdb_lower = [x.lower() for x in imdb_list]
     allow_lower = [x.lower() for x in allow_list]
@@ -393,15 +407,20 @@ def _override_person(result: ResultDict, config: Config, person_type: str) -> bo
 
 
 def _override_movie_title(result: ResultDict, config: Config) -> bool:
-    """Return True (and update result) if any override movie title matches."""
+    """Return True (and update result) if any override movie title matches.
+
+    Uses exact set-membership (title or title+year) to prevent false positives
+    from partial-word or numeric substring matches.
+    """
     override_list = config.filters.override_movie_title_list or []
     if not override_list:
         return False
 
-    compare = result.get("movie_title_and_year_compare") or ""
+    compare_title = result.get("movie_title_compare") or ""
+    compare_title_year = result.get("movie_title_and_year_compare") or ""
     for title in override_list:
         norm = normalise_for_compare(title)
-        if norm and norm in compare:
+        if norm and norm in (compare_title, compare_title_year):
             _pass(result, f"Override movie title '{title}' matched.")
             return True
 
@@ -416,15 +435,17 @@ def _override_genre(result: ResultDict, config: Config) -> dict:
         genre_cfg = config.filters.override_genre.get(genre.lower())
         if genre_cfg is None:
             continue
-        if genre_cfg.minimum_rating:
+        # Use is not None so that an explicit 0 value (meaning "no minimum")
+        # is stored in the override dict rather than being treated as falsy.
+        if genre_cfg.minimum_rating is not None:
             override["minimum_rating"] = genre_cfg.minimum_rating
-        if genre_cfg.minimum_votes:
+        if genre_cfg.minimum_votes is not None:
             override["minimum_votes"] = genre_cfg.minimum_votes
     return override
 
 
 def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
-    min_rating = override.get("minimum_rating") or config.filters.minimum_rating
+    min_rating = override.get("minimum_rating", config.filters.minimum_rating)
     if not min_rating:
         _pass(result, "No minimum rating defined.")
         return True
@@ -454,7 +475,7 @@ def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
 
 
 def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
-    min_votes = override.get("minimum_votes") or config.filters.minimum_votes
+    min_votes = override.get("minimum_votes", config.filters.minimum_votes)
     if not min_votes:
         _pass(result, "No minimum votes defined.")
         return True
@@ -523,7 +544,7 @@ def _match_library_file(
     # substring false positives (e.g. "rings" matching "thelordoftherings").
     if norm != title_compare:
         return None
-    if lib_year not in year:
+    if lib_year != year:
         return None
     return fname
 

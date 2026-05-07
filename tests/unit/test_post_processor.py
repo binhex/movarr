@@ -161,8 +161,7 @@ class TestLargestFile:
         assert _largest_file(torrent) == ("", "")
 
     def test_missing_file_list_returns_empty_strings(self) -> None:
-        torrent: dict[str, Any] = {}
-        assert _largest_file(torrent) == ("", "")
+        assert _largest_file({}) == ("", "")
 
     def test_single_file_returns_correct_name_and_dir(self) -> None:
         torrent: dict[str, Any] = {
@@ -233,36 +232,30 @@ class TestCanonicalFilename:
     """Tests for _canonical_filename — pure function."""
 
     def test_non_video_extension_returned_unchanged(self) -> None:
-        torrent: dict[str, Any] = {}
-        result = _canonical_filename(torrent, "subs.srt", "movie")
+        result = _canonical_filename("subs.srt", "movie")
         assert result == "subs.srt"
 
     def test_no_first_level_dir_returns_filename(self) -> None:
-        torrent: dict[str, Any] = {}
-        result = _canonical_filename(torrent, "movie.mkv", "")
+        result = _canonical_filename("movie.mkv", "")
         assert result == "movie.mkv"
 
     def test_parent_longer_than_filename_renames_file(self) -> None:
-        torrent: dict[str, Any] = {}
         # "The Dark Knight 2008 1080p BluRay" (32 chars) > "movie.mkv" (9 chars)
-        result = _canonical_filename(torrent, "movie.mkv", "The Dark Knight 2008 1080p BluRay")
+        result = _canonical_filename("movie.mkv", "The Dark Knight 2008 1080p BluRay")
         assert result.endswith(".mkv")
         assert result != "movie.mkv"
 
     def test_parent_shorter_than_filename_keeps_original(self) -> None:
-        torrent: dict[str, Any] = {}
         long_fname = "The.Dark.Knight.2008.1080p.BluRay.mkv"
-        result = _canonical_filename(torrent, long_fname, "movie")
+        result = _canonical_filename(long_fname, "movie")
         assert result == long_fname
 
     def test_mp4_extension_preserved(self) -> None:
-        torrent: dict[str, Any] = {}
-        result = _canonical_filename(torrent, "movie.mp4", "A Very Long Directory Name Indeed")
+        result = _canonical_filename("movie.mp4", "A Very Long Directory Name Indeed")
         assert result.endswith(".mp4")
 
     def test_avi_extension_preserved(self) -> None:
-        torrent: dict[str, Any] = {}
-        result = _canonical_filename(torrent, "movie.avi", "A Very Long Directory Name Here")
+        result = _canonical_filename("movie.avi", "A Very Long Directory Name Here")
         assert result.endswith(".avi")
 
 
@@ -664,9 +657,8 @@ class TestCanonicalFilenameEdgeCases:
 
     def test_whitespace_only_first_level_dir_returns_filename(self) -> None:
         """When _first_level_dir returns a string that sanitise() strips to None."""
-        torrent: dict[str, Any] = {}
         # "   " is a valid PurePosixPath component but sanitise("   ") → None
-        result = _canonical_filename(torrent, "movie.mkv", "   ")
+        result = _canonical_filename("movie.mkv", "   ")
         assert result == "movie.mkv"
 
 
@@ -948,4 +940,65 @@ class TestProcessOneMultiFile:
 
         _process_one(torrent, self._config(), qbt, db)
 
+        db.mark_completed.assert_called_once_with("tag1")
+
+
+class TestProcessOneCopyCompletedFalse:
+    """Tests for _process_one when copy_completed=False."""
+
+    def _config(self, remove_completed: bool = False, copy_completed: bool = False) -> Config:
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        cfg.post_process.copy_completed = copy_completed
+        cfg.post_process.remove_completed = remove_completed
+        return cfg
+
+    def _torrent(self, tag: str = "tag1", torrent_hash: str = "abc123") -> dict[str, Any]:
+        return {
+            "torrent_tag": tag,
+            "torrent_hash": torrent_hash,
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+
+    def _db_record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        return rec
+
+    def test_copy_completed_false_marks_completed_skips_copy(self, mocker: MockerFixture, tmp_path: Any) -> None:
+        """When copy_completed=False, DB is marked completed and no file copy occurs."""
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        mock_copy = mocker.patch("movarr.post_processor.copy_with_verify")
+        qbt = mocker.MagicMock()
+
+        _process_one(self._torrent(), self._config(copy_completed=False), qbt, db)
+
+        db.mark_completed.assert_called_once_with("tag1")
+        mock_copy.assert_not_called()
+
+    def test_copy_completed_false_remove_completed_deletes_torrent_not_data(self, mocker: MockerFixture) -> None:
+        """When copy_completed=False and remove_completed=True, torrent is removed
+        without deleting data files (delete_data=False).
+
+        This covers the use-case where qBittorrent writes directly to the final
+        library path \u2014 movarr should remove the torrent entry from qBittorrent's
+        queue but NEVER delete the downloaded files.
+        """
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        _process_one(
+            self._torrent(),
+            self._config(copy_completed=False, remove_completed=True),
+            qbt,
+            db,
+        )
+
+        qbt.delete_torrent.assert_called_once_with("abc123", delete_data=False, state="completed")
         db.mark_completed.assert_called_once_with("tag1")

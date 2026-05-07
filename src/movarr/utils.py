@@ -18,6 +18,9 @@ def bytes_to_mb(size_bytes: object) -> str:
     Truncates fractional MB.  Returns ``"0"`` on invalid input.
     """
     try:
-        return str(int(float(str(size_bytes))) // 1_000_000)
+        # Use int() directly (not float) to avoid losing precision for values
+        # larger than 2^53 bytes (~9 PB), though current torrent files never
+        # approach that size.
+        return str(int(str(size_bytes).split(".")[0]) // 1_000_000)
     except (ValueError, TypeError, OverflowError):
         return "0"

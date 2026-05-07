@@ -245,6 +245,7 @@ class TestMarkStalledOnDeletion:
         to_delete = {"abc123": {"name": "Some Movie 2024", "age_mins": 999, "state": "stalledDL"}}
         qbt.list_by_category.return_value = torrent_map
         qbt.identify_for_deletion.return_value = to_delete
+        qbt.delete_stalled.return_value = set(to_delete.keys())  # confirm all deleted
 
         _delete_stuck(
             qbt,
@@ -291,6 +292,7 @@ class TestMarkStalledOnDeletion:
         to_delete = {"def456": {"name": "Other Movie 2023", "age_mins": 999, "state": "metaDL"}}
         qbt.list_by_category.return_value = torrent_map
         qbt.identify_for_deletion.return_value = to_delete
+        qbt.delete_stalled.return_value = set(to_delete.keys())  # confirm all deleted
 
         _delete_stuck(
             qbt,

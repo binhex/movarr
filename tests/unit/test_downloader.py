@@ -80,7 +80,7 @@ class TestHttpClientGet:
 
         client.get("https://example.com")
 
-        mock_req.assert_called_once_with("get", "https://example.com", headers=None, auth=None)
+        mock_req.assert_called_once_with("get", "https://example.com", headers=None, auth=None, read_timeout=None)
 
     def test_passes_headers(self, mocker: MockerFixture) -> None:
         """Extra headers should be forwarded to _request."""
@@ -89,7 +89,9 @@ class TestHttpClientGet:
 
         client.get("https://example.com", headers={"X-Custom": "value"})
 
-        mock_req.assert_called_once_with("get", "https://example.com", headers={"X-Custom": "value"}, auth=None)
+        mock_req.assert_called_once_with(
+            "get", "https://example.com", headers={"X-Custom": "value"}, auth=None, read_timeout=None
+        )
 
     def test_passes_auth(self, mocker: MockerFixture) -> None:
         """Auth credentials should be forwarded to _request."""
@@ -98,24 +100,29 @@ class TestHttpClientGet:
 
         client.get("https://example.com", auth=("user", "secret"))
 
-        mock_req.assert_called_once_with("get", "https://example.com", headers=None, auth=("user", "secret"))
+        mock_req.assert_called_once_with(
+            "get", "https://example.com", headers=None, auth=("user", "secret"), read_timeout=None
+        )
 
     def test_read_timeout_override_restores_original(self, mocker: MockerFixture) -> None:
-        """After a read_timeout override, the original value must be restored."""
+        """After a read_timeout override, the original value on the instance is unchanged."""
         client = HttpClient(read_timeout=30.0)
-        mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
+        mock_req = mocker.patch.object(client, "_request", return_value=mocker.MagicMock(spec=requests.Response))
 
         client.get("https://example.com", read_timeout=5.0)
 
+        # The instance attribute must not be mutated.
         assert client._read_timeout == 30.0
+        mock_req.assert_called_once_with("get", "https://example.com", headers=None, auth=None, read_timeout=5.0)
 
     def test_read_timeout_override_applied_during_call(self, mocker: MockerFixture) -> None:
-        """The overriding read_timeout must be active while _request executes."""
+        """The overriding read_timeout is passed as a kwarg to _request."""
         client = HttpClient(read_timeout=30.0)
         captured: list[float] = []
 
         def _capture(*args: object, **kwargs: object) -> object:
-            captured.append(client._read_timeout)
+            raw = kwargs.get("read_timeout", client._read_timeout)
+            captured.append(raw if isinstance(raw, float) else 0.0)
             return mocker.MagicMock(spec=requests.Response)
 
         mocker.patch.object(client, "_request", side_effect=_capture)

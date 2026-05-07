@@ -155,8 +155,8 @@ class TestFetchImdbpie:
         assert out["imdb_genres_list"] == ["Action", "Sci-Fi"]
         assert out["imdb_cert_source"] == "imdbpie"
         assert out["imdb_certification"] == "15"
-        assert out["imdb_language_list"] == ["English"]
-        assert out["imdb_country_list"] == ["US"]
+        assert out["imdb_language_list"] == ["en"]
+        assert out["imdb_country_list"] == ["us"]
 
     def test_successful_fetch_populates_credits(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)

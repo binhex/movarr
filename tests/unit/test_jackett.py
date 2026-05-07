@@ -379,14 +379,26 @@ class TestParseItem:
 
         assert client._fetch_page("http://example.com", "test-indexer") is None
 
-    def test_returns_none_on_invalid_xml(self, mocker: MockerFixture) -> None:
-        """Returns None when the response body cannot be parsed as Torznab."""
+    def test_returns_none_on_malformed_xml(self, mocker: MockerFixture) -> None:
+        """Returns None when the response body is malformed XML (parse error)."""
+        client, mock_http = _make_client(mocker)
+        mock_resp = mocker.MagicMock()
+        mock_resp.content = b"<unclosed tag"
+        mock_http.get.return_value = mock_resp
+
+        assert client._fetch_page("http://example.com", "test-indexer") is None
+
+    def test_returns_empty_list_on_valid_xml_missing_items(self, mocker: MockerFixture) -> None:
+        """Returns [] when the feed is valid XML but has no <item> elements.
+
+        An empty feed (zero results from the indexer) is not an error condition.
+        """
         client, mock_http = _make_client(mocker)
         mock_resp = mocker.MagicMock()
         mock_resp.content = b"<not-a-valid-torznab/>"
         mock_http.get.return_value = mock_resp
 
-        assert client._fetch_page("http://example.com", "test-indexer") is None
+        assert client._fetch_page("http://example.com", "test-indexer") == []
 
 
 # search (public)

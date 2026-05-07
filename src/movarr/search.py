@@ -113,7 +113,9 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
             criteria_cfg.criteria,
             category,
         )
-        total_raw += _process_criteria(criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session)
+        total_raw += _process_criteria(
+            criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session
+        )
 
     check_and_notify(has_results=total_raw > 0, proxy_name=proxy_name, db=db, config=config)
 
@@ -187,11 +189,16 @@ def _process_criteria(  # noqa: PLR0912
 
             logger.success("'{}' passed all filters.", result.get("index_title"))
 
-            send_queued_notification(result, session.config)
-
             updated = session.qbt.add_torrent(result)
-            if updated is not None:
-                result = updated
+            if updated is None:
+                details: list[str] = result.get("result_details") or []
+                details.append("Failed: add_torrent returned None; torrent not queued.")
+                result["result"] = "Failed"
+                result["result_details"] = details
+                session.db.write(result)
+                continue
+            result = updated
+            send_queued_notification(result, session.config)
             session.db.write(result)
 
     return raw_count
@@ -215,10 +222,6 @@ def _enrich_index_metadata(result: ResultDict) -> ResultDict:
     result["movie_title_year"] = year
     result["index_title_after_year_to_end"] = after_year
     result["index_title_resolution"] = resolution
-
-    # index_title_compare: normalised sanitised title, used by all IMDb search
-    # strategies to verify that a candidate title matches this index entry.
-    result["index_title_compare"] = normalise_for_compare(san)
 
     # Build compare/search strings used by duplicate/bad-title checks and
     # IMDb search strategies.

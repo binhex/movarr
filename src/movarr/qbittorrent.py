@@ -107,7 +107,18 @@ class QBittorrentClient:
             _logger.warning("Failed to add torrent '{}': {}.", result.get("index_title"), exc)
             return None
 
-        self._client.torrents_reannounce(torrent_hashes="all")
+        # Reannounce only the newly added torrent rather than every active
+        # torrent in qBittorrent to avoid violating tracker re-announce intervals.
+        try:
+            infos = self._client.torrents_info(tag=tag)
+            new_hash = str(infos[0].hash) if infos else None
+            if new_hash:
+                self._client.torrents_reannounce(torrent_hashes=new_hash)
+            else:
+                _logger.debug("Could not find new torrent by tag '{}' for reannounce.", tag)
+        except qbittorrentapi.APIError as exc:
+            _logger.warning("Reannounce failed for '{}': {}; continuing.", result.get("index_title"), exc)
+
         result["torrent_tag"] = tag
         return result
 
@@ -123,15 +134,22 @@ class QBittorrentClient:
         return torrent_map
 
     def list_completed(self) -> list[dict[str, Any]]:
-        """Return details for all 100%-complete movarr-tagged stopped torrents."""
+        """Return details for all 100%-complete movarr-tagged torrents.
+
+        Queries all movarr-managed torrents by category rather than filtering
+        by the 'stopped' state.  With ``add_paused=False`` (the default), a
+        finished torrent will typically be in an active upload state
+        (``uploading`` / ``stalledUP``) rather than ``stopped``, so
+        restricting to ``status_filter='stopped'`` would silently miss them.
+        """
         try:
-            stopped = self._client.torrents_info(status_filter="stopped")
+            all_torrents = self._client.torrents_info(category=self._category)
         except qbittorrentapi.APIError as exc:
             _logger.warning("Failed to list completed torrents: {}.", exc)
             return []
 
         results = []
-        for torrent in stopped:
+        for torrent in all_torrents:
             if not any(t.strip().startswith(_TAG_PREFIX) for t in torrent.tags.split(",")):
                 continue
             if int(torrent.amount_left) != 0:
@@ -188,8 +206,15 @@ class QBittorrentClient:
 
             if filter_type == "last_activity":
                 if ts == 0:
-                    # Never had network activity — treat as infinitely old.
-                    age_mins = float("inf")
+                    # Never had network activity. Fall back to added_on so
+                    # brand-new torrents (just added, no peers yet) are not
+                    # immediately eligible for deletion.
+                    added_ts = info.get("added_on") or 0
+                    if added_ts == 0:
+                        continue  # Cannot determine age; skip.
+                    age_mins = int(
+                        (now - datetime.datetime.fromtimestamp(added_ts, tz=datetime.UTC)).total_seconds() / 60
+                    )
                 else:
                     age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
             else:
@@ -231,14 +256,21 @@ class QBittorrentClient:
         )
         return True
 
-    def delete_stalled(self, stalled_map: dict[str, Any], state: str, delete_data: bool) -> None:
+    def delete_stalled(self, stalled_map: dict[str, Any], state: str, delete_data: bool) -> set[str]:
         """Delete all torrents in *stalled_map*.
 
         Args:
             stalled_map: Output of :meth:`identify_for_deletion`.
             state: State label for log messages.
             delete_data: Whether to remove downloaded files.
+
+        Returns:
+            Set of torrent hashes that were successfully deleted.
         """
+        deleted: set[str] = set()
         for torrent_hash, info in stalled_map.items():
-            if not self.delete_torrent(torrent_hash, delete_data, state):
+            if self.delete_torrent(torrent_hash, delete_data, state):
+                deleted.add(torrent_hash)
+            else:
                 _logger.warning("Could not delete '{}' ({}).", info["name"], torrent_hash)
+        return deleted

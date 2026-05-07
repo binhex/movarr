@@ -68,5 +68,12 @@ class TestBytesToMb:
         assert bytes_to_mb(float("inf")) == "0"
         assert bytes_to_mb("inf") == "0"
 
-    def test_overflow_returns_zero(self) -> None:
-        assert bytes_to_mb(10**400) == "0"
+    def test_large_integer_handled_correctly(self) -> None:
+        """Very large integers are handled without overflow (Python arbitrary precision).
+
+        The old implementation used float() conversion which raised OverflowError
+        for numbers > 2^53. The new implementation uses int() directly, so large
+        values produce a large (but correct) result rather than returning '0'.
+        """
+        # 10**18 bytes = 10**12 MB = 1 000 000 000 000
+        assert bytes_to_mb(10**18) == str(10**18 // 1_000_000)

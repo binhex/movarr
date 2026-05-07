@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, make_directory
 from movarr.parsing import extract_resolution, sanitise
 
@@ -75,7 +76,9 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
 
     if not qbt.is_connected():
         logger.warning("qBittorrent is unreachable; skipping post-processing.")
+        torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
+    torrent_client_health.check_and_notify(is_reachable=True, db=db, config=config)
 
     completed = qbt.list_completed()
     if not completed:
@@ -101,6 +104,18 @@ def _process_one(
     db_record = db.find_by_tag(tag)
     if not db_record:
         logger.warning("No DB record for tag '{}'; skipping.", tag)
+        return
+
+    # If copy_completed is disabled, skip the copy path entirely.
+    # movarr assumes the user has configured qBittorrent to download directly
+    # to the final library path, so no file copy is needed.
+    # When remove_completed is also True, remove only the torrent queue entry
+    # (NOT the downloaded files) by passing delete_data=False.
+    if not config.post_process.copy_completed:
+        logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
+        db.mark_completed(tag)
+        if config.post_process.remove_completed:
+            qbt.delete_torrent(torrent_hash, delete_data=False, state="completed")
         return
 
     # Build the file copy list (applying exclusion rules).
@@ -133,10 +148,7 @@ def _process_one(
     all_ok = True
     for src_path in src_files:
         src_fname = os.path.basename(src_path)
-        if src_fname == largest_fname:
-            dst_fname = _canonical_filename(torrent, largest_fname, largest_rel_path)
-        else:
-            dst_fname = src_fname
+        dst_fname = _canonical_filename(largest_fname, largest_rel_path) if src_fname == largest_fname else src_fname
 
         dst_path = os.path.join(dst_dir, dst_fname)
         logger.info("Copying '{}' → '{}'.", src_path, dst_path)
@@ -162,6 +174,14 @@ def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     pp = config.post_process
     raw_save_path = torrent.get("torrent_save_path") or ""
     save_path = _apply_path_remapping(raw_save_path, pp.path_remapping)
+
+    # Guard: an empty save_path resolves to CWD, bypassing the path-traversal
+    # check below.  Reject early to avoid accidentally copying CWD-relative paths.
+    if not save_path:
+        tag = torrent.get("torrent_tag", "unknown")
+        logger.warning("torrent_save_path is empty for tag '{}'; skipping copy.", tag)
+        return []
+
     file_list = torrent.get("torrent_file_list") or []
 
     exclude_min_kb = pp.exclude_file_min_kb or 0
@@ -225,7 +245,7 @@ def _largest_file(torrent: dict) -> tuple[str, str]:
     return os.path.basename(rel_path), os.path.dirname(rel_path)
 
 
-def _canonical_filename(torrent: dict, largest_fname: str, largest_path_dir: str) -> str:
+def _canonical_filename(largest_fname: str, largest_path_dir: str) -> str:
     """Derive the best destination filename for the primary video file.
 
     If the torrent has a non-trivial parent directory name that is longer than
@@ -272,7 +292,9 @@ def _resolve_destination(db_record: HistoryRecord, config: Config) -> str | None
     genres = _parse_genres(genres_raw)
 
     cert: str = str(db_record.imdb_certification or "")
-    cert_source: str = str(db_record.imdb_cert_source or "imdbpie")
+    # Default to empty string (not "imdbpie") so legacy/unknown rows
+    # do not accidentally get BBFC routing applied.
+    cert_source: str = str(db_record.imdb_cert_source or "")
 
     # Bug #8 fix: only apply BBFC cert routing if the cert came from imdbpie (UK BBFC certs).
     # OMDb returns MPAA ratings which are not compatible with BBFC ordering.

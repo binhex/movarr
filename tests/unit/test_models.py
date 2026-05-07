@@ -36,7 +36,6 @@ class TestResultDictConstruction:
             "index_title_group": "YIFY",
             "index_title_resolution": "1080p",
             "index_title_after_year_to_end": "BluRay x264",
-            "index_title_compare": "the matrix",
         }
         assert result["index_title_sanitised"] == "The Matrix"
         assert result["index_title_resolution"] == "1080p"
@@ -205,7 +204,6 @@ class TestResultDictFullPayload:
             "index_title_group": "SPARKS",
             "index_title_resolution": "1080p",
             "index_title_after_year_to_end": "BluRay x264-SPARKS",
-            "index_title_compare": "inception",
             "movie_title": "Inception",
             "movie_title_year": "2010",
             "movie_title_and_year_search": "Inception 2010",

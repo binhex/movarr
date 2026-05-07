@@ -578,8 +578,10 @@ class TestLogNextRun:
         _log_next_run(mock_scheduler, "search")
 
         mock_scheduler.get_job.assert_called_once_with("search")
-        logged_msg = mock_info.call_args[0][0]
-        assert "15:30:45" in logged_msg
+        # With Loguru lazy format, args are passed separately — check all call args.
+        call_args = mock_info.call_args
+        # The time arg should be present in the positional args.
+        assert any("15:30:45" in str(a) for a in call_args[0])
 
     def test_logs_job_id_in_message(self, mocker: MockerFixture) -> None:
         """The job_id is included in the log message so the user can tell which task re-runs next."""
@@ -591,8 +593,8 @@ class TestLogNextRun:
 
         _log_next_run(mock_scheduler, "queue_management")
 
-        logged_msg = mock_info.call_args[0][0]
-        assert "queue_management" in logged_msg
+        call_args = mock_info.call_args
+        assert any("queue_management" in str(a) for a in call_args[0])
 
     def test_handles_none_next_run_time(self, mocker: MockerFixture) -> None:
         """When job.next_run_time is None, a fallback message is logged without error."""
@@ -734,3 +736,49 @@ class TestLogNextRun:
         _run_daemon(Config())
 
         self._get_job_callable(mock_sched, "post_processing")()
+
+
+class TestRunOnceDisabledTasks:
+    """Tests for run_once when individual tasks are disabled via enabled=False."""
+
+    def test_search_disabled_skips_run_search(self, mocker: MockerFixture) -> None:
+        """When acquisition.enabled=False, run_search is not called."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler.QBittorrentClient")
+        mock_search = mocker.patch("movarr.scheduler.run_search")
+        mocker.patch("movarr.scheduler.run_queue_management")
+        mocker.patch("movarr.scheduler.run_post_processing")
+        config = Config()
+        config.schedule.acquisition.enabled = False
+
+        run_once(config)
+
+        mock_search.assert_not_called()
+
+    def test_queue_management_disabled_skips_run_queue_management(self, mocker: MockerFixture) -> None:
+        """When queue_management.enabled=False, run_queue_management is not called."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler.QBittorrentClient")
+        mocker.patch("movarr.scheduler.run_search")
+        mock_qm = mocker.patch("movarr.scheduler.run_queue_management")
+        mocker.patch("movarr.scheduler.run_post_processing")
+        config = Config()
+        config.schedule.queue_management.enabled = False
+
+        run_once(config)
+
+        mock_qm.assert_not_called()
+
+    def test_post_processing_disabled_skips_run_post_processing(self, mocker: MockerFixture) -> None:
+        """When post_processing.enabled=False, run_post_processing is not called."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler.QBittorrentClient")
+        mocker.patch("movarr.scheduler.run_search")
+        mocker.patch("movarr.scheduler.run_queue_management")
+        mock_pp = mocker.patch("movarr.scheduler.run_post_processing")
+        config = Config()
+        config.schedule.post_processing.enabled = False
+
+        run_once(config)
+
+        mock_pp.assert_not_called()
