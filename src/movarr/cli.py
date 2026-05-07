@@ -1,61 +1,33 @@
 """Command-line interface for movarr."""
 
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 
 import click
 
 from movarr.logger import create_logger
-from movarr.utils import get_project_root
 
 try:
     _VERSION = version("movarr")
 except PackageNotFoundError:
     _VERSION = "unknown"
 
-_PROJECT_ROOT = get_project_root()
-
 
 @click.command()
 @click.option(
     "--config-path",
     type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default=f"{_PROJECT_ROOT}/configs/movarr.yml",
+    default="configs/movarr.yml",
     show_default=True,
     metavar="<path>",
     help="Path to YAML configuration file.",
 )
 @click.option(
-    "--db-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default=f"{_PROJECT_ROOT}/db/movarr.db",
-    show_default=True,
-    metavar="<path>",
-    help="Path to SQLite database file.",
-)
-@click.option(
-    "--log-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default=f"{_PROJECT_ROOT}/logs/movarr.log",
-    show_default=True,
-    metavar="<path>",
-    help="Path to log file.",
-)
-@click.option(
     "--log-level",
-    default="INFO",
-    type=click.Choice(["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"], case_sensitive=False),
-    show_default=True,
-    metavar="<level>",
-    help="Logging level.",
-)
-@click.option(
-    "--pid-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
     default=None,
+    type=click.Choice(["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"], case_sensitive=False),
     show_default=False,
-    metavar="<path>",
-    help="Path to PID file (daemon mode). Defaults to movarr.pid in the config directory.",
+    metavar="<level>",
+    help="Override the log level from config (useful for debugging).",
 )
 @click.option(
     "--daemon",
@@ -70,21 +42,29 @@ _PROJECT_ROOT = get_project_root()
     help="Validate configuration and exit without running any tasks.",
 )
 @click.version_option(version=_VERSION, prog_name="movarr")
-def cli(  # noqa: PLR0913
+def cli(
     config_path: str,
-    db_path: str,
-    log_path: str,
-    log_level: str,
-    pid_path: str | None,
+    log_level: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
     """movarr — torrent acquisition daemon.
 
-    Polls Jackett for movie torrents, filters by IMDb metadata, adds passing
-    torrents to qBittorrent, post-processes completed downloads, and sends
-    email notifications.
+    Polls Jackett/Prowlarr for movie torrents, filters by IMDb metadata, adds
+    passing torrents to qBittorrent, post-processes completed downloads, and
+    sends notifications.
+
+    All paths (database, log file, PID file) and log levels are configured in
+    the YAML file pointed to by --config-path.  Use --log-level to override
+    the console log level at runtime without editing the config file.
     """
+    from movarr.config import load_config  # noqa: PLC0415
+
+    config = load_config(config_path)
+
+    # --daemon flag overrides general.daemon_mode in config.
+    if daemon:
+        config.general.daemon_mode = "background"
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")
@@ -95,18 +75,14 @@ def cli(  # noqa: PLR0913
             f"<level>{prefix}{{message}}</level>\n"
         )
 
-    create_logger(log_format=_log_format, log_level=log_level, log_path=log_path)
+    # --log-level overrides config.general.log_level_console when supplied.
+    effective_log_level = log_level.upper() if log_level else config.general.log_level_console
 
-    if pid_path is None:
-        pid_path = str(Path(config_path).parent / "movarr.pid")
-
-    from movarr.config import load_config  # noqa: PLC0415
-
-    config = load_config(config_path)
-
-    # Override config paths with CLI values so they take precedence.
-    config.general.db_path = db_path
-    config.general.daemon_mode = "background" if daemon else "foreground"
+    create_logger(
+        log_format=_log_format,
+        log_level=effective_log_level,
+        log_path=config.general.log_path or None,
+    )
 
     if test:
         click.echo("Configuration loaded successfully. Test mode — exiting.")
@@ -114,7 +90,7 @@ def cli(  # noqa: PLR0913
 
     from movarr.scheduler import run  # noqa: PLC0415
 
-    run(config, pid_path=pid_path)
+    run(config)
 
 
 if __name__ == "__main__":
