@@ -80,10 +80,14 @@ class TestCliHelp:
         assert "--test" in result.output
 
     def test_help_does_not_mention_removed_options(self) -> None:
-        """--db-path, --log-path, --pid-path have been removed; --log-level is kept."""
+        """--db-path and --pid-path have been removed; --log-path and --log-level are kept."""
         result = CliRunner().invoke(cli, ["--help"])
-        for removed in ("--db-path", "--log-path", "--pid-path"):
+        for removed in ("--db-path", "--pid-path"):
             assert removed not in result.output, f"removed option {removed!r} still in help"
+
+    def test_help_mentions_log_path(self) -> None:
+        result = CliRunner().invoke(cli, ["--help"])
+        assert "--log-path" in result.output
 
     def test_help_mentions_log_level(self) -> None:
         result = CliRunner().invoke(cli, ["--help"])
@@ -163,7 +167,7 @@ class TestCliTestMode:
         assert kwargs.get("log_level") == "DEBUG"
 
     def test_log_path_from_config_passed_to_create_logger(self, mocker: MockerFixture) -> None:
-        """create_logger receives log_path from config.general.log_path."""
+        """Without --log-path, create_logger uses config.general.log_path."""
         mock_logger = mocker.patch("movarr.cli.create_logger")
         mocker.patch(
             "movarr.config.load_config",
@@ -172,6 +176,17 @@ class TestCliTestMode:
         CliRunner().invoke(cli, ["--test"])
         _, kwargs = mock_logger.call_args
         assert kwargs.get("log_path") == "/var/log/movarr.log"
+
+    def test_log_path_flag_overrides_config(self, mocker: MockerFixture) -> None:
+        """--log-path overrides config.general.log_path when supplied."""
+        mock_logger = mocker.patch("movarr.cli.create_logger")
+        mocker.patch(
+            "movarr.config.load_config",
+            return_value=_make_config_mock(log_path="/var/log/movarr.log"),
+        )
+        CliRunner().invoke(cli, ["--log-path", "/tmp/debug.log", "--test"])
+        _, kwargs = mock_logger.call_args
+        assert kwargs.get("log_path") == "/tmp/debug.log"
 
     def test_empty_log_path_passes_none_to_create_logger(self, mocker: MockerFixture) -> None:
         """An empty log_path in config means no file logging (None passed to create_logger)."""

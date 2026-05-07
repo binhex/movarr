@@ -22,6 +22,14 @@ except PackageNotFoundError:
     help="Path to YAML configuration file.",
 )
 @click.option(
+    "--log-path",
+    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    default=None,
+    show_default=False,
+    metavar="<path>",
+    help="Override the log file path from config.",
+)
+@click.option(
     "--log-level",
     default=None,
     type=click.Choice(["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"], case_sensitive=False),
@@ -44,6 +52,7 @@ except PackageNotFoundError:
 @click.version_option(version=_VERSION, prog_name="movarr")
 def cli(
     config_path: str,
+    log_path: str | None,
     log_level: str | None,
     daemon: bool,
     test: bool,
@@ -75,13 +84,14 @@ def cli(
             f"<level>{prefix}{{message}}</level>\n"
         )
 
-    # --log-level overrides config.general.log_level_console when supplied.
+    # --log-level / --log-path override config values when supplied.
     effective_log_level = log_level.upper() if log_level else config.general.log_level_console
+    effective_log_path = log_path if log_path is not None else (config.general.log_path or None)
 
     create_logger(
         log_format=_log_format,
         log_level=effective_log_level,
-        log_path=config.general.log_path or None,
+        log_path=effective_log_path,
     )
 
     if test:
