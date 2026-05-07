@@ -45,6 +45,12 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.index_proxy.jackett.port = cast("int", overrides["jackett_port"])
     if overrides.get("jackett_api_key") is not None:
         config.index_proxy.jackett.api_key = str(overrides["jackett_api_key"])
+    if overrides.get("prowlarr_host") is not None:
+        config.index_proxy.prowlarr.host = str(overrides["prowlarr_host"])
+    if overrides.get("prowlarr_port") is not None:
+        config.index_proxy.prowlarr.port = cast("int", overrides["prowlarr_port"])
+    if overrides.get("prowlarr_api_key") is not None:
+        config.index_proxy.prowlarr.api_key = str(overrides["prowlarr_api_key"])
 
 
 @click.command()
@@ -147,6 +153,28 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override Jackett API key from config.",
 )
 @click.option(
+    "--prowlarr-host",
+    default=None,
+    show_default=False,
+    metavar="<host>",
+    help="Override Prowlarr host from config.",
+)
+@click.option(
+    "--prowlarr-port",
+    type=int,
+    default=None,
+    show_default=False,
+    metavar="<port>",
+    help="Override Prowlarr port from config.",
+)
+@click.option(
+    "--prowlarr-api-key",
+    default=None,
+    show_default=False,
+    metavar="<key>",
+    help="Override Prowlarr API key from config.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     default=False,
@@ -173,6 +201,9 @@ def cli(
     jackett_host: str | None,
     jackett_port: int | None,
     jackett_api_key: str | None,
+    prowlarr_host: str | None,
+    prowlarr_port: int | None,
+    prowlarr_api_key: str | None,
     daemon: bool,
     test: bool,
 ) -> None:
@@ -206,6 +237,9 @@ def cli(
         jackett_host=jackett_host,
         jackett_port=jackett_port,
         jackett_api_key=jackett_api_key,
+        prowlarr_host=prowlarr_host,
+        prowlarr_port=prowlarr_port,
+        prowlarr_api_key=prowlarr_api_key,
     )
 
     def _log_format(record: dict) -> str:

@@ -356,6 +356,9 @@ class TestCliOverrides:
         cfg.index_proxy.jackett.host = "localhost"
         cfg.index_proxy.jackett.port = 9117
         cfg.index_proxy.jackett.api_key = ""
+        cfg.index_proxy.prowlarr.host = "localhost"
+        cfg.index_proxy.prowlarr.port = 9696
+        cfg.index_proxy.prowlarr.api_key = ""
         mocker.patch("movarr.config.load_config", return_value=cfg)
         mocker.patch("movarr.scheduler.run")
         CliRunner().invoke(cli, args)
@@ -438,3 +441,21 @@ class TestCliOverrides:
         assert cfg.index_proxy.jackett.host == "localhost"
         assert cfg.index_proxy.jackett.port == 9117
         assert cfg.index_proxy.jackett.api_key == ""
+
+    def test_prowlarr_host_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--prowlarr-host", "192.168.1.70", "--test"])
+        assert cfg.index_proxy.prowlarr.host == "192.168.1.70"
+
+    def test_prowlarr_port_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--prowlarr-port", "9697", "--test"])
+        assert cfg.index_proxy.prowlarr.port == 9697
+
+    def test_prowlarr_api_key_overrides_config(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--prowlarr-api-key", "xyz789", "--test"])
+        assert cfg.index_proxy.prowlarr.api_key == "xyz789"
+
+    def test_prowlarr_options_absent_leave_config_unchanged(self, mocker: MockerFixture) -> None:
+        cfg = self._invoke(mocker, ["--test"])
+        assert cfg.index_proxy.prowlarr.host == "localhost"
+        assert cfg.index_proxy.prowlarr.port == 9696
+        assert cfg.index_proxy.prowlarr.api_key == ""
