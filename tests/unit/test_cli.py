@@ -412,6 +412,11 @@ class TestCliOverrides:
         cfg = self._invoke(mocker, ["--index-proxy", "prowlarr", "--test"])
         assert cfg.index_proxy.selected == "prowlarr"
 
+    def test_index_proxy_case_insensitive(self, mocker: MockerFixture) -> None:
+        """Click normalises mixed-case input to lowercase via case_sensitive=False."""
+        cfg = self._invoke(mocker, ["--index-proxy", "PROWLARR", "--test"])
+        assert cfg.index_proxy.selected == "prowlarr"
+
     def test_index_proxy_invalid_choice_exits_nonzero(self) -> None:
         result = CliRunner().invoke(cli, ["--index-proxy", "sonarr"])
         assert result.exit_code != 0

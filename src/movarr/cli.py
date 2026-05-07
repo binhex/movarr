@@ -38,7 +38,7 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     if overrides.get("qbt_password") is not None:
         config.torrent_client.qbittorrent.password = str(overrides["qbt_password"])
     if overrides.get("index_proxy") is not None:
-        config.index_proxy.selected = str(overrides["index_proxy"]).lower()
+        config.index_proxy.selected = str(overrides["index_proxy"])
     if overrides.get("jackett_host") is not None:
         config.index_proxy.jackett.host = str(overrides["jackett_host"])
     if overrides.get("jackett_port") is not None:
