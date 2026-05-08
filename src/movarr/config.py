@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.13.0"
+_CONFIG_VERSION = "2.14.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +158,22 @@ def _migrate_v212_to_v213(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v213_to_v214(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.13.0 -> v2.14.0: add post_process.hooks (all hooks disabled by default)."""
+    post_process = raw.get("post_process")
+    if post_process is None:
+        raw["post_process"] = {}
+        raw["post_process"].setdefault("hooks", {})
+    elif isinstance(post_process, dict):
+        # Normalize hooks: null (previously a silently-ignored extra key) to {} so that
+        # configs that loaded under 2.13.0 continue to load after this migration adds the field.
+        if not isinstance(post_process.get("hooks"), dict):
+            post_process["hooks"] = {}
+    # else: non-dict, non-None → leave untouched; Pydantic validation will reject it
+    raw.setdefault("general", {})["config_version"] = "2.14.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -173,6 +189,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.10.0": _migrate_v210_to_v211,
     "2.11.0": _migrate_v211_to_v212,
     "2.12.0": _migrate_v212_to_v213,
+    "2.13.0": _migrate_v213_to_v214,
 }
 
 
@@ -444,6 +461,24 @@ class PathRemappingConfig(BaseModel):
     to_path: str = ""
 
 
+
+class PostProcessHooksConfig(BaseModel):
+    """Shell commands to run at defined points in the post-processing pipeline.
+
+    Each field is a command template. Leave empty (the default) to disable.
+    The placeholder ``{dir}`` is substituted with the resolved absolute path of
+    the destination directory before the command is executed.
+
+    ``shell=True`` is used so that glob patterns such as ``chattr -i {dir}/*``
+    are expanded by the shell. Commands come from the user's own config file,
+    so the trust boundary is identical to the rest of the configuration.
+    """
+
+    post_copy: str = ""
+    pre_delete: str = ""
+    post_delete: str = ""
+
+
 class PostProcessConfig(BaseModel):
     """Post-processing settings for copying completed downloads."""
 
@@ -457,6 +492,7 @@ class PostProcessConfig(BaseModel):
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
     path_remapping: list[PathRemappingConfig] = Field(default_factory=list)
     delete_lower_quality: bool = False
+    hooks: PostProcessHooksConfig = Field(default_factory=PostProcessHooksConfig)
 
 
 class DatabaseConfig(BaseModel):
