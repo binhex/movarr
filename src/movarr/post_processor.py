@@ -245,8 +245,11 @@ def _process_one(
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
         if config.post_process.hooks.post_copy:
-            if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
-                logger.warning("post_copy hook failed for '{}'; continuing.", dst_dir)
+            try:
+                if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
+                    logger.warning("post_copy hook failed for '{}'; continuing.", dst_dir)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", dst_dir, exc)
         if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
             deleted = _delete_superseded_files(
                 dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
