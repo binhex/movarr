@@ -183,6 +183,8 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.13.0": _migrate_v213_to_v214,
 }
 
+_VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
+
 
 # Pydantic sub-models
 
@@ -207,6 +209,17 @@ class GeneralConfig(BaseModel):
         if value not in allowed:
             raise ValueError(f"daemon_mode must be one of {allowed}")
         return value
+
+    @field_validator("log_level_console", "log_level_file", mode="before")
+    @classmethod
+    def validate_log_level(cls, value: object) -> str:
+        """Ensure log level is a known Loguru level."""
+        if not isinstance(value, str):
+            raise ValueError(f"Log level must be a string, got {type(value).__name__}")
+        upper = value.upper()
+        if upper not in _VALID_LOG_LEVELS:
+            raise ValueError(f"Invalid log level {value!r}. Must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}")
+        return upper
 
 
 class ScheduleTaskConfig(BaseModel):

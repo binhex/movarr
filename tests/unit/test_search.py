@@ -1070,3 +1070,31 @@ class TestProcessCriteriaIgnoreList:
 
         db.write.assert_not_called()
         qbt.add_torrent.assert_not_called()
+    def test_ignored_tracker_case_insensitive(self, mocker: MockerFixture) -> None:
+        """ignore_list matching must be case-insensitive."""
+        jackett = mocker.MagicMock()
+        raw = {**_base_result(), "index_tracker": "bitmagnet"}
+        jackett.search.return_value = iter([raw])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_site.ignore_list = ["BitMagnet"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=jackett,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        db.write.assert_not_called()
+        qbt.add_torrent.assert_not_called()

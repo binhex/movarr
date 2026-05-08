@@ -133,6 +133,7 @@ def _process_criteria(  # noqa: PLR0912
     """
     site_dict = criteria_cfg.model_dump()
     raw_count = 0
+    ignore_set = {t.lower() for t in session.config.index_site.ignore_list}
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         raw_count += 1
@@ -142,8 +143,7 @@ def _process_criteria(  # noqa: PLR0912
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
         with logger.contextualize(tracker=tracker):
-            ignore_list = session.config.index_site.ignore_list
-            if ignore_list and tracker in ignore_list:
+            if ignore_set and tracker.lower() in ignore_set:
                 logger.debug("Skipping result from ignored indexer '{}'.", tracker)
                 continue
             if session.db.is_duplicate_exact(index_title):

@@ -47,6 +47,14 @@ class TestGeneralConfigDefaults:
         with pytest.raises(ValidationError):
             GeneralConfig(daemon_mode="invalid")
 
+    def test_log_level_file_valid_accepted(self) -> None:
+        cfg = GeneralConfig.model_validate({"log_level_file": "debug"})
+        assert cfg.log_level_file == "DEBUG"
+
+    def test_log_level_file_invalid_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            GeneralConfig.model_validate({"log_level_file": "verbose"})
+
 
 # QueueManagementConfig fields
 
@@ -122,7 +130,7 @@ class TestLoadConfig:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  log_level_console: debug\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.log_level_console == "debug"
+        assert cfg.general.log_level_console == "DEBUG"
         assert cfg.general.daemon_mode == "foreground"  # default unchanged
 
     def test_creates_file_if_absent(self, tmp_path: Path) -> None:
