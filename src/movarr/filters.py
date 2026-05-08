@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["filter_by_index", "filter_by_imdb"]
+__all__ = ["composite_quality_score", "filter_by_index", "filter_by_imdb"]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
@@ -654,6 +654,26 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     if _RE_SPECIAL.search(candidate_san) and not _RE_SPECIAL.search(other_san):
         return 10
     return 0
+
+
+def composite_quality_score(san: str, other_san: str, config: "Config") -> int:
+    """Return the composite quality score for *san* relative to *other_san*.
+
+    Combines ``quality_score`` with the preferred-group and special-edition
+    bonuses so callers outside this module get a consistent score without
+    importing private symbols.
+
+    ``quality_score`` is already imported at the module level in this file.
+
+    Args:
+        san: Sanitised title of the candidate file.
+        other_san: Sanitised title of the file being compared against.
+        config: Application configuration (used for preferred group list).
+    """
+    score = quality_score(san)
+    score += _group_bonus(san, other_san, config)
+    score += _special_edition_bonus(san, other_san)
+    return score
 
 
 # Result helpers

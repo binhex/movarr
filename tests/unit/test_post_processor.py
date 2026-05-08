@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pathlib import Path
 
     from pytest_mock import MockerFixture
 
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
+from movarr.filters import composite_quality_score
 from movarr.post_processor import (
     _apply_path_remapping,
     _build_copy_list,
@@ -25,6 +26,33 @@ from movarr.post_processor import (
     _safe_path_component,
     run_post_processing,
 )
+
+
+
+class TestCompositeQualityScore:
+    """composite_quality_score is the public scoring surface used by the deletion step."""
+
+    def test_higher_score_for_remux(self) -> None:
+        cfg = Config()
+        new_san = "The Matrix 1999 1080p Remux"
+        lib_san = "The Matrix 1999 1080p BluRay"
+        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
+
+    def test_equal_score_for_identical_titles(self) -> None:
+        cfg = Config()
+        san = "The Matrix 1999 1080p BluRay"
+        assert composite_quality_score(san, san, cfg) == composite_quality_score(san, san, cfg)
+
+    def test_preferred_group_bonus_applied(self) -> None:
+        from movarr.config import FiltersConfig
+        cfg = Config()
+        cfg = cfg.model_copy(
+            update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])}
+        )
+        new_san = "The Matrix 1999 1080p BluRay PublicHD"
+        lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
+        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
+
 
 # _safe_path_component
 
