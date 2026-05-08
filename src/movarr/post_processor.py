@@ -23,7 +23,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from movarr import torrent_client_health
-from movarr.file_utils import copy_with_verify, make_directory
+from movarr.file_utils import copy_with_verify, delete_file, make_directory
+from movarr.filters import composite_quality_score
 from movarr.parsing import extract_resolution, sanitise
 
 if TYPE_CHECKING:
@@ -35,6 +36,7 @@ __all__ = ["run_post_processing"]
 
 _BBFC_ORDER = ["U", "PG", "12", "12A", "15", "18", "R18"]
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
+_MAX_VIDEO_FILES_IN_MOVIE_DIR = 4  # safety cap: abort deletion if dir contains more than this many video files
 _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 
 
@@ -385,3 +387,112 @@ def _parse_genres(raw: object) -> list[str]:
     except (ValueError, SyntaxError):
         pass
     return []
+
+
+# Library supersession
+
+
+def _delete_superseded_files(
+    dst_dir: str,
+    dst_base: str,
+    new_primary_fname: str,
+    config: "Config",
+) -> int:
+    """Delete video files in *dst_dir* that are superseded by the newly copied file.
+
+    A library file is superseded if, and only if, the new file is strictly better:
+    - new resolution > library resolution, OR
+    - same resolution AND new composite quality score > library composite quality score.
+
+    Two hard-stop safety guards protect against runaway deletion:
+    1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``. Any
+       deviation (equal paths, grandchild, unrelated path) aborts immediately.
+    2. *Count cap*: if the directory holds more than
+       ``_MAX_VIDEO_FILES_IN_MOVIE_DIR`` video files, abort. This catches the
+       flat-library case where all movies live in a single directory.
+
+    Args:
+        dst_dir: Absolute path to the per-movie destination directory.
+        dst_base: Absolute path to the configured library base directory.
+            Used exclusively for the depth safety guard.
+        new_primary_fname: Filename (not full path) of the newly copied primary video.
+        config: Application configuration.
+
+    Returns:
+        Number of files successfully deleted.
+    """
+    if not os.path.isdir(dst_dir):
+        return 0
+
+    # Safety guard 1: dst_dir must be a direct child of dst_base.
+    resolved_dst = pathlib.Path(dst_dir).resolve()
+    resolved_base = pathlib.Path(dst_base).resolve()
+    if resolved_dst.parent != resolved_base:
+        logger.error(
+            "Auto-delete safety check failed: '{}' is not a direct child of '{}'; skipping.",
+            dst_dir,
+            dst_base,
+        )
+        return 0
+
+    try:
+        entries = os.listdir(dst_dir)
+    except OSError:
+        logger.error("Could not list directory '{}'; skipping auto-delete.", dst_dir)
+        return 0
+
+    # Safety guard 2: cap on number of video files in the directory.
+    video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
+    if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
+        logger.warning(
+            "Auto-delete skipped: %d video files in '%s' exceeds max %d; no files deleted.",
+            len(video_files),
+            dst_dir,
+            _MAX_VIDEO_FILES_IN_MOVIE_DIR,
+        )
+        return 0
+
+    new_san = sanitise(new_primary_fname) or ""
+    new_res_str = extract_resolution(new_san)
+
+    deleted = 0
+    for fname in video_files:
+        if fname == new_primary_fname:
+            continue
+
+        lib_san = sanitise(fname) or ""
+        lib_res_str = extract_resolution(lib_san)
+
+        if not new_res_str or not lib_res_str:
+            logger.debug(
+                "Skipping auto-delete for '{}': resolution unparseable (new='{}', lib='{}').",
+                fname,
+                new_res_str,
+                lib_res_str,
+            )
+            continue
+
+        try:
+            new_res_int = int(new_res_str)
+            lib_res_int = int(lib_res_str)
+        except (ValueError, TypeError):
+            continue
+
+        should_delete = False
+        if new_res_int > lib_res_int:
+            should_delete = True
+        elif new_res_int == lib_res_int:
+            new_score = composite_quality_score(new_san, lib_san, config)
+            lib_score = composite_quality_score(lib_san, new_san, config)
+            should_delete = new_score > lib_score
+        # else: new_res_int < lib_res_int -> library has higher res, keep it
+
+        if should_delete:
+            lib_path = os.path.join(dst_dir, fname)
+            if delete_file(lib_path):
+                logger.info("Auto-deleted superseded library file '{}'.", lib_path)
+                deleted += 1
+            else:
+                logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
+
+    return deleted

@@ -10,7 +10,9 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
+import os
 from movarr.filters import composite_quality_score
+from movarr.post_processor import _delete_superseded_files
 from movarr.post_processor import (
     _apply_path_remapping,
     _build_copy_list,
@@ -54,6 +56,239 @@ class TestCompositeQualityScore:
         assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
 
 
+
+
+class TestDeleteSupersededFiles:
+    """Tests for _delete_superseded_files — deletes lower-quality library videos."""
+
+    # ------------------------------------------------------------------
+    # Normal deletion cases
+    # ------------------------------------------------------------------
+
+    def test_deletes_lower_quality_same_resolution(self, tmp_path: Path) -> None:
+        """Lower-scored video at same resolution is deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        dst_dir = str(movie_dir)
+        dst_base = str(tmp_path)
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        cfg = Config()
+        count = _delete_superseded_files(dst_dir, dst_base, new_fname, cfg)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists()
+        assert (movie_dir / new_fname).exists()
+
+    def test_deletes_lower_resolution_library_file(self, tmp_path: Path) -> None:
+        """Library file at lower resolution is deleted when new file is higher res."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_multiple_lower_quality_files_all_deleted(self, tmp_path: Path) -> None:
+        """All lower-quality files in the directory are deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        for name in ["The Matrix 1999 1080p BluRay.mkv", "The Matrix 1999 1080p HDTV.mkv"]:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 2
+
+    # ------------------------------------------------------------------
+    # Conservative keep cases
+    # ------------------------------------------------------------------
+
+    def test_keeps_equal_quality(self, tmp_path: Path) -> None:
+        """Equal-scored video is NOT deleted (strictly-lower-only rule)."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay x264.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / old_fname).exists()
+
+    def test_keeps_higher_resolution_library_file(self, tmp_path: Path) -> None:
+        """Library file at higher resolution is NOT deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 2160p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_non_video_files(self, tmp_path: Path) -> None:
+        """Non-video files (NFO, SRT) are never touched."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        nfo = movie_dir / "The Matrix 1999.nfo"
+        nfo.write_bytes(b"metadata")
+        srt = movie_dir / "The Matrix 1999.srt"
+        srt.write_bytes(b"subs")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert nfo.exists()
+        assert srt.exists()
+
+    def test_skips_unparseable_resolution_library_file(self, tmp_path: Path) -> None:
+        """Conservative: library file with no parseable resolution is left alone."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_unparseable_resolution_new_file(self, tmp_path: Path) -> None:
+        """Conservative: if the new file has no parseable resolution, nothing is deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_does_not_delete_new_file_itself(self, tmp_path: Path) -> None:
+        """The newly copied file is never a deletion candidate."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"content")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / new_fname).exists()
+
+    def test_returns_zero_if_dst_dir_missing(self, tmp_path: Path) -> None:
+        """Non-existent directory returns 0 without raising."""
+        count = _delete_superseded_files(
+            str(tmp_path / "nonexistent" / "Movie (2000)"),
+            str(tmp_path / "nonexistent"),
+            "movie.mkv",
+            Config(),
+        )
+        assert count == 0
+
+    # ------------------------------------------------------------------
+    # Safety guard: depth / parent check
+    # ------------------------------------------------------------------
+
+    def test_safety_guard_rejects_dst_dir_equal_to_dst_base(self, tmp_path: Path) -> None:
+        """Guard 1: dst_dir == dst_base is rejected — we never operate on the library root."""
+        lib_root = tmp_path / "Movies"
+        lib_root.mkdir()
+        (lib_root / "some_movie.mkv").write_bytes(b"x")
+
+        count = _delete_superseded_files(
+            str(lib_root),   # dst_dir == dst_base -> MUST abort
+            str(lib_root),
+            "new_movie.mkv",
+            Config(),
+        )
+        assert count == 0
+        assert (lib_root / "some_movie.mkv").exists()
+
+    def test_safety_guard_rejects_grandchild_dir(self, tmp_path: Path) -> None:
+        """Guard 1: dst_dir two levels below dst_base is rejected."""
+        lib_root = tmp_path / "Movies"
+        deep_dir = lib_root / "subcat" / "Movie (2000)"
+        deep_dir.mkdir(parents=True)
+        (deep_dir / "old.mkv").write_bytes(b"x")
+
+        # dst_base is lib_root but dst_dir is two levels deep -> abort
+        count = _delete_superseded_files(
+            str(deep_dir),
+            str(lib_root),
+            "new.mkv",
+            Config(),
+        )
+        assert count == 0
+        assert (deep_dir / "old.mkv").exists()
+
+    # ------------------------------------------------------------------
+    # Safety guard: video file count cap
+    # ------------------------------------------------------------------
+
+    def test_safety_guard_rejects_too_many_video_files(self, tmp_path: Path) -> None:
+        """Guard 2: more than _MAX_VIDEO_FILES_IN_MOVIE_DIR video files -> abort, nothing deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Create 4 more video files -- total 5 (> cap of 4)
+        lower_quality_files = [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+            "The Matrix 1999 720p HDTV.mkv",
+        ]
+        for name in lower_quality_files:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        # All files untouched
+        for name in lower_quality_files:
+            assert (movie_dir / name).exists(), f"{name} should not have been deleted"
+
+    def test_safety_guard_allows_exactly_four_video_files(self, tmp_path: Path) -> None:
+        """Guard 2: exactly _MAX_VIDEO_FILES_IN_MOVIE_DIR video files -> proceeds normally."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # 3 lower-quality files -> total 4 (= cap, allowed)
+        for name in [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+        ]:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 3  # all three lower-quality files deleted
 # _safe_path_component
 
 
