@@ -242,6 +242,10 @@ def _process_one(
         copied_fnames.add(dst_fname)
 
     if all_ok:
+        if config.post_process.hooks.post_copy:
+            if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
+                all_ok = False
+    if all_ok:
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
         if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:

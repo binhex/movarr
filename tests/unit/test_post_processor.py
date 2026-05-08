@@ -1689,3 +1689,125 @@ class TestProcessOneSupersession:
         _process_one(torrent, cfg, qbt, db)
 
         assert old_file.exists(), "File should be untouched when copy failed"
+
+
+class TestProcessOneHooks:
+    """Tests for post_copy hook wiring in _process_one."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(
+            hd_path="/media/hd", uhd_path=""
+        )
+        return cfg
+
+    def _torrent(self) -> dict[str, Any]:
+        return {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "movie/The Matrix 1999 1080p.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+
+    def _db_record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        rec.imdb_genres_list = "[]"
+        rec.imdb_certification = ""
+        rec.imdb_cert_source = "imdbpie"
+        rec.index_title = "The Matrix 1999 1080p BluRay"
+        return rec
+
+    def test_post_copy_hook_fires_on_successful_copy(
+        self, mocker: MockerFixture
+    ) -> None:
+        """post_copy hook is called after all files copy successfully."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "echo {dir}"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" in labels
+
+    def test_post_copy_hook_does_not_fire_on_copy_failure(
+        self, mocker: MockerFixture
+    ) -> None:
+        """post_copy hook is NOT called when a copy fails."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "echo {dir}"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=False)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" not in labels
+
+    def test_post_copy_hook_not_called_when_empty(
+        self, mocker: MockerFixture
+    ) -> None:
+        """No subprocess is spawned when post_copy is empty string (default)."""
+        config = self._config()
+        # hooks.post_copy defaults to "" — intentionally left unset
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" not in labels
+
+    def test_post_copy_hook_failure_blocks_cleanup(
+        self, mocker: MockerFixture
+    ) -> None:
+        """When post_copy hook fails, delete_lower_quality and remove_completed are skipped."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "false"  # always fails
+        config.post_process.delete_lower_quality = True
+        config.post_process.remove_completed = True
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/The Matrix 1999 1080p.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_delete = mocker.patch("movarr.post_processor._delete_superseded_files")
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        mock_delete.assert_not_called()
+        qbt.delete_torrent.assert_not_called()
