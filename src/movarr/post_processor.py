@@ -76,7 +76,7 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
         True if the command exits with code 0, False otherwise.
     """
     cmd = command.replace("{dir}", shlex.quote(dir_path))
-    logger.info("Running {} hook for: {}", label, dir_path)
+    logger.info("Running {} hook: {}", label, cmd)
     proc = subprocess.Popen(  # noqa: S602
         cmd,
         shell=True,
