@@ -102,7 +102,10 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
             except subprocess.TimeoutExpired:
                 continue  # escalate to SIGKILL
         else:
-            proc.communicate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass  # process is already killed; nothing more we can do
         logger.error("{} hook timed out after 300 s.", label)
         return False
     if stdout:
