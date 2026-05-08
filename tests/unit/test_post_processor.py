@@ -577,7 +577,6 @@ class TestSafePathComponent:
         assert _safe_path_component("") == ""
 
 
-
 # _run_hook
 
 
@@ -621,6 +620,7 @@ class TestRunHook:
 
     def test_returns_false_on_timeout(self, mocker: MockerFixture) -> None:
         import subprocess as _subprocess
+
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
         mocker.patch("movarr.post_processor.os.killpg")
         mock_proc = mocker.Mock()
@@ -631,6 +631,7 @@ class TestRunHook:
         ]
         mock_popen.return_value = mock_proc
         assert _run_hook("echo {dir}", "/tmp/movie", "post_copy") is False
+
 
 # _cert_acceptable
 
@@ -1696,9 +1697,7 @@ class TestProcessOneHooks:
 
     def _config(self) -> Config:
         cfg = Config()
-        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(
-            hd_path="/media/hd", uhd_path=""
-        )
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
         return cfg
 
     def _torrent(self) -> dict[str, Any]:
@@ -1721,9 +1720,7 @@ class TestProcessOneHooks:
         rec.index_title = "The Matrix 1999 1080p BluRay"
         return rec
 
-    def test_post_copy_hook_fires_on_successful_copy(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_copy_hook_fires_on_successful_copy(self, mocker: MockerFixture) -> None:
         """post_copy hook is called after all files copy successfully."""
         config = self._config()
         config.post_process.hooks.post_copy = "echo {dir}"
@@ -1743,9 +1740,7 @@ class TestProcessOneHooks:
         labels = [call[0][2] for call in mock_hook.call_args_list]
         assert "post_copy" in labels
 
-    def test_post_copy_hook_does_not_fire_on_copy_failure(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_copy_hook_does_not_fire_on_copy_failure(self, mocker: MockerFixture) -> None:
         """post_copy hook is NOT called when a copy fails."""
         config = self._config()
         config.post_process.hooks.post_copy = "echo {dir}"
@@ -1765,9 +1760,7 @@ class TestProcessOneHooks:
         labels = [call[0][2] for call in mock_hook.call_args_list]
         assert "post_copy" not in labels
 
-    def test_post_copy_hook_not_called_when_empty(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_copy_hook_not_called_when_empty(self, mocker: MockerFixture) -> None:
         """No subprocess is spawned when post_copy is empty string (default)."""
         config = self._config()
         # hooks.post_copy defaults to "" — intentionally left unset
@@ -1787,9 +1780,7 @@ class TestProcessOneHooks:
         labels = [call[0][2] for call in mock_hook.call_args_list]
         assert "post_copy" not in labels
 
-    def test_post_copy_hook_failure_does_not_block_cleanup(
-        self, mocker: MockerFixture
-    ) -> None:
+    def test_post_copy_hook_failure_does_not_block_cleanup(self, mocker: MockerFixture) -> None:
         """When post_copy hook fails, mark_completed, delete_lower_quality, and remove_completed still run."""
         config = self._config()
         config.post_process.hooks.post_copy = "false"  # always fails
@@ -1817,9 +1808,7 @@ class TestProcessOneHooks:
 class TestDeleteSupersededFilesHooks:
     """Tests for pre_delete / post_delete hook wiring."""
 
-    def test_pre_delete_hook_fires_before_deletion(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
+    def test_pre_delete_hook_fires_before_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """pre_delete hook is called when the deletion pass starts."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
@@ -1837,9 +1826,7 @@ class TestDeleteSupersededFilesHooks:
 
         mock_hook.assert_any_call("chattr -i {dir}/*", mocker.ANY, "pre_delete")
 
-    def test_pre_delete_hook_failure_aborts_deletion(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
+    def test_pre_delete_hook_failure_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """If pre_delete hook returns False, no files are deleted and count is 0."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
@@ -1860,9 +1847,7 @@ class TestDeleteSupersededFilesHooks:
         mock_delete.assert_not_called()
         assert (movie_dir / old_fname).exists()
 
-    def test_post_delete_hook_fires_after_deletion(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
+    def test_post_delete_hook_fires_after_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """post_delete hook is called after the deletion loop completes."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
@@ -1886,9 +1871,7 @@ class TestDeleteSupersededFilesHooks:
 
         assert "post_delete" in call_order
 
-    def test_post_delete_does_not_fire_when_pre_delete_aborts(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
+    def test_post_delete_does_not_fire_when_pre_delete_aborts(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """post_delete label never appears in call list when pre_delete fails."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
@@ -1912,9 +1895,7 @@ class TestDeleteSupersededFilesHooks:
 
         assert "post_delete" not in called_labels
 
-    def test_hooks_not_called_when_empty(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
+    def test_hooks_not_called_when_empty(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """No subprocess is spawned when hooks are empty strings."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()

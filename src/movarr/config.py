@@ -452,7 +452,6 @@ class PathRemappingConfig(BaseModel):
     to_path: str = ""
 
 
-
 class PostProcessHooksConfig(BaseModel):
     """Shell commands to run at defined points in the post-processing pipeline.
 

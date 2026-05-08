@@ -14,6 +14,7 @@ Key improvements over siphonator:
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import pathlib
@@ -102,10 +103,8 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
             except subprocess.TimeoutExpired:
                 continue  # escalate to SIGKILL
         else:
-            try:
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass  # process is already killed; nothing more we can do
         logger.error("{} hook timed out after 300 s.", label)
         return False
     if stdout:
@@ -594,14 +593,10 @@ def _delete_superseded_files(
     if config.post_process.hooks.pre_delete:
         try:
             if not _run_hook(config.post_process.hooks.pre_delete, str(resolved_dst), "pre_delete"):
-                logger.error(
-                    "pre_delete hook failed for '{}'; aborting deletion pass.", dst_dir
-                )
+                logger.error("pre_delete hook failed for '{}'; aborting deletion pass.", dst_dir)
                 return 0
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "pre_delete hook raised an exception for '{}': {}; aborting deletion pass.", dst_dir, exc
-            )
+            logger.error("pre_delete hook raised an exception for '{}': {}; aborting deletion pass.", dst_dir, exc)
             return 0
 
     for fname in video_files:

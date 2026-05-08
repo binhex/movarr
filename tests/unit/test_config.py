@@ -791,4 +791,3 @@ class TestMigrationV213ToV214:
         result = _migrate_v213_to_v214(raw)
         assert result["post_process"]["delete_lower_quality"] is True
         assert "hooks" in result["post_process"]
-
