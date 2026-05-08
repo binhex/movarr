@@ -88,12 +88,17 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
         start_new_session=True,
     )
     try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, ProcessLookupError):
+        pgid = None
+    try:
         stdout, stderr = proc.communicate(timeout=300)
     except subprocess.TimeoutExpired:
         # Signal escalation: SIGTERM then SIGKILL
         for sig in (signal.SIGTERM, signal.SIGKILL):
             with contextlib.suppress(OSError, ProcessLookupError):
-                os.killpg(os.getpgid(proc.pid), sig)
+                if pgid is not None:
+                    os.killpg(pgid, sig)
             try:
                 proc.communicate(timeout=5)
                 break
@@ -101,7 +106,8 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
                 continue
         # Unconditional SIGKILL to catch TERM-ignoring children that closed their pipes
         with contextlib.suppress(OSError, ProcessLookupError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGKILL)
         # Final reap
         try:
             proc.wait(timeout=5)
@@ -604,13 +610,23 @@ def _delete_superseded_files(
 
     # Re-verify primary is still present after the hook ran.
     # A hook that renames the primary would cause stale-name deletions.
-    if config.post_process.hooks.pre_delete and new_primary_fname not in os.listdir(str(resolved_dst)):
-        logger.warning(
-            "pre_delete hook appears to have renamed the primary file '{}'; "
-            "aborting deletion pass.",
-            new_primary_fname,
-        )
-        return 0
+    if config.post_process.hooks.pre_delete:
+        try:
+            remaining = os.listdir(str(resolved_dst))
+        except OSError:
+            logger.error(
+                "pre_delete hook appears to have removed or made unreadable '{}'; "
+                "aborting deletion pass.",
+                dst_dir,
+            )
+            return 0
+        if new_primary_fname not in remaining:
+            logger.warning(
+                "pre_delete hook appears to have renamed the primary file '{}'; "
+                "aborting deletion pass.",
+                new_primary_fname,
+            )
+            return 0
 
     for fname in video_files:
         if fname in protected:

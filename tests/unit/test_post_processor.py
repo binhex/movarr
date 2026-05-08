@@ -585,6 +585,7 @@ class TestRunHook:
 
     def test_returns_true_on_zero_exit(self, mocker: MockerFixture) -> None:
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
         mock_proc = mocker.Mock()
         mock_proc.communicate.return_value = ("", "")
         mock_proc.returncode = 0
@@ -593,6 +594,7 @@ class TestRunHook:
 
     def test_returns_false_on_nonzero_exit(self, mocker: MockerFixture) -> None:
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
         mock_proc = mocker.Mock()
         mock_proc.communicate.return_value = ("", "error")
         mock_proc.returncode = 1
@@ -601,6 +603,7 @@ class TestRunHook:
 
     def test_substitutes_dir_placeholder(self, mocker: MockerFixture) -> None:
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
         mock_proc = mocker.Mock()
         mock_proc.communicate.return_value = ("", "")
         mock_proc.returncode = 0
@@ -611,6 +614,7 @@ class TestRunHook:
 
     def test_uses_shell_true(self, mocker: MockerFixture) -> None:
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
         mock_proc = mocker.Mock()
         mock_proc.communicate.return_value = ("", "")
         mock_proc.returncode = 0
