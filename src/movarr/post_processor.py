@@ -90,25 +90,23 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
     try:
         stdout, stderr = proc.communicate(timeout=300)
     except subprocess.TimeoutExpired:
-        # Kill the entire process group so shell-spawned children don't
-        # outlive the timeout and continue mutating files in the background.
+        # Signal escalation: SIGTERM then SIGKILL
         for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(proc.pid, sig)
-            except ProcessLookupError:
-                break  # already gone
+            with contextlib.suppress(OSError, ProcessLookupError):
+                os.killpg(os.getpgid(proc.pid), sig)
             try:
                 proc.communicate(timeout=5)
                 break
             except subprocess.TimeoutExpired:
-                continue  # escalate to SIGKILL
-        else:
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.communicate(timeout=5)
+                continue
+        # Unconditional SIGKILL to catch TERM-ignoring children that closed their pipes
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        # Final reap
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            pass  # process is truly gone; nothing to reap
+            pass
         logger.error("{} hook timed out after 300 s.", label)
         return False
     if stdout:
@@ -603,6 +601,16 @@ def _delete_superseded_files(
         except Exception as exc:  # noqa: BLE001
             logger.error("pre_delete hook raised an exception for '{}': {}; aborting deletion pass.", dst_dir, exc)
             return 0
+
+    # Re-verify primary is still present after the hook ran.
+    # A hook that renames the primary would cause stale-name deletions.
+    if config.post_process.hooks.pre_delete and new_primary_fname not in os.listdir(str(resolved_dst)):
+        logger.warning(
+            "pre_delete hook appears to have renamed the primary file '{}'; "
+            "aborting deletion pass.",
+            new_primary_fname,
+        )
+        return 0
 
     for fname in video_files:
         if fname in protected:
