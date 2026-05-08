@@ -6,7 +6,7 @@ Three tasks run on configurable intervals:
   3. **post_processing** — copy completed torrents to the library.
 
 The scheduler can run in:
-  - **daemon mode** — background process (detaches, writes PID file).
+  - **daemon mode** — long-running foreground process (suitable for systemd/Docker, writes PID file).
   - **foreground mode** — runs each task once then exits (useful for testing).
 """
 

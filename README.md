@@ -223,7 +223,7 @@ Controls what is searched and which indexers are used.
 | `jackett_indexer` | Jackett indexer to query. Use `all` to query every configured indexer simultaneously. | `all` |
 | `prowlarr_indexer` | Prowlarr indexer ID to query. Use `all` (maps to `-1`) or a numeric indexer ID from Prowlarr. | `all` |
 | `ignore_list` | Jackett indexer names to skip even when `jackett_indexer` is `all`. | `[]` |
-| `search` | List of search criteria blocks (see below). | *(1080p + 2160p)* |
+| `search` | List of search criteria blocks (see below). | *(1080p only)* |
 | `override_search` | Per-indexer overrides for search parameters, keyed by indexer name. | `{}` |
 
 Each entry in `search`:
@@ -243,8 +243,8 @@ Each entry in `search`:
 | `queue_management_enabled` | Master switch for the queue management pipeline. | `true` |
 | `stalled_monitor_enabled` | Remove torrents that have stalled (no peers, no download progress). | `true` |
 | `metadata_monitor_enabled` | Remove torrents stuck in metadata-fetching state. | `true` |
-| `stalled_delete_torrent_data` | Also delete downloaded data when removing a stalled torrent. | `false` |
-| `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `false` |
+| `stalled_delete_torrent_data` | Also delete downloaded data when removing a stalled torrent. | `true` |
+| `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `true` |
 | `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
 | `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
 | `connection_down_grace_mins` | Deprecated. qBittorrent's own connection status is used to detect internet outages. | `30` |
@@ -380,9 +380,7 @@ uv run pytest
 
 **Q: movarr queued a movie I already have. Why?**
 
-Library matching works by resolving the torrent title to an IMDb ID and scanning your `library_path_list` for a
-file or folder whose name contains that IMDb ID in `{imdb-ttXXXXXXX}` format. Ensure your media files follow
-the Plex/Jellyfin naming convention and that all library roots are listed under `general.library_path_list`.
+Library matching works by extracting the movie title and year from the torrent's index title and scanning your `library_path_list` for video files whose sanitised filename contains the same title and year. Ensure your media files include the release year in their filename (e.g. `The Matrix 1999 1080p BluRay.mkv`). movarr also attempts an IMDb ID lookup as a secondary match when the index title can be resolved.
 
 **Q: How do I prevent movarr from downloading non-English movies?**
 

@@ -615,4 +615,11 @@ def load_config(config_path: str | Path) -> Config:
     raw = _run_migrations(raw, path)
 
     merged = _deep_merge(_default_config_dict(), raw)
+    _known_top_level = set(Config.model_fields.keys())
+    _unknown_keys = set(merged.keys()) - _known_top_level
+    if _unknown_keys:
+        logger.warning(
+            "Unknown config keys (will be ignored): {}. Check for typos.",
+            ", ".join(sorted(_unknown_keys)),
+        )
     return Config.model_validate(merged)

@@ -791,3 +791,19 @@ class TestMigrationV213ToV214:
         result = _migrate_v213_to_v214(raw)
         assert result["post_process"]["delete_lower_quality"] is True
         assert "hooks" in result["post_process"]
+
+
+class TestLoadConfigUnknownKeys:
+    """load_config must warn when the config file contains unknown top-level keys."""
+
+    def test_warns_on_unknown_top_level_key(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A typo'd top-level key (e.g. 'gneral') must produce a logger.warning."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("gneral: {}\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        cfg = load_config(str(cfg_file))
+        assert isinstance(cfg, Config)
+        mock_warning.assert_called_once()
+        call_args = mock_warning.call_args
+        # First positional arg is the format string; second is the key list string.
+        assert "gneral" in call_args.args[1]
