@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
-from movarr.filters import composite_quality_score
+from movarr.filters import composite_quality_score, supersession_quality_score
 from movarr.post_processor import (
     _apply_path_remapping,
     _build_copy_list,
@@ -52,6 +52,38 @@ class TestCompositeQualityScore:
         new_san = "The Matrix 1999 1080p BluRay PublicHD"
         lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
         assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
+
+
+class TestSupersessionQualityScore:
+    """supersession_quality_score excludes special-edition bonus unlike composite_quality_score."""
+
+    def test_special_edition_does_not_beat_non_edition(self) -> None:
+        """Extended cut must NOT score higher than theatrical in a supersession comparison.
+
+        composite_quality_score would award +10 to the extended cut; supersession must not.
+        """
+        cfg = Config()
+        extended_san = "The Matrix 1999 1080p BluRay Extended"
+        theatrical_san = "The Matrix 1999 1080p BluRay"
+        assert supersession_quality_score(extended_san, theatrical_san, cfg) == supersession_quality_score(
+            theatrical_san, extended_san, cfg
+        )
+
+    def test_preferred_group_bonus_still_applied(self) -> None:
+        """Group bonus is still included so genuine quality differences are detected."""
+        from movarr.config import FiltersConfig
+
+        cfg = Config().model_copy(update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])})
+        new_san = "The Matrix 1999 1080p BluRay PublicHD"
+        lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
+        assert supersession_quality_score(new_san, lib_san, cfg) > supersession_quality_score(lib_san, new_san, cfg)
+
+    def test_remux_beats_bluray(self) -> None:
+        """Remux still scores higher than BluRay encode."""
+        cfg = Config()
+        assert supersession_quality_score(
+            "The Matrix 1999 1080p Remux", "The Matrix 1999 1080p BluRay", cfg
+        ) > supersession_quality_score("The Matrix 1999 1080p BluRay", "The Matrix 1999 1080p Remux", cfg)
 
 
 class TestDeleteSupersededFiles:
@@ -285,6 +317,72 @@ class TestDeleteSupersededFiles:
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
         assert count == 3  # all three lower-quality files deleted
+
+    def test_aborts_if_primary_file_absent(self, tmp_path: Path) -> None:
+        """Abort if new_primary_fname is not present in dst_dir.
+
+        If the primary file was filtered out by exclusion rules, canonical_fname
+        won't exist in the directory. We must not delete anything in that case —
+        we cannot safely tell 'new' from 'old'.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        # Only the *real* copied file is present — NOT canonical_fname.
+        real_copied = movie_dir / "The Matrix 1999 1080p BluRay.mkv"
+        real_copied.write_bytes(b"real")
+        lib_fname = "The Matrix 1999 720p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        # Pass a canonical_fname that doesn't exist (largest torrent entry was excluded).
+        count = _delete_superseded_files(
+            str(movie_dir),
+            str(tmp_path),
+            "The Matrix 1999 2160p Remux.mkv",  # not present
+            Config(),
+        )
+        assert count == 0
+        assert (movie_dir / lib_fname).exists(), "lib file must be preserved"
+        assert real_copied.exists(), "real copied file must be preserved"
+
+    def test_companion_file_from_same_torrent_is_protected(self, tmp_path: Path) -> None:
+        """Files listed in copied_fnames are never deleted, even if lower quality.
+
+        A multi-file torrent may include a 1080p bonus-feature alongside a 2160p
+        main feature. Both are 'new' — the 1080p must not be deleted.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        companion_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / companion_fname).write_bytes(b"companion")
+
+        count = _delete_superseded_files(
+            str(movie_dir),
+            str(tmp_path),
+            new_fname,
+            Config(),
+            copied_fnames=frozenset({new_fname, companion_fname}),
+        )
+        assert count == 0
+        assert (movie_dir / companion_fname).exists(), "companion must not be deleted"
+
+    def test_special_edition_not_deleted_when_it_replaces_theatrical(self, tmp_path: Path) -> None:
+        """Copying an Extended cut must not delete the theatrical cut at same resolution.
+
+        composite_quality_score awards +10 to Extended vs non-Extended;
+        supersession_quality_score does not, so both editions survive.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay Extended.mkv"
+        (movie_dir / new_fname).write_bytes(b"extended")
+        theatrical_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / theatrical_fname).write_bytes(b"theatrical")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / theatrical_fname).exists(), "theatrical cut must not be deleted"
 
 
 # _safe_path_component
@@ -1291,6 +1389,8 @@ class TestProcessOneSupersession:
         movie_folder.mkdir()
         old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
         old_file.write_bytes(b"old")
+        # canonical_fname for a flat torrent entry is the filename itself; simulate the copy
+        (movie_folder / "The Matrix 1999 1080p Remux.mkv").write_bytes(b"new")
 
         torrent = {
             "torrent_tag": "tag1",

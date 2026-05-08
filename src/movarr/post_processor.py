@@ -24,7 +24,7 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import composite_quality_score
+from movarr.filters import supersession_quality_score
 from movarr.parsing import extract_resolution, sanitise
 
 if TYPE_CHECKING:
@@ -149,6 +149,7 @@ def _process_one(
     canonical_fname = _canonical_filename(largest_fname, largest_rel_path)
 
     all_ok = True
+    copied_fnames: set[str] = set()
     for src_path in src_files:
         src_fname = os.path.basename(src_path)
         dst_fname = canonical_fname if src_fname == largest_fname else src_fname
@@ -159,12 +160,15 @@ def _process_one(
             logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
             all_ok = False
             break
+        copied_fnames.add(dst_fname)
 
     if all_ok:
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
         if config.post_process.delete_lower_quality:
-            deleted = _delete_superseded_files(dst_dir, dst_base, canonical_fname, config)
+            deleted = _delete_superseded_files(
+                dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
+            )
             if deleted:
                 logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
 
@@ -402,12 +406,22 @@ def _delete_superseded_files(
     dst_base: str,
     new_primary_fname: str,
     config: Config,
+    *,
+    copied_fnames: frozenset[str] = frozenset(),
 ) -> int:
     """Delete video files in *dst_dir* that are superseded by the newly copied file.
 
     A library file is superseded if, and only if, the new file is strictly better:
     - new resolution > library resolution, OR
-    - same resolution AND new composite quality score > library composite quality score.
+    - same resolution AND new supersession quality score > library score.
+
+    Special-edition tokens (extended, director's cut, theatrical, unrated) are
+    deliberately excluded from the score comparison — they represent different cuts
+    rather than superior quality and must not trigger deletion of alternate editions.
+
+    Files named in *copied_fnames* (all destinations written in the current torrent
+    run) are never deletion candidates, preventing cross-deletion of companion files
+    that belong to the same torrent.
 
     Two hard-stop safety guards protect against runaway deletion:
     1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``. Any
@@ -421,7 +435,12 @@ def _delete_superseded_files(
         dst_base: Absolute path to the configured library base directory.
             Used exclusively for the depth safety guard.
         new_primary_fname: Filename (not full path) of the newly copied primary video.
+            Must be present in ``dst_dir``; if absent the function returns 0 without
+            deleting anything.
         config: Application configuration.
+        copied_fnames: All destination filenames written during this torrent run.
+            Every filename in this set — including ``new_primary_fname`` — is
+            protected from deletion regardless of its quality score.
 
     Returns:
         Number of files successfully deleted.
@@ -430,6 +449,7 @@ def _delete_superseded_files(
         return 0
 
     # Safety guard 1: dst_dir must be a direct child of dst_base.
+    # Use resolved paths for ALL subsequent I/O to prevent TOCTOU symlink bypass.
     resolved_dst = pathlib.Path(dst_dir).resolve()
     resolved_base = pathlib.Path(dst_base).resolve()
     if resolved_dst.parent != resolved_base:
@@ -441,9 +461,20 @@ def _delete_superseded_files(
         return 0
 
     try:
-        entries = os.listdir(dst_dir)
+        entries = os.listdir(resolved_dst)
     except OSError:
         logger.error("Could not list directory '{}'; skipping auto-delete.", dst_dir)
+        return 0
+
+    # Abort if the primary copied file is absent — we cannot safely identify what
+    # was just written versus what is an old library copy.
+    if new_primary_fname not in entries:
+        logger.warning(
+            "Auto-delete skipped: primary file '{}' not found in '{}'; "
+            "cannot safely distinguish new from old library files.",
+            new_primary_fname,
+            dst_dir,
+        )
         return 0
 
     # Safety guard 2: cap on number of video files in the directory.
@@ -457,12 +488,16 @@ def _delete_superseded_files(
         )
         return 0
 
+    # All filenames written during this torrent run are protected from deletion.
+    # This prevents cross-deletion of companion files in a multi-file torrent.
+    protected = frozenset(copied_fnames) | {new_primary_fname}
+
     new_san = sanitise(new_primary_fname) or ""
     new_res_str = extract_resolution(new_san)
 
     deleted = 0
     for fname in video_files:
-        if fname == new_primary_fname:
+        if fname in protected:
             continue
 
         lib_san = sanitise(fname) or ""
@@ -487,13 +522,13 @@ def _delete_superseded_files(
         if new_res_int > lib_res_int:
             should_delete = True
         elif new_res_int == lib_res_int:
-            new_score = composite_quality_score(new_san, lib_san, config)
-            lib_score = composite_quality_score(lib_san, new_san, config)
+            new_score = supersession_quality_score(new_san, lib_san, config)
+            lib_score = supersession_quality_score(lib_san, new_san, config)
             should_delete = new_score > lib_score
         # else: new_res_int < lib_res_int -> library has higher res, keep it
 
         if should_delete:
-            lib_path = os.path.join(dst_dir, fname)
+            lib_path = str(resolved_dst / fname)
             if delete_file(lib_path):
                 logger.info("Auto-deleted superseded library file '{}'.", lib_path)
                 deleted += 1

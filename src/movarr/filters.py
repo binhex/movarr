@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["composite_quality_score", "filter_by_index", "filter_by_imdb"]
+__all__ = ["composite_quality_score", "filter_by_index", "filter_by_imdb", "supersession_quality_score"]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
@@ -673,6 +673,25 @@ def composite_quality_score(san: str, other_san: str, config: Config) -> int:
     score = quality_score(san)
     score += _group_bonus(san, other_san, config)
     score += _special_edition_bonus(san, other_san)
+    return score
+
+
+def supersession_quality_score(san: str, other_san: str, config: Config) -> int:
+    """Return the quality score for *san* relative to *other_san* for supersession comparisons.
+
+    Like ``composite_quality_score`` but deliberately excludes
+    ``_special_edition_bonus``. Special-edition tokens (extended, director's cut,
+    theatrical, unrated) represent different cuts of a film, not superior audio/video
+    quality. Including them in a deletion-decision score would permanently destroy
+    alternate editions the user may have intentionally kept.
+
+    Args:
+        san: Sanitised title of the candidate file.
+        other_san: Sanitised title of the file being compared against.
+        config: Application configuration (used for preferred group list).
+    """
+    score = quality_score(san)
+    score += _group_bonus(san, other_san, config)
     return score
 
 
