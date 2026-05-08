@@ -105,6 +105,10 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
         else:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.communicate(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # process is truly gone; nothing to reap
         logger.error("{} hook timed out after 300 s.", label)
         return False
     if stdout:
@@ -221,6 +225,7 @@ def _process_one(
     if not make_directory(dst_dir):
         logger.error("Cannot create destination directory '{}'; skipping.", dst_dir)
         return
+    resolved_dst_dir = str(pathlib.Path(dst_dir).resolve())
 
     # Determine canonical filename for the largest file (rename to parent-dir style).
     largest_fname, largest_rel_path = _largest_file(torrent)
@@ -245,10 +250,10 @@ def _process_one(
         logger.info("Marked tag '{}' as completed.", tag)
         if config.post_process.hooks.post_copy:
             try:
-                if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
-                    logger.warning("post_copy hook failed for '{}'; continuing.", dst_dir)
+                if not _run_hook(config.post_process.hooks.post_copy, resolved_dst_dir, "post_copy"):
+                    logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", dst_dir, exc)
+                logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
         if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
             deleted = _delete_superseded_files(
                 dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
