@@ -109,6 +109,7 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
         logger.debug("{} hook stdout: {}", label, stdout.rstrip())
     if stderr:
         logger.debug("{} hook stderr: {}", label, stderr.rstrip())
+    logger.info("{} hook completed with exit code {}.", label, proc.returncode)
     if proc.returncode != 0:
         logger.warning("{} hook exited with code {}.", label, proc.returncode)
         return False
