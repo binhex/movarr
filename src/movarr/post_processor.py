@@ -25,7 +25,7 @@ from loguru import logger
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
 from movarr.filters import supersession_quality_score
-from movarr.parsing import extract_resolution, sanitise
+from movarr.parsing import extract_movie_title, extract_resolution, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
@@ -165,7 +165,7 @@ def _process_one(
     if all_ok:
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
-        if config.post_process.delete_lower_quality:
+        if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
             deleted = _delete_superseded_files(
                 dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
             )
@@ -448,6 +448,15 @@ def _delete_superseded_files(
     if not os.path.isdir(dst_dir):
         return 0
 
+    # Require the primary file to be a video — a non-video primary (e.g. .rar, .nfo)
+    # cannot produce a meaningful quality comparison and must not trigger deletions.
+    if not new_primary_fname.lower().endswith(_VIDEO_EXTS):
+        logger.debug(
+            "Auto-delete skipped: primary file '{}' is not a recognised video format.",
+            new_primary_fname,
+        )
+        return 0
+
     # Safety guard 1: dst_dir must be a direct child of dst_base.
     # Use resolved paths for ALL subsequent I/O to prevent TOCTOU symlink bypass.
     resolved_dst = pathlib.Path(dst_dir).resolve()
@@ -493,6 +502,7 @@ def _delete_superseded_files(
     protected = frozenset(copied_fnames) | {new_primary_fname}
 
     new_san = sanitise(new_primary_fname) or ""
+    new_title = extract_movie_title(new_san)
     new_res_str = extract_resolution(new_san)
 
     deleted = 0
@@ -501,6 +511,21 @@ def _delete_superseded_files(
             continue
 
         lib_san = sanitise(fname) or ""
+
+        # Title match: skip files that parse to a different movie title.
+        # This protects pre-existing bonus features, trailers, and companion
+        # content whose names include the same year but different title tokens.
+        # Conservative: if either title cannot be parsed, keep the file.
+        lib_title = extract_movie_title(lib_san)
+        if new_title and lib_title and new_title != lib_title:
+            logger.debug(
+                "Skipping auto-delete for '{}': title '{}' differs from primary '{}'.",
+                fname,
+                lib_title,
+                new_title,
+            )
+            continue
+
         lib_res_str = extract_resolution(lib_san)
 
         if not new_res_str or not lib_res_str:

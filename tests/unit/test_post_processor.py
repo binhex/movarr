@@ -384,6 +384,95 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / theatrical_fname).exists(), "theatrical cut must not be deleted"
 
+    def test_non_video_primary_skips_deletion(self, tmp_path: Path) -> None:
+        """A non-video primary file (.rar, .nfo) must not trigger any deletions."""
+        movie_dir = tmp_path / "Movie (2024)"
+        movie_dir.mkdir()
+        non_video_primary = "Movie 2024 2160p BluRay.rar"
+        (movie_dir / non_video_primary).write_bytes(b"archive")
+        lib_fname = "Movie 2024 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), non_video_primary, Config())
+        assert count == 0
+        assert (movie_dir / lib_fname).exists(), "lib file must not be deleted for non-video primary"
+
+    def test_different_title_sibling_is_preserved(self, tmp_path: Path) -> None:
+        """A file with a different movie title in the same folder is never deleted.
+
+        Protects bonus features/companion docs whose titles differ from the main film.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        bonus_fname = "The Matrix Revisited 2001 1080p HDTV.mkv"
+        (movie_dir / bonus_fname).write_bytes(b"bonus")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / bonus_fname).exists(), "different-title file must not be deleted"
+
+    def test_skips_deletion_when_canonical_not_in_copied_fnames_in_process_one(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """If the largest torrent entry is excluded, canonical_fname is not in copied_fnames.
+
+        _process_one must NOT call _delete_superseded_files in that case even if a
+        stale library file with the same canonical name exists.
+        """
+        from movarr.config import DefaultCopyLibraryConfig, PostProcessConfig
+
+        dst_base = tmp_path
+        cfg = Config().model_copy(
+            update={
+                "post_process": PostProcessConfig(
+                    copy_completed=True,
+                    remove_completed=False,
+                    delete_lower_quality=True,
+                    # exclude the large remux by regex so it's filtered from src_files
+                    exclude_file_regex_list=["Remux"],
+                    default_copy_library=DefaultCopyLibraryConfig(hd_path=str(dst_base)),
+                )
+            }
+        )
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        # Torrent with remux (excluded by regex) + srt that passes
+        torrent = {
+            "torrent_tag": "tag_excluded",
+            "torrent_hash": "excl123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                # Remux is excluded by exclude_file_regex_list
+                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000},
+            ],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        # copy_with_verify is NOT patched — but src_files will be empty after filtering,
+        # so no copy occurs and copied_fnames stays empty.
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        # old_file must be untouched since the primary was never copied
+        assert old_file.exists(), "lib file must not be deleted when primary was excluded"
+
 
 # _safe_path_component
 
