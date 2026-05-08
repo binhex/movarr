@@ -25,6 +25,7 @@ from movarr.post_processor import (
     _process_one,
     _resolution_from_index_title,
     _resolve_destination,
+    _run_hook,
     _safe_path_component,
     run_post_processing,
 )
@@ -575,6 +576,61 @@ class TestSafePathComponent:
     def test_empty_string(self) -> None:
         assert _safe_path_component("") == ""
 
+
+
+# _run_hook
+
+
+class TestRunHook:
+    """Tests for the _run_hook subprocess helper."""
+
+    def test_returns_true_on_zero_exit(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo hello", "/tmp/movie", "post_copy") is True
+
+    def test_returns_false_on_nonzero_exit(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "error")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+        assert _run_hook("false", "/tmp/movie", "pre_delete") is False
+
+    def test_substitutes_dir_placeholder(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("chattr -i {dir}/*", "/mnt/media/The Matrix (1999)", "pre_delete")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "chattr -i '/mnt/media/The Matrix (1999)'/*"
+
+    def test_uses_shell_true(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+        assert mock_popen.call_args[1]["shell"] is True
+
+    def test_returns_false_on_timeout(self, mocker: MockerFixture) -> None:
+        import subprocess as _subprocess
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.killpg")
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        mock_proc.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd="echo", timeout=300),
+            ("", ""),  # drain after SIGTERM
+        ]
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo {dir}", "/tmp/movie", "post_copy") is False
 
 # _cert_acceptable
 

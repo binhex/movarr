@@ -18,6 +18,9 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import signal
+import subprocess
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -46,6 +49,70 @@ _EXTRAS_RE = re.compile(
     r"|bonus|extra|extras|special)\b",
     re.IGNORECASE,
 )
+
+
+def _run_hook(command: str, dir_path: str, label: str) -> bool:
+    """Run a post-process hook command, substituting ``{dir}`` with *dir_path*.
+
+    Uses ``shell=True`` so that glob patterns (e.g. ``chattr -i {dir}/*``) are
+    expanded by the shell. The command originates from the user's own config
+    file, so the trust boundary is the same as the rest of the configuration.
+
+    ``{dir}`` is replaced with a *shell-quoted* form of *dir_path* via
+    :func:`shlex.quote`, so the placeholder is already safe for paths that
+    contain spaces or shell metacharacters.  Do **not** add extra quotes around
+    ``{dir}`` in the template — doing so will produce literal quote characters
+    in the expanded command.  Correct: ``chattr -i {dir}/*``.
+    Incorrect: ``chattr -i "{dir}/*"``.
+
+    Args:
+        command: Shell command template. ``{dir}`` is replaced with a
+            shell-quoted form of *dir_path*. Do not quote ``{dir}`` in the
+            template.
+        dir_path: Absolute path of the destination directory.
+        label: Hook name for log messages (e.g. ``"pre_delete"``).
+
+    Returns:
+        True if the command exits with code 0, False otherwise.
+    """
+    cmd = command.replace("{dir}", shlex.quote(dir_path))
+    logger.info("Running {} hook for: {}", label, dir_path)
+    proc = subprocess.Popen(  # noqa: S602
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=300)
+    except subprocess.TimeoutExpired:
+        # Kill the entire process group so shell-spawned children don't
+        # outlive the timeout and continue mutating files in the background.
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break  # already gone
+            try:
+                proc.communicate(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                continue  # escalate to SIGKILL
+        else:
+            proc.communicate()
+        logger.error("{} hook timed out after 300 s.", label)
+        return False
+    if stdout:
+        logger.debug("{} hook stdout: {}", label, stdout.rstrip())
+    if stderr:
+        logger.debug("{} hook stderr: {}", label, stderr.rstrip())
+    if proc.returncode != 0:
+        logger.warning("{} hook exited with code {}.", label, proc.returncode)
+        return False
+    return True
 
 
 def _safe_path_component(value: str) -> str:
