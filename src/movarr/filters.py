@@ -38,13 +38,25 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["composite_quality_score", "filter_by_index", "filter_by_imdb", "supersession_quality_score"]
+__all__ = [
+    "composite_quality_score",
+    "filter_by_index",
+    "filter_by_imdb",
+    "special_edition_token",
+    "supersession_quality_score",
+]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 # Public entry points
+
+
+def special_edition_token(san: str) -> str:
+    """Return the special-edition token found in *san* (lowercase), or empty string."""
+    m = _RE_SPECIAL.search(san)
+    return m.group(0).lower() if m else ""
 
 
 def filter_by_index(

@@ -532,6 +532,62 @@ class TestDeleteSupersededFiles:
         # old_file must be untouched since the primary was never copied
         assert old_file.exists(), "lib file must not be deleted when primary was excluded"
 
+    def test_skips_deletion_when_new_primary_is_extras(self, tmp_path: Path) -> None:
+        """New primary that is extras/bonus content must not trigger deletion of the real feature."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Making.Of.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_edition_differs_across_resolution(self, tmp_path: Path) -> None:
+        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"extended")
+        lib_fname = "The.Matrix.1999.Theatrical.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"theatrical")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_same_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """Extended 2160p should delete Extended 1080p — same edition, higher resolution."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_base_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """2160p (no edition) should delete 1080p (no edition) — same base, higher resolution."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
 
 # _safe_path_component
 

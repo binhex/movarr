@@ -28,7 +28,7 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import supersession_quality_score
+from movarr.filters import special_edition_token, supersession_quality_score
 from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
 
 if TYPE_CHECKING:
@@ -597,6 +597,14 @@ def _delete_superseded_files(
     new_title = extract_movie_title(new_san)
     new_res_str = extract_resolution(new_san)
 
+    new_after = extract_after_year(new_san) or ""
+    if _EXTRAS_RE.search(new_after):
+        logger.debug(
+            "Auto-delete skipped: new primary '{}' is bonus/extras content.",
+            new_primary_fname,
+        )
+        return 0
+
     deleted = 0
 
     if config.post_process.hooks.pre_delete:
@@ -615,15 +623,13 @@ def _delete_superseded_files(
             remaining = os.listdir(str(resolved_dst))
         except OSError:
             logger.error(
-                "pre_delete hook appears to have removed or made unreadable '{}'; "
-                "aborting deletion pass.",
+                "pre_delete hook appears to have removed or made unreadable '{}'; aborting deletion pass.",
                 dst_dir,
             )
             return 0
         if new_primary_fname not in remaining:
             logger.warning(
-                "pre_delete hook appears to have renamed the primary file '{}'; "
-                "aborting deletion pass.",
+                "pre_delete hook appears to have renamed the primary file '{}'; aborting deletion pass.",
                 new_primary_fname,
             )
             return 0
@@ -691,6 +697,14 @@ def _delete_superseded_files(
 
         should_delete = False
         if new_res_int > lib_res_int:
+            if special_edition_token(new_san) != special_edition_token(lib_san):
+                logger.debug(
+                    "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
+                    fname,
+                    special_edition_token(new_san) or "base",
+                    special_edition_token(lib_san) or "base",
+                )
+                continue
             should_delete = True
         elif new_res_int == lib_res_int:
             new_score = supersession_quality_score(new_san, lib_san, config)

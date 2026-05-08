@@ -1250,3 +1250,27 @@ class TestCheckBitrateEdgeCases:
         result["index_size"] = "8000000000"
         out = _check_bitrate(result)
         assert out["result"] == "Failed"
+
+
+class TestSpecialEditionToken:
+    """Tests for the public special_edition_token helper."""
+
+    def test_returns_empty_string_for_no_token(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 1080p BluRay") == ""
+
+    def test_returns_extended(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 Extended 1080p BluRay") == "extended"
+
+    def test_returns_theatrical(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 Theatrical 1080p BluRay") == "theatrical"
+
+    def test_case_insensitive(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 EXTENDED 1080p BluRay") == "extended"
