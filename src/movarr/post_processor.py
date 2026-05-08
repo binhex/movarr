@@ -50,6 +50,7 @@ _EXTRAS_RE = re.compile(
     r"|bonus|extra|extras|special)\b",
     re.IGNORECASE,
 )
+_BRACKET_RE = re.compile(r'\[([^\]]+)\]')
 
 
 def _run_hook(command: str, dir_path: str, label: str) -> bool:
@@ -598,7 +599,8 @@ def _delete_superseded_files(
     new_res_str = extract_resolution(new_san)
 
     new_after = extract_after_year(new_san) or ""
-    if _EXTRAS_RE.search(new_after) or _EXTRAS_RE.search(new_primary_fname.lower()):
+    new_bracket = " ".join(_BRACKET_RE.findall(new_primary_fname))
+    if _EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
             new_primary_fname,
@@ -671,7 +673,8 @@ def _delete_superseded_files(
         #    "Making Of", "Featurette"). These are different content, not quality
         #    variants, even when sharing the same title and year.
         lib_after = extract_after_year(lib_san) or ""
-        if _EXTRAS_RE.search(lib_after) or _EXTRAS_RE.search(fname.lower()):
+        lib_bracket = " ".join(_BRACKET_RE.findall(fname))
+        if _EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())):
             logger.debug(
                 "Skipping auto-delete for '{}': looks like extra/bonus content.",
                 fname,

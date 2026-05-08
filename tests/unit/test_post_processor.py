@@ -645,6 +645,34 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
+
+    def test_no_false_positive_for_extra_in_title(self, tmp_path: Path) -> None:
+        """Movie titled 'Extra Ordinary' must NOT be treated as extras content."""
+        movie_dir = tmp_path / "Extra Ordinary (2019)"
+        movie_dir.mkdir()
+        new_fname = "Extra.Ordinary.2019.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Extra.Ordinary.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_bracketed_extras_still_detected(self, tmp_path: Path) -> None:
+        """Bracket-wrapped extras keyword still prevents deletion after false-positive fix."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
 # _safe_path_component
 
 

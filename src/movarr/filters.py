@@ -47,16 +47,24 @@ __all__ = [
 ]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
-_RE_SPECIAL = re.compile(r"\b(extended|director(?:'s|s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
+_RE_SPECIAL = re.compile(r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 # Public entry points
 
 
 def special_edition_token(san: str) -> str:
-    """Return the special-edition token found in *san* (lowercase), or empty string."""
+    """Return the special-edition token found in *san* (lowercase), or empty string.
+
+    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+    """
     m = _RE_SPECIAL.search(san)
-    return m.group(0).lower() if m else ""
+    if not m:
+        return ""
+    token = m.group(0).lower()
+    if "director" in token and "cut" in token:
+        return "directors cut"
+    return token
 
 
 def filter_by_index(

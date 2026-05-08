@@ -1278,9 +1278,19 @@ class TestSpecialEditionToken:
     def test_matches_directors_cut_with_apostrophe(self) -> None:
         from movarr.filters import special_edition_token
 
-        assert special_edition_token("Alien 1979 Director's Cut 2160p") == "director's cut"
+        assert special_edition_token("Alien 1979 Director's Cut 2160p") == "directors cut"
 
     def test_matches_directors_cut_without_apostrophe(self) -> None:
         from movarr.filters import special_edition_token
 
         assert special_edition_token("Alien 1979 Directors Cut 2160p") == "directors cut"
+
+    def test_matches_director_s_cut_space_separated(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director s Cut 2160p") == "directors cut"
+
+    def test_canonicalizes_directors_cut_variants(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Director's Cut") == special_edition_token("Directors Cut") == "directors cut"
