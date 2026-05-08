@@ -90,7 +90,7 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
     try:
         pgid = os.getpgid(proc.pid)
     except (OSError, ProcessLookupError):
-        pgid = None
+        pgid = proc.pid  # With start_new_session=True, proc.pid IS the PGID
     try:
         stdout, stderr = proc.communicate(timeout=300)
     except subprocess.TimeoutExpired:
