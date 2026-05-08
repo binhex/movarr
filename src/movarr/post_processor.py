@@ -604,30 +604,6 @@ def _delete_superseded_files(
             )
             return 0
 
-        # Re-snapshot the directory — the hook may have renamed, removed, or added files.
-        # Acting on stale names produces incorrect deletion counts and can delete files
-        # that no longer exist as superseded candidates.
-        try:
-            entries = os.listdir(resolved_dst)
-        except OSError:
-            logger.error("Could not re-list directory '{}' after pre_delete hook; skipping.", dst_dir)
-            return 0
-        if new_primary_fname not in entries:
-            logger.warning(
-                "Auto-delete skipped: primary file '{}' absent after pre_delete hook ran.",
-                new_primary_fname,
-            )
-            return 0
-        video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
-        # Re-apply count cap: hook may have added video files since Guard 2 ran.
-        if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
-            logger.warning(
-                "Auto-delete skipped: %d video files in '%s' after pre_delete hook exceeds max %d; no files deleted.",
-                len(video_files),
-                dst_dir,
-                _MAX_VIDEO_FILES_IN_MOVIE_DIR,
-            )
-            return 0
     for fname in video_files:
         if fname in protected:
             continue
