@@ -1812,3 +1812,120 @@ class TestProcessOneHooks:
         db.mark_completed.assert_called_once()
         mock_delete.assert_called_once()
         qbt.delete_torrent.assert_called_once()
+
+
+class TestDeleteSupersededFilesHooks:
+    """Tests for pre_delete / post_delete hook wiring."""
+
+    def test_pre_delete_hook_fires_before_deletion(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """pre_delete hook is called when the deletion pass starts."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        mock_hook.assert_any_call("chattr -i {dir}/*", mocker.ANY, "pre_delete")
+
+    def test_pre_delete_hook_failure_aborts_deletion(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """If pre_delete hook returns False, no files are deleted and count is 0."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+        assert (movie_dir / old_fname).exists()
+
+    def test_post_delete_hook_fires_after_deletion(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """post_delete hook is called after the deletion loop completes."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+
+        call_order: list[str] = []
+
+        def fake_hook(cmd: str, d: str, label: str) -> bool:
+            call_order.append(label)
+            return True
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=fake_hook)
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert "post_delete" in call_order
+
+    def test_post_delete_does_not_fire_when_pre_delete_aborts(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """post_delete label never appears in call list when pre_delete fails."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+
+        called_labels: list[str] = []
+
+        def fake_hook(cmd: str, d: str, label: str) -> bool:
+            called_labels.append(label)
+            return False  # always fail
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=fake_hook)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert "post_delete" not in called_labels
+
+    def test_hooks_not_called_when_empty(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """No subprocess is spawned when hooks are empty strings."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        # hooks default to "" — leave unset
+        mock_hook = mocker.patch("movarr.post_processor._run_hook")
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        mock_hook.assert_not_called()

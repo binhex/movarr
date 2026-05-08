@@ -590,6 +590,44 @@ def _delete_superseded_files(
     new_res_str = extract_resolution(new_san)
 
     deleted = 0
+
+    if config.post_process.hooks.pre_delete:
+        try:
+            if not _run_hook(config.post_process.hooks.pre_delete, str(resolved_dst), "pre_delete"):
+                logger.error(
+                    "pre_delete hook failed for '{}'; aborting deletion pass.", dst_dir
+                )
+                return 0
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "pre_delete hook raised an exception for '{}': {}; aborting deletion pass.", dst_dir, exc
+            )
+            return 0
+
+        # Re-snapshot the directory — the hook may have renamed, removed, or added files.
+        # Acting on stale names produces incorrect deletion counts and can delete files
+        # that no longer exist as superseded candidates.
+        try:
+            entries = os.listdir(resolved_dst)
+        except OSError:
+            logger.error("Could not re-list directory '{}' after pre_delete hook; skipping.", dst_dir)
+            return 0
+        if new_primary_fname not in entries:
+            logger.warning(
+                "Auto-delete skipped: primary file '{}' absent after pre_delete hook ran.",
+                new_primary_fname,
+            )
+            return 0
+        video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
+        # Re-apply count cap: hook may have added video files since Guard 2 ran.
+        if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
+            logger.warning(
+                "Auto-delete skipped: %d video files in '%s' after pre_delete hook exceeds max %d; no files deleted.",
+                len(video_files),
+                dst_dir,
+                _MAX_VIDEO_FILES_IN_MOVIE_DIR,
+            )
+            return 0
     for fname in video_files:
         if fname in protected:
             continue
@@ -667,5 +705,12 @@ def _delete_superseded_files(
                 deleted += 1
             else:
                 logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
+
+    if config.post_process.hooks.post_delete:
+        try:
+            if not _run_hook(config.post_process.hooks.post_delete, str(resolved_dst), "post_delete"):
+                logger.warning("post_delete hook failed for '{}'; continuing.", dst_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post_delete hook raised an exception for '{}': {}; continuing.", dst_dir, exc)
 
     return deleted
