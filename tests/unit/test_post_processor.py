@@ -1787,10 +1787,10 @@ class TestProcessOneHooks:
         labels = [call[0][2] for call in mock_hook.call_args_list]
         assert "post_copy" not in labels
 
-    def test_post_copy_hook_failure_blocks_cleanup(
+    def test_post_copy_hook_failure_does_not_block_cleanup(
         self, mocker: MockerFixture
     ) -> None:
-        """When post_copy hook fails, delete_lower_quality and remove_completed are skipped."""
+        """When post_copy hook fails, mark_completed, delete_lower_quality, and remove_completed still run."""
         config = self._config()
         config.post_process.hooks.post_copy = "false"  # always fails
         config.post_process.delete_lower_quality = True
@@ -1809,5 +1809,6 @@ class TestProcessOneHooks:
 
         _process_one(self._torrent(), config, qbt, db)
 
-        mock_delete.assert_not_called()
-        qbt.delete_torrent.assert_not_called()
+        db.mark_completed.assert_called_once()
+        mock_delete.assert_called_once()
+        qbt.delete_torrent.assert_called_once()

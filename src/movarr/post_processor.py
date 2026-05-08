@@ -242,19 +242,17 @@ def _process_one(
         copied_fnames.add(dst_fname)
 
     if all_ok:
-        if config.post_process.hooks.post_copy:
-            if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
-                all_ok = False
-    if all_ok:
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
+        if config.post_process.hooks.post_copy:
+            if not _run_hook(config.post_process.hooks.post_copy, dst_dir, "post_copy"):
+                logger.warning("post_copy hook failed for '{}'; continuing.", dst_dir)
         if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
             deleted = _delete_superseded_files(
                 dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
             )
             if deleted:
                 logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
-
     # Remove source torrent if configured (we're already processing completed torrents).
     if all_ok and config.post_process.remove_completed:
         qbt.delete_torrent(torrent_hash, delete_data=True, state="completed")
