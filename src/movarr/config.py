@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.12.0"
+_CONFIG_VERSION = "2.13.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -147,6 +147,17 @@ def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v212_to_v213(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.12.0 -> v2.13.0: add post_process.delete_lower_quality (default False).
+
+    Defaults to False (disabled) because this option permanently deletes library
+    files and must be explicitly opted in to by the user.
+    """
+    raw.setdefault("post_process", {}).setdefault("delete_lower_quality", False)
+    raw.setdefault("general", {})["config_version"] = "2.13.0"
+    return raw
+
+
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "1.0.0": _migrate_v1_to_v2,
     "2.0.0": _migrate_v2_to_v21,
@@ -161,6 +172,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.9.0": _migrate_v29_to_v210,
     "2.10.0": _migrate_v210_to_v211,
     "2.11.0": _migrate_v211_to_v212,
+    "2.12.0": _migrate_v212_to_v213,
 }
 
 
@@ -444,6 +456,7 @@ class PostProcessConfig(BaseModel):
     copy_library_rules: list[CopyLibraryRuleConfig] = Field(default_factory=list)
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
     path_remapping: list[PathRemappingConfig] = Field(default_factory=list)
+    delete_lower_quality: bool = False
 
 
 class DatabaseConfig(BaseModel):
