@@ -259,6 +259,7 @@ def cli(
     create_logger(
         log_format=_log_format,
         log_level=effective_log_level,
+        log_level_file=config.general.log_level_file.upper(),
         log_path=effective_log_path,
     )
     _logger.info("movarr v{}", _VERSION)

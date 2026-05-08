@@ -14,13 +14,15 @@ from loguru import logger as _logger
 def create_logger(
     log_format: str | Callable,
     log_level: str = "INFO",
+    log_level_file: str = "INFO",
     log_path: str | None = None,
 ) -> Any:
     """Return a configured Loguru logger instance.
 
     Args:
         log_format: Loguru format string for console output.
-        log_level: Minimum log level for both sinks.
+        log_level: Minimum log level for the console sink.
+        log_level_file: Minimum log level for the file sink.
         log_path: Optional path to a log file. The parent directory is created
             automatically if it does not already exist.
     """
@@ -43,7 +45,7 @@ def create_logger(
             os.makedirs(log_dir, exist_ok=True)
         _logger.add(
             sink=log_path,
-            level=log_level.upper(),
+            level=log_level_file.upper(),
             format=log_format,
             rotation="10 MB",
             retention=3,

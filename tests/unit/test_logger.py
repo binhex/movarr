@@ -157,11 +157,11 @@ class TestCreateLoggerWithFile:
         assert file_kwargs.get("encoding") == "utf-8"
 
     def test_file_handler_level_uppercased(self, mocker: MockerFixture, tmp_path: Path) -> None:
-        """log_level should be uppercased and passed to the file handler."""
+        """log_level_file should be uppercased and passed to the file handler."""
         mocker.patch("movarr.logger._logger.remove")
         mock_add = mocker.patch("movarr.logger._logger.add")
 
-        create_logger(log_format="{message}", log_level="debug", log_path=str(tmp_path / "app.log"))
+        create_logger(log_format="{message}", log_level="debug", log_level_file="debug", log_path=str(tmp_path / "app.log"))
 
         file_kwargs = mock_add.call_args_list[1].kwargs
         assert file_kwargs.get("level") == "DEBUG"
@@ -185,3 +185,23 @@ class TestCreateLoggerWithFile:
         create_logger(log_format="{message}", log_level="INFO", log_path=None)
 
         assert mock_add.call_count == 1
+
+
+class TestCreateLoggerFileSinkLevel:
+    """File sink should use log_level_file, not log_level."""
+
+    def test_file_sink_uses_separate_log_level(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """File sink level must come from log_level_file, not log_level."""
+        mocker.patch("movarr.logger._logger.remove")
+        mock_add = mocker.patch("movarr.logger._logger.add")
+
+        log_file = str(tmp_path / "app.log")
+        create_logger(
+            log_format="{message}",
+            log_level="WARNING",
+            log_level_file="DEBUG",
+            log_path=log_file,
+        )
+
+        file_kwargs = mock_add.call_args_list[1].kwargs
+        assert file_kwargs.get("level") == "DEBUG"

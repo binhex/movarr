@@ -142,6 +142,10 @@ def _process_criteria(  # noqa: PLR0912
         index_title = result.get("index_title", "")
         tracker = result.get("index_tracker") or indexer
         with logger.contextualize(tracker=tracker):
+            ignore_list = session.config.index_site.ignore_list
+            if ignore_list and tracker in ignore_list:
+                logger.debug("Skipping result from ignored indexer '{}'.", tracker)
+                continue
             if session.db.is_duplicate_exact(index_title):
                 logger.debug("'{}' already in DB; skipping.", index_title)
                 continue

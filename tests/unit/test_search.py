@@ -1037,3 +1037,36 @@ class TestRunSearchTorrentClientHealthMonitor:
             run_search(config, qbt, db)
 
         mock_health.check_and_notify.assert_called_once_with(is_reachable=True, db=db, config=config)
+
+
+class TestProcessCriteriaIgnoreList:
+    """_process_criteria must skip results from indexers in ignore_list."""
+
+    def test_ignored_tracker_skips_result(self, mocker: MockerFixture) -> None:
+        """Result from a tracker in ignore_list must not be written to DB or added to qbt."""
+        jackett = mocker.MagicMock()
+        raw = {**_base_result(), "index_tracker": "some-tracker"}
+        jackett.search.return_value = iter([raw])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_site.ignore_list = ["some-tracker"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=jackett,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        db.write.assert_not_called()
+        qbt.add_torrent.assert_not_called()
