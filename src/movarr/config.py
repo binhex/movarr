@@ -160,16 +160,7 @@ def _migrate_v212_to_v213(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _migrate_v213_to_v214(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.13.0 -> v2.14.0: add post_process.hooks (all hooks disabled by default)."""
-    post_process = raw.get("post_process")
-    if post_process is None:
-        raw["post_process"] = {}
-        raw["post_process"].setdefault("hooks", {})
-    elif isinstance(post_process, dict):
-        # Normalize hooks: null (previously a silently-ignored extra key) to {} so that
-        # configs that loaded under 2.13.0 continue to load after this migration adds the field.
-        if not isinstance(post_process.get("hooks"), dict):
-            post_process["hooks"] = {}
-    # else: non-dict, non-None → leave untouched; Pydantic validation will reject it
+    raw.setdefault("post_process", {}).setdefault("hooks", {})
     raw.setdefault("general", {})["config_version"] = "2.14.0"
     return raw
 

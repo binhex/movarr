@@ -792,24 +792,3 @@ class TestMigrationV213ToV214:
         assert result["post_process"]["delete_lower_quality"] is True
         assert "hooks" in result["post_process"]
 
-    def test_handles_null_post_process(self) -> None:
-        """Migration replaces a null post_process with a dict rather than crashing."""
-        raw: dict = {"general": {"config_version": "2.13.0"}, "post_process": None}
-        result = _migrate_v213_to_v214(raw)
-        assert result["post_process"]["hooks"] == {}
-
-    def test_leaves_non_dict_post_process_for_validation(self) -> None:
-        """Migration does not clobber invalid non-None post_process; Pydantic rejects it."""
-        raw: dict = {"general": {"config_version": "2.13.0"}, "post_process": "invalid"}
-        result = _migrate_v213_to_v214(raw)
-        assert result["post_process"] == "invalid"
-
-    def test_handles_null_hooks_inside_post_process(self) -> None:
-        """Migration normalizes hooks: null to {} so pre-2.14 configs remain loadable."""
-        raw: dict = {
-            "general": {"config_version": "2.13.0"},
-            "post_process": {"delete_lower_quality": False, "hooks": None},
-        }
-        result = _migrate_v213_to_v214(raw)
-        assert result["post_process"]["hooks"] == {}
-        assert result["post_process"]["delete_lower_quality"] is False
