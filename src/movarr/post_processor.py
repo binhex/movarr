@@ -50,7 +50,7 @@ _EXTRAS_RE = re.compile(
     r"|bonus|extra|extras|special)\b",
     re.IGNORECASE,
 )
-_BRACKET_RE = re.compile(r'\[([^\]]+)\]')
+_BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 
 
 def _run_hook(command: str, dir_path: str, label: str) -> bool:
@@ -110,10 +110,8 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
             if pgid is not None:
                 os.killpg(pgid, signal.SIGKILL)
         # Final reap
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
         logger.error("{} hook timed out after 300 s.", label)
         return False
     if stdout:
@@ -712,8 +710,7 @@ def _delete_superseded_files(
         elif new_res_int == lib_res_int:
             if special_edition_token(new_san) != special_edition_token(lib_san):
                 logger.debug(
-                    "Skipping auto-delete for '{}': edition mismatch at same resolution "
-                    "(new='{}', lib='{}').",
+                    "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
                     fname,
                     special_edition_token(new_san) or "base",
                     special_edition_token(lib_san) or "base",

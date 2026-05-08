@@ -673,6 +673,20 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_brace_wrapped_extras_detected(self, tmp_path: Path) -> None:
+        """Curly-brace-wrapped extras keyword prevents deletion (sanitise strips braces too)."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.{Featurettes}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
 # _safe_path_component
 
 
