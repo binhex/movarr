@@ -146,11 +146,12 @@ def _process_one(
 
     # Determine canonical filename for the largest file (rename to parent-dir style).
     largest_fname, largest_rel_path = _largest_file(torrent)
+    canonical_fname = _canonical_filename(largest_fname, largest_rel_path)
 
     all_ok = True
     for src_path in src_files:
         src_fname = os.path.basename(src_path)
-        dst_fname = _canonical_filename(largest_fname, largest_rel_path) if src_fname == largest_fname else src_fname
+        dst_fname = canonical_fname if src_fname == largest_fname else src_fname
 
         dst_path = os.path.join(dst_dir, dst_fname)
         logger.info("Copying '{}' → '{}'.", src_path, dst_path)
@@ -162,6 +163,12 @@ def _process_one(
     if all_ok:
         db.mark_completed(tag)
         logger.info("Marked tag '{}' as completed.", tag)
+        if config.post_process.delete_lower_quality:
+            deleted = _delete_superseded_files(dst_dir, dst_base, canonical_fname, config)
+            if deleted:
+                logger.info(
+                    "Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir
+                )
 
     # Remove source torrent if configured (we're already processing completed torrents).
     if all_ok and config.post_process.remove_completed:

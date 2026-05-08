@@ -1265,3 +1265,137 @@ class TestProcessOneCopyCompletedFalse:
 
         qbt.delete_torrent.assert_called_once_with("abc123", delete_data=False, state="completed")
         db.mark_completed.assert_called_once_with("tag1")
+
+
+class TestProcessOneSupersession:
+    """Integration tests for the delete_lower_quality path in _process_one."""
+
+    def _make_config(self, enabled: bool, dst_dir: str) -> Config:
+        from movarr.config import DefaultCopyLibraryConfig, PostProcessConfig
+        return Config().model_copy(
+            update={
+                "post_process": PostProcessConfig(
+                    copy_completed=True,
+                    remove_completed=False,
+                    delete_lower_quality=enabled,
+                    default_copy_library=DefaultCopyLibraryConfig(hd_path=dst_dir),
+                )
+            }
+        )
+
+    def test_deletes_lower_quality_when_option_enabled(
+        self, tmp_path: Path, mocker: "MockerFixture"
+    ) -> None:
+        """After a successful copy, lower-quality library files in dst_dir are deleted."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        torrent = {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
+            ],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert not old_file.exists(), "Lower-quality file should have been deleted"
+
+    def test_does_not_delete_when_option_disabled(
+        self, tmp_path: Path, mocker: "MockerFixture"
+    ) -> None:
+        """When delete_lower_quality is False, no library files are deleted."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=False, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        torrent = {
+            "torrent_tag": "tag2",
+            "torrent_hash": "def456",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
+            ],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert old_file.exists(), "File should be untouched when option is disabled"
+
+    def test_does_not_delete_when_copy_failed(
+        self, tmp_path: Path, mocker: "MockerFixture"
+    ) -> None:
+        """Supersession is skipped entirely if the copy/verify step fails."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        torrent = {
+            "torrent_tag": "tag3",
+            "torrent_hash": "ghi789",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
+            ],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=False)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert old_file.exists(), "File should be untouched when copy failed"
