@@ -47,7 +47,7 @@ __all__ = [
 ]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
-_RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
+_RE_SPECIAL = re.compile(r"\b(extended|director(?:'s|s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 # Public entry points

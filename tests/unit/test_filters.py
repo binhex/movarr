@@ -1274,3 +1274,13 @@ class TestSpecialEditionToken:
         from movarr.filters import special_edition_token
 
         assert special_edition_token("The Matrix 1999 EXTENDED 1080p BluRay") == "extended"
+
+    def test_matches_directors_cut_with_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director's Cut 2160p") == "director's cut"
+
+    def test_matches_directors_cut_without_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Directors Cut 2160p") == "directors cut"

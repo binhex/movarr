@@ -45,7 +45,7 @@ _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 # Known extras/bonus-content markers — files containing these in the post-year
 # segment are not quality variants of the main feature and must never be deleted.
 _EXTRAS_RE = re.compile(
-    r"\b(?:behind[\s_]the[\s_]scenes|making[\s_]of|featurette|deleted[\s_]scene"
+    r"\b(?:behind[\s_]the[\s_]scenes|making[\s_]of|featurettes?|deleted[\s_]scene"
     r"|interview|short[\s_]film|theatrical[\s_]trailer|trailer|sample"
     r"|bonus|extra|extras|special)\b",
     re.IGNORECASE,
@@ -598,7 +598,7 @@ def _delete_superseded_files(
     new_res_str = extract_resolution(new_san)
 
     new_after = extract_after_year(new_san) or ""
-    if _EXTRAS_RE.search(new_after):
+    if _EXTRAS_RE.search(new_after) or _EXTRAS_RE.search(new_primary_fname.lower()):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
             new_primary_fname,
@@ -671,7 +671,7 @@ def _delete_superseded_files(
         #    "Making Of", "Featurette"). These are different content, not quality
         #    variants, even when sharing the same title and year.
         lib_after = extract_after_year(lib_san) or ""
-        if _EXTRAS_RE.search(lib_after):
+        if _EXTRAS_RE.search(lib_after) or _EXTRAS_RE.search(fname.lower()):
             logger.debug(
                 "Skipping auto-delete for '{}': looks like extra/bonus content.",
                 fname,
@@ -707,6 +707,15 @@ def _delete_superseded_files(
                 continue
             should_delete = True
         elif new_res_int == lib_res_int:
+            if special_edition_token(new_san) != special_edition_token(lib_san):
+                logger.debug(
+                    "Skipping auto-delete for '{}': edition mismatch at same resolution "
+                    "(new='{}', lib='{}').",
+                    fname,
+                    special_edition_token(new_san) or "base",
+                    special_edition_token(lib_san) or "base",
+                )
+                continue
             new_score = supersession_quality_score(new_san, lib_san, config)
             lib_score = supersession_quality_score(lib_san, new_san, config)
             should_delete = new_score > lib_score

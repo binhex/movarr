@@ -589,6 +589,62 @@ class TestDeleteSupersededFiles:
         assert not (movie_dir / lib_fname).exists()
 
 
+    def test_skips_deletion_same_res_edition_mismatch(self, tmp_path: Path) -> None:
+        """Different editions at same resolution must NOT be deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Directors.Cut.1080p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_same_res_same_edition(self, tmp_path: Path) -> None:
+        """Same edition at same resolution: higher-scored variant deletes lower."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.1080p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_new_primary_has_bracketed_extras(self, tmp_path: Path) -> None:
+        """New primary with bracketed extras token in raw filename must not trigger deletion."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_lib_file_has_bracketed_extras(self, tmp_path: Path) -> None:
+        """Library file with bracketed extras token in raw filename is not deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.[Behind.the.Scenes].1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
 # _safe_path_component
 
 
