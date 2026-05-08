@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pathlib import Path
 
     from pytest_mock import MockerFixture
 
+
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
-import os
 from movarr.filters import composite_quality_score
-from movarr.post_processor import _delete_superseded_files
 from movarr.post_processor import (
     _apply_path_remapping,
     _build_copy_list,
     _canonical_filename,
     _cert_acceptable,
+    _delete_superseded_files,
     _first_level_dir,
     _largest_file,
     _parse_genres,
@@ -28,7 +28,6 @@ from movarr.post_processor import (
     _safe_path_component,
     run_post_processing,
 )
-
 
 
 class TestCompositeQualityScore:
@@ -47,15 +46,12 @@ class TestCompositeQualityScore:
 
     def test_preferred_group_bonus_applied(self) -> None:
         from movarr.config import FiltersConfig
+
         cfg = Config()
-        cfg = cfg.model_copy(
-            update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])}
-        )
+        cfg = cfg.model_copy(update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])})
         new_san = "The Matrix 1999 1080p BluRay PublicHD"
         lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
         assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
-
-
 
 
 class TestDeleteSupersededFiles:
@@ -220,7 +216,7 @@ class TestDeleteSupersededFiles:
         (lib_root / "some_movie.mkv").write_bytes(b"x")
 
         count = _delete_superseded_files(
-            str(lib_root),   # dst_dir == dst_base -> MUST abort
+            str(lib_root),  # dst_dir == dst_base -> MUST abort
             str(lib_root),
             "new_movie.mkv",
             Config(),
@@ -289,6 +285,8 @@ class TestDeleteSupersededFiles:
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
         assert count == 3  # all three lower-quality files deleted
+
+
 # _safe_path_component
 
 
@@ -1272,6 +1270,7 @@ class TestProcessOneSupersession:
 
     def _make_config(self, enabled: bool, dst_dir: str) -> Config:
         from movarr.config import DefaultCopyLibraryConfig, PostProcessConfig
+
         return Config().model_copy(
             update={
                 "post_process": PostProcessConfig(
@@ -1283,9 +1282,7 @@ class TestProcessOneSupersession:
             }
         )
 
-    def test_deletes_lower_quality_when_option_enabled(
-        self, tmp_path: Path, mocker: "MockerFixture"
-    ) -> None:
+    def test_deletes_lower_quality_when_option_enabled(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """After a successful copy, lower-quality library files in dst_dir are deleted."""
         dst_base = tmp_path
         cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
@@ -1299,9 +1296,7 @@ class TestProcessOneSupersession:
             "torrent_tag": "tag1",
             "torrent_hash": "abc123",
             "torrent_save_path": "/downloads",
-            "torrent_file_list": [
-                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
-            ],
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
         }
         db_record = mocker.MagicMock()
         db_record.imdb_title = "The Matrix"
@@ -1322,9 +1317,7 @@ class TestProcessOneSupersession:
 
         assert not old_file.exists(), "Lower-quality file should have been deleted"
 
-    def test_does_not_delete_when_option_disabled(
-        self, tmp_path: Path, mocker: "MockerFixture"
-    ) -> None:
+    def test_does_not_delete_when_option_disabled(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """When delete_lower_quality is False, no library files are deleted."""
         dst_base = tmp_path
         cfg = self._make_config(enabled=False, dst_dir=str(dst_base))
@@ -1338,9 +1331,7 @@ class TestProcessOneSupersession:
             "torrent_tag": "tag2",
             "torrent_hash": "def456",
             "torrent_save_path": "/downloads",
-            "torrent_file_list": [
-                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
-            ],
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
         }
         db_record = mocker.MagicMock()
         db_record.imdb_title = "The Matrix"
@@ -1361,9 +1352,7 @@ class TestProcessOneSupersession:
 
         assert old_file.exists(), "File should be untouched when option is disabled"
 
-    def test_does_not_delete_when_copy_failed(
-        self, tmp_path: Path, mocker: "MockerFixture"
-    ) -> None:
+    def test_does_not_delete_when_copy_failed(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """Supersession is skipped entirely if the copy/verify step fails."""
         dst_base = tmp_path
         cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
@@ -1377,9 +1366,7 @@ class TestProcessOneSupersession:
             "torrent_tag": "tag3",
             "torrent_hash": "ghi789",
             "torrent_save_path": "/downloads",
-            "torrent_file_list": [
-                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}
-            ],
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
         }
         db_record = mocker.MagicMock()
         db_record.imdb_title = "The Matrix"

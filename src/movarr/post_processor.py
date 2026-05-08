@@ -166,9 +166,7 @@ def _process_one(
         if config.post_process.delete_lower_quality:
             deleted = _delete_superseded_files(dst_dir, dst_base, canonical_fname, config)
             if deleted:
-                logger.info(
-                    "Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir
-                )
+                logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
 
     # Remove source torrent if configured (we're already processing completed torrents).
     if all_ok and config.post_process.remove_completed:
@@ -403,7 +401,7 @@ def _delete_superseded_files(
     dst_dir: str,
     dst_base: str,
     new_primary_fname: str,
-    config: "Config",
+    config: Config,
 ) -> int:
     """Delete video files in *dst_dir* that are superseded by the newly copied file.
 

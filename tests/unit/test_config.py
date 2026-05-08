@@ -715,11 +715,13 @@ class TestPostProcessConfigDefaults:
 
     def test_delete_lower_quality_defaults_to_false(self) -> None:
         from movarr.config import PostProcessConfig
+
         cfg = PostProcessConfig()
         assert cfg.delete_lower_quality is False
 
     def test_delete_lower_quality_can_be_enabled(self) -> None:
         from movarr.config import PostProcessConfig
+
         cfg = PostProcessConfig(delete_lower_quality=True)
         assert cfg.delete_lower_quality is True
 

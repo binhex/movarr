@@ -656,7 +656,7 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     return 0
 
 
-def composite_quality_score(san: str, other_san: str, config: "Config") -> int:
+def composite_quality_score(san: str, other_san: str, config: Config) -> int:
     """Return the composite quality score for *san* relative to *other_san*.
 
     Combines ``quality_score`` with the preferred-group and special-edition
