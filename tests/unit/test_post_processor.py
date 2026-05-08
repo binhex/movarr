@@ -413,6 +413,64 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / bonus_fname).exists(), "different-title file must not be deleted"
 
+    def test_skips_file_with_unparseable_title(self, tmp_path: Path) -> None:
+        """Fail-closed: lib file with no parseable title is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # No year in name => extract_movie_title returns None
+        no_title_fname = "1080p BluRay.mkv"
+        (movie_dir / no_title_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / no_title_fname).exists(), "unparseable-title file must not be deleted"
+
+    def test_skips_file_with_mismatched_year(self, tmp_path: Path) -> None:
+        """Fail-closed: lib file with a different year is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Same title but different year (could be a sequel or a different release)
+        diff_year_fname = "The Matrix 2003 1080p BluRay.mkv"
+        (movie_dir / diff_year_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / diff_year_fname).exists(), "different-year file must not be deleted"
+
+    def test_skips_behind_the_scenes_extra(self, tmp_path: Path) -> None:
+        """Extras keyword guard: 'Behind the Scenes' file is never deleted.
+
+        This file shares the same title and year as the main feature but contains
+        a known extras keyword in the post-year segment.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        behind_scenes = "The Matrix 1999 Behind the Scenes 1080p BluRay.mkv"
+        (movie_dir / behind_scenes).write_bytes(b"extra")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / behind_scenes).exists(), "behind-the-scenes file must not be deleted"
+
+    def test_skips_making_of_extra(self, tmp_path: Path) -> None:
+        """Extras keyword guard: 'Making Of' file is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        making_of = "The Matrix 1999 Making Of 1080p.mkv"
+        (movie_dir / making_of).write_bytes(b"extra")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / making_of).exists(), "making-of file must not be deleted"
+
     def test_skips_deletion_when_canonical_not_in_copied_fnames_in_process_one(
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:

@@ -25,7 +25,7 @@ from loguru import logger
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
 from movarr.filters import supersession_quality_score
-from movarr.parsing import extract_movie_title, extract_resolution, sanitise
+from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
@@ -38,6 +38,14 @@ _BBFC_ORDER = ["U", "PG", "12", "12A", "15", "18", "R18"]
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _MAX_VIDEO_FILES_IN_MOVIE_DIR = 4  # safety cap: abort deletion if dir contains more than this many video files
 _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
+# Known extras/bonus-content markers — files containing these in the post-year
+# segment are not quality variants of the main feature and must never be deleted.
+_EXTRAS_RE = re.compile(
+    r"\b(?:behind[\s_]the[\s_]scenes|making[\s_]of|featurette|deleted[\s_]scene"
+    r"|interview|short[\s_]film|theatrical[\s_]trailer|trailer|sample"
+    r"|bonus|extra|extras|special)\b",
+    re.IGNORECASE,
+)
 
 
 def _safe_path_component(value: str) -> str:
@@ -512,17 +520,41 @@ def _delete_superseded_files(
 
         lib_san = sanitise(fname) or ""
 
-        # Title match: skip files that parse to a different movie title.
-        # This protects pre-existing bonus features, trailers, and companion
-        # content whose names include the same year but different title tokens.
-        # Conservative: if either title cannot be parsed, keep the file.
+        # Three-layer content identity check — all must pass to consider deletion.
+        # Conservative: skip the file if ANY check cannot positively confirm
+        # the candidate is a quality variant of the same content.
+
+        # 1. Title match (fail-closed): both titles must be parseable and identical.
         lib_title = extract_movie_title(lib_san)
-        if new_title and lib_title and new_title != lib_title:
+        if not (new_title and lib_title and new_title == lib_title):
             logger.debug(
-                "Skipping auto-delete for '{}': title '{}' differs from primary '{}'.",
+                "Skipping auto-delete for '{}': title mismatch or unparseable (new='{}', lib='{}').",
                 fname,
-                lib_title,
                 new_title,
+                lib_title,
+            )
+            continue
+
+        # 2. Year match (fail-closed): both years must be parseable and identical.
+        lib_year = extract_year(lib_san)
+        if not lib_year or lib_year != extract_year(new_san):
+            logger.debug(
+                "Skipping auto-delete for '{}': year mismatch or unparseable (new='{}', lib='{}').",
+                fname,
+                extract_year(new_san),
+                lib_year,
+            )
+            continue
+
+        # 3. Extras keyword guard: skip files whose post-year segment contains
+        #    known bonus/extras content labels (e.g. "Behind the Scenes",
+        #    "Making Of", "Featurette"). These are different content, not quality
+        #    variants, even when sharing the same title and year.
+        lib_after = extract_after_year(lib_san) or ""
+        if _EXTRAS_RE.search(lib_after):
+            logger.debug(
+                "Skipping auto-delete for '{}': looks like extra/bonus content.",
+                fname,
             )
             continue
 
