@@ -28,7 +28,7 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import special_edition_token, supersession_quality_score
+from movarr.filters import primary_edition_token, supersession_quality_score
 from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
 
 if TYPE_CHECKING:
@@ -503,16 +503,14 @@ def _parse_genres(raw: object) -> list[str]:
 
 
 def _edition_token(san: str) -> str:
-    """Return the normalized edition token for supersession comparison.
+    """Return the canonical edition token for supersession comparison.
 
-    ``"theatrical"`` is treated as the base edition (empty string) because
-    the theatrical cut is the implicit default release. This allows
-    a higher-quality theatrical encode to supersede an untagged base copy
-    (and vice-versa), while still preventing extended/director's-cut editions
-    from deleting different edition types.
+    Delegates to :func:`~movarr.filters.primary_edition_token`, which skips
+    ``theatrical`` (the base edition) and returns the first remaining token,
+    canonicalizing director\u2019s-cut variants. Returns empty string for
+    untagged or theatrical-only filenames.
     """
-    token = special_edition_token(san)
-    return "" if token == "theatrical" else token
+    return primary_edition_token(san)
 
 
 def _delete_superseded_files(

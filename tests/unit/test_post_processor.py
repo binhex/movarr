@@ -842,6 +842,21 @@ class TestDeleteSupersededFiles:
         assert (movie_dir / lib_fname).exists()
 
 
+    def test_theatrical_extended_supersedes_lower_quality_extended(self, tmp_path: Path) -> None:
+        """Theatrical Extended 2160p Remux should delete Extended 1080p BluRay — both Extended."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Theatrical.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+
 # _safe_path_component
 
 

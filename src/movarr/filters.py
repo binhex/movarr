@@ -42,6 +42,7 @@ __all__ = [
     "composite_quality_score",
     "filter_by_index",
     "filter_by_imdb",
+    "primary_edition_token",
     "special_edition_token",
     "supersession_quality_score",
 ]
@@ -68,6 +69,28 @@ def special_edition_token(san: str) -> str:
     if "director" in token and "cut" in token:
         return "directors cut"
     return token
+
+
+def primary_edition_token(san: str) -> str:
+    """Return the primary non-theatrical special-edition token found in *san*.
+
+    Unlike ``special_edition_token``, this function iterates over **all** edition
+    tokens and returns the first one that is not ``theatrical``, which is treated
+    as the base edition.  Returns empty string when no non-theatrical token is
+    found (the file is untagged or tagged only as theatrical).
+
+    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+    Typographic apostrophes are normalized to ASCII before matching.
+    """
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    for m in _RE_SPECIAL.finditer(norm):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            return "directors cut"
+        return token
+    return ""
 
 
 def filter_by_index(

@@ -1330,3 +1330,32 @@ class TestSpecialEditionToken:
         from movarr.filters import special_edition_token
 
         assert special_edition_token("Alien 1979 Director\u2019s Cut 2160p Remux") == "directors cut"
+
+
+class TestPrimaryEditionToken:
+    """Tests for the public primary_edition_token helper."""
+
+    def test_theatrical_extended_returns_extended(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Theatrical Extended 2160p Remux") == "extended"
+
+    def test_theatrical_only_returns_empty(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Theatrical 2160p Remux") == ""
+
+    def test_directors_cut_canonical(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Director's Cut 2160p") == "directors cut"
+
+    def test_no_edition_returns_empty(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("The Matrix 1999 2160p BluRay") == ""
+
+    def test_extended_no_theatrical_returns_extended(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Extended 1080p BluRay") == "extended"
