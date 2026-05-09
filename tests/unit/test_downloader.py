@@ -19,17 +19,16 @@ if TYPE_CHECKING:
 def _make_session_mock(mocker: MockerFixture, *, status_code: int = 200, content: bytes = b"ok") -> Any:
     """Patch requests.Session and return the mock response.
 
-    The mock is set up so that ``with requests.Session() as session:``
-    yields a mock whose ``.request()`` returns a response with the given
-    status_code and content.
+    The mock is set up so that ``requests.Session()`` in ``HttpClient.__init__``
+    returns a mock whose ``.request()`` returns a response with the given
+    status_code and content.  Callers **must** create ``HttpClient()`` *after*
+    calling this helper so that the constructor receives the mock session.
     """
     mock_response = mocker.MagicMock(spec=requests.Response)
     mock_response.status_code = status_code
     mock_response.content = content
 
     mock_session = mocker.MagicMock()
-    mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-    mock_session.__exit__ = mocker.MagicMock(return_value=False)
     mock_session.request.return_value = mock_response
 
     mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
@@ -169,8 +168,8 @@ class TestHttpClientRequest:
 
     def test_returns_response_on_200(self, mocker: MockerFixture) -> None:
         """A 200 response must be returned without raising."""
-        client = HttpClient()
         mock_response = _make_session_mock(mocker, status_code=200)
+        client = HttpClient()
 
         result = client._request("get", "https://example.com")
 
@@ -178,8 +177,8 @@ class TestHttpClientRequest:
 
     def test_returns_response_on_201(self, mocker: MockerFixture) -> None:
         """Any 2xx status code (e.g. 201 Created) must be accepted."""
-        client = HttpClient()
         mock_response = _make_session_mock(mocker, status_code=201)
+        client = HttpClient()
 
         result = client._request("post", "https://example.com/create")
 
@@ -187,8 +186,8 @@ class TestHttpClientRequest:
 
     def test_returns_response_on_299(self, mocker: MockerFixture) -> None:
         """The upper boundary of 2xx range (299) must also be accepted."""
-        client = HttpClient()
         mock_response = _make_session_mock(mocker, status_code=299)
+        client = HttpClient()
 
         result = client._request("get", "https://example.com")
 
@@ -196,64 +195,61 @@ class TestHttpClientRequest:
 
     def test_raises_http_error_on_400(self, mocker: MockerFixture) -> None:
         """_request must raise HttpError for a 400 Bad Request response."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=400, content=b"Bad Request")
+        client = HttpClient()
 
         with pytest.raises(HttpError, match="HTTP 400"):
             client._request("get", "https://example.com/bad")
 
     def test_raises_http_error_on_401(self, mocker: MockerFixture) -> None:
         """_request must raise HttpError for a 401 Unauthorized response."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=401, content=b"Unauthorized")
+        client = HttpClient()
 
         with pytest.raises(HttpError):
             client._request("get", "https://example.com/protected")
 
     def test_raises_http_error_on_404(self, mocker: MockerFixture) -> None:
         """_request must raise HttpError for a 404 Not Found response."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=404, content=b"Not Found")
+        client = HttpClient()
 
         with pytest.raises(HttpError, match="HTTP 404"):
             client._request("get", "https://example.com/missing")
 
     def test_raises_http_error_on_500(self, mocker: MockerFixture) -> None:
         """_request must raise HttpError for a 500 Internal Server Error response."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=500, content=b"Server Error")
+        client = HttpClient()
 
         with pytest.raises(HttpError, match="HTTP 500"):
             client._request("get", "https://example.com/broken")
 
     def test_raises_http_error_on_503(self, mocker: MockerFixture) -> None:
         """_request must raise HttpError for a 503 Service Unavailable response."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=503, content=b"Unavailable")
+        client = HttpClient()
 
         with pytest.raises(HttpError, match="https://example.com/down"):
             client._request("get", "https://example.com/down")
 
     def test_error_message_contains_url(self, mocker: MockerFixture) -> None:
         """The HttpError message should reference the target URL."""
-        client = HttpClient()
         _make_session_mock(mocker, status_code=404, content=b"Not Found")
+        client = HttpClient()
 
         with pytest.raises(HttpError, match="https://example.com/target"):
             client._request("get", "https://example.com/target")
 
     def test_ssl_verify_false_forwarded(self, mocker: MockerFixture) -> None:
         """verify_ssl=False must be passed through to session.request()."""
-        client = HttpClient(verify_ssl=False)
-
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient(verify_ssl=False)
 
         client._request("get", "https://example.com")
 
@@ -262,16 +258,13 @@ class TestHttpClientRequest:
 
     def test_ssl_verify_true_forwarded(self, mocker: MockerFixture) -> None:
         """verify_ssl=True (default) must be passed through to session.request()."""
-        client = HttpClient(verify_ssl=True)
-
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient(verify_ssl=True)
 
         client._request("get", "https://example.com")
 
@@ -280,16 +273,13 @@ class TestHttpClientRequest:
 
     def test_timeout_tuple_passed(self, mocker: MockerFixture) -> None:
         """Timeout must be forwarded as a (connect, read) tuple."""
-        client = HttpClient(connect_timeout=5.0, read_timeout=15.0)
-
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient(connect_timeout=5.0, read_timeout=15.0)
 
         client._request("get", "https://example.com")
 
@@ -298,16 +288,13 @@ class TestHttpClientRequest:
 
     def test_default_headers_always_sent(self, mocker: MockerFixture) -> None:
         """Accept-Encoding and User-Agent headers must always be set on the session."""
-        client = HttpClient(user_agent="TestBot/1.0")
-
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient(user_agent="TestBot/1.0")
 
         client._request("get", "https://example.com")
 
@@ -316,65 +303,55 @@ class TestHttpClientRequest:
         assert headers_sent["Accept-Encoding"] == "gzip"
 
     def test_custom_headers_merged(self, mocker: MockerFixture) -> None:
-        """Extra headers passed to _request must be merged with defaults."""
-        client = HttpClient()
-
+        """Extra headers passed to _request must be forwarded to session.request()."""
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient()
 
         client._request("get", "https://example.com", headers={"X-Token": "abc"})
 
-        headers_sent = mock_session.headers.update.call_args.args[0]
-        assert headers_sent["X-Token"] == "abc"
-        assert "User-Agent" in headers_sent
+        _, call_kwargs = mock_session.request.call_args
+        assert call_kwargs.get("headers") == {"X-Token": "abc"}
+        # Base headers are set on the session at construction, not per-request
+        assert "User-Agent" in mock_session.headers.update.call_args.args[0]
 
     def test_auth_assigned_to_session(self, mocker: MockerFixture) -> None:
-        """Auth tuple must be assigned to session.auth when provided."""
-        client = HttpClient()
-
+        """Auth tuple must be forwarded to session.request() when provided."""
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient()
 
         client._request("get", "https://example.com", auth=("alice", "secret"))
 
-        assert mock_session.auth == ("alice", "secret")
+        _, call_kwargs = mock_session.request.call_args
+        assert call_kwargs.get("auth") == ("alice", "secret")
 
     def test_no_auth_does_not_set_session_auth(self, mocker: MockerFixture) -> None:
-        """When auth is None, session.auth must not be assigned."""
-        client = HttpClient()
-
+        """When auth is None, session.request() must receive auth=None."""
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_response = mocker.MagicMock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.content = b"ok"
         mock_session.request.return_value = mock_response
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient()
 
         client._request("get", "https://example.com")
 
-        # session.auth should not have been set via attribute assignment
-        assert mock_session.auth != ("alice", "secret")
+        _, call_kwargs = mock_session.request.call_args
+        assert call_kwargs.get("auth") is None
 
     def test_connection_error_is_retried(self, mocker: MockerFixture) -> None:
         """ConnectionError is in the backoff retry tuple and should be retried."""
-        client = HttpClient()
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         # First two calls raise ConnectionError, third succeeds
         mock_session.request.side_effect = [
             requests.exceptions.ConnectionError("conn reset"),
@@ -382,6 +359,7 @@ class TestHttpClientRequest:
             mocker.MagicMock(spec=requests.Response, status_code=200, content=b"ok"),
         ]
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient()
 
         result = client._request("get", "https://example.com")
         assert result.status_code == 200
@@ -389,16 +367,13 @@ class TestHttpClientRequest:
 
     def test_socket_timeout_is_retried(self, mocker: MockerFixture) -> None:
         """socket.timeout is in the backoff retry tuple and should be retried."""
-
-        client = HttpClient()
         mock_session = mocker.MagicMock()
-        mock_session.__enter__ = mocker.MagicMock(return_value=mock_session)
-        mock_session.__exit__ = mocker.MagicMock(return_value=False)
         mock_session.request.side_effect = [
             TimeoutError("timed out"),
             mocker.MagicMock(spec=requests.Response, status_code=200, content=b"ok"),
         ]
         mocker.patch("movarr.downloader.requests.Session", return_value=mock_session)
+        client = HttpClient()
 
         result = client._request("get", "https://example.com")
         assert result.status_code == 200

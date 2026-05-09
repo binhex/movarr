@@ -29,6 +29,7 @@ KV keys used (keyed by *kv_prefix*):
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -38,6 +39,16 @@ from movarr.notifications import send_service_alert
 if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.database import Database
+
+
+@dataclass
+class _ServiceHealthCtx:
+    service_name: str
+    kv_prefix: str
+    alert_hours: float
+    db: Database
+    config: Config
+
 
 __all__ = ["check_service_health"]
 
@@ -70,7 +81,7 @@ def check_service_health(
         if is_healthy:
             _reset_streak(kv_prefix, db)
         else:
-            _on_unhealthy(service_name, kv_prefix, alert_hours, db, config)
+            _on_unhealthy(_ServiceHealthCtx(service_name, kv_prefix, alert_hours, db, config))
     except Exception:
         logger.exception(
             "service_health.check_service_health failed unexpectedly for '{}'.",
@@ -89,27 +100,21 @@ def _reset_streak(kv_prefix: str, db: Database) -> None:
     db.kv_delete(f"{kv_prefix}.alert_sent")
 
 
-def _on_unhealthy(
-    service_name: str,
-    kv_prefix: str,
-    alert_hours: float,
-    db: Database,
-    config: Config,
-) -> None:
+def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
     """Record or advance an unavailability streak; fire alert when threshold met."""
-    if alert_hours <= 0:
+    if ctx.alert_hours <= 0:
         return
 
-    key_since = f"{kv_prefix}.unavailable_since"
-    key_alert = f"{kv_prefix}.alert_sent"
-    since_raw = db.kv_get(key_since)
+    key_since = f"{ctx.kv_prefix}.unavailable_since"
+    key_alert = f"{ctx.kv_prefix}.alert_sent"
+    since_raw = ctx.db.kv_get(key_since)
     now = datetime.datetime.now(datetime.UTC)
 
     if since_raw is None:
-        db.kv_set(key_since, now.isoformat())
+        ctx.db.kv_set(key_since, now.isoformat())
         logger.warning(
             "{} is unavailable — streak started at {}.",
-            service_name,
+            ctx.service_name,
             now.isoformat(),
         )
         return
@@ -125,43 +130,41 @@ def _on_unhealthy(
             "Corrupt {} value '{}'; resetting streak for '{}'.",
             key_since,
             since_raw,
-            service_name,
+            ctx.service_name,
         )
-        db.kv_set(key_since, now.isoformat())
+        ctx.db.kv_set(key_since, now.isoformat())
         return
 
     elapsed_seconds = (now - since).total_seconds()
     elapsed_hours = elapsed_seconds / 3600.0
-
-    if elapsed_seconds < alert_hours * 3600.0:
+    if elapsed_seconds < ctx.alert_hours * 3600.0:
         logger.debug(
             "{} unavailability streak: {:.1f}h elapsed, threshold {:.1f}h not reached.",
-            service_name,
+            ctx.service_name,
             elapsed_hours,
-            alert_hours,
+            ctx.alert_hours,
         )
         return
-
-    if db.kv_get(key_alert) == "1":
+    if ctx.db.kv_get(key_alert) == "1":
         logger.debug(
             "{} unavailability streak {:.1f}h: alert already sent; suppressing duplicate.",
-            service_name,
+            ctx.service_name,
             elapsed_hours,
         )
         return
 
-    if not config.notification.apprise_urls:
+    if not ctx.config.notification.apprise_urls:
         logger.warning(
             "{} unavailability streak {:.1f}h exceeded threshold — no apprise URLs configured, cannot send alert.",
-            service_name,
+            ctx.service_name,
             elapsed_hours,
         )
         return
 
     sent = send_service_alert(
-        service_name=service_name,
+        service_name=ctx.service_name,
         hours_elapsed=elapsed_hours,
-        config=config,
+        config=ctx.config,
     )
     if sent:
-        db.kv_set(key_alert, "1")
+        ctx.db.kv_set(key_alert, "1")

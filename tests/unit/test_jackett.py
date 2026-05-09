@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from movarr.config import Config
 from movarr.downloader import HttpError
 from movarr.jackett import JackettClient
-from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -111,37 +110,6 @@ class TestAttr:
         """Returns '' when the torznab:attr key is entirely absent."""
         item = {"title": "Movie"}
         assert JackettClient._attr(item, "seeders") == ""
-
-
-# _to_mb (static method)
-
-
-class TestToMb:
-    """Tests for bytes_to_mb shared helper (was JackettClient._to_mb)."""
-
-    def test_converts_bytes_to_mb(self) -> None:
-        """8 GB (8,589,934,592 bytes) converts to 8589 decimal MB."""
-        assert bytes_to_mb("8589934592") == "8589"
-
-    def test_truncates_remainder(self) -> None:
-        """Conversion truncates (integer division), does not round."""
-        assert bytes_to_mb("1000001") == "1"  # just over 1 MB
-
-    def test_zero_bytes(self) -> None:
-        """Zero bytes converts to '0'."""
-        assert bytes_to_mb("0") == "0"
-
-    def test_invalid_string_returns_zero(self) -> None:
-        """Non-numeric input returns '0'."""
-        assert bytes_to_mb("not-a-number") == "0"
-
-    def test_empty_string_returns_zero(self) -> None:
-        """Empty string returns '0'."""
-        assert bytes_to_mb("") == "0"
-
-    def test_none_returns_zero(self) -> None:
-        """None input returns '0'."""
-        assert bytes_to_mb(None) == "0"
 
 
 # _parse_item
@@ -325,6 +293,8 @@ class TestParseItem:
         assert result is not None
         assert result["index_tracker"] == "BitMagnet"
 
+
+class TestFetchPage:
     """Tests for JackettClient._fetch_page."""
 
     def test_parses_valid_xml_response(self, mocker: MockerFixture) -> None:

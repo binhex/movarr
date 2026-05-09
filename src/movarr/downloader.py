@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 from typing import Any
 
@@ -46,6 +47,12 @@ class HttpClient:
         self._read_timeout = read_timeout
         self._user_agent = user_agent
         self._verify_ssl = verify_ssl
+        self._session = requests.Session()
+        self._session.headers.update({"Accept-Encoding": "gzip", "User-Agent": user_agent})
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self._session.close()
 
     @backoff.on_exception(
         backoff.expo,
@@ -82,24 +89,17 @@ class HttpClient:
             HttpError: On non-2xx responses.
             requests.exceptions.RequestException: On unrecoverable errors.
         """
-        merged_headers = {"Accept-Encoding": "gzip", "User-Agent": self._user_agent}
-        if headers:
-            merged_headers.update(headers)
-
-        with requests.Session() as session:
-            session.headers.update(merged_headers)
-            if auth:
-                session.auth = auth
-
-            rt = read_timeout if read_timeout is not None else self._read_timeout
-            response = session.request(
-                method=method,
-                url=url,
-                timeout=(self._connect_timeout, rt),
-                allow_redirects=True,
-                verify=self._verify_ssl,
-                data=data,
-            )
+        rt = read_timeout if read_timeout is not None else self._read_timeout
+        response = self._session.request(
+            method=method,
+            url=url,
+            headers=headers,
+            auth=auth,
+            timeout=(self._connect_timeout, rt),
+            allow_redirects=True,
+            verify=self._verify_ssl,
+            data=data,
+        )
 
         if not _HTTP_OK_MIN <= response.status_code <= _HTTP_OK_MAX:
             raise HttpError(

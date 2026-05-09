@@ -9,12 +9,15 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
+
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
+from movarr.filters import composite_quality_score, supersession_quality_score
 from movarr.post_processor import (
     _apply_path_remapping,
     _build_copy_list,
     _canonical_filename,
     _cert_acceptable,
+    _delete_superseded_files,
     _first_level_dir,
     _largest_file,
     _parse_genres,
@@ -22,9 +25,859 @@ from movarr.post_processor import (
     _process_one,
     _resolution_from_index_title,
     _resolve_destination,
+    _run_hook,
     _safe_path_component,
     run_post_processing,
 )
+
+
+class TestCompositeQualityScore:
+    """composite_quality_score is the public scoring surface used by the deletion step."""
+
+    def test_higher_score_for_remux(self) -> None:
+        cfg = Config()
+        new_san = "The Matrix 1999 1080p Remux"
+        lib_san = "The Matrix 1999 1080p BluRay"
+        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
+
+    def test_equal_score_for_identical_titles(self) -> None:
+        cfg = Config()
+        san = "The Matrix 1999 1080p BluRay"
+        assert composite_quality_score(san, san, cfg) == composite_quality_score(san, san, cfg)
+
+    def test_preferred_group_bonus_applied(self) -> None:
+        from movarr.config import FiltersConfig
+
+        cfg = Config()
+        cfg = cfg.model_copy(update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])})
+        new_san = "The Matrix 1999 1080p BluRay PublicHD"
+        lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
+        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
+
+
+class TestSupersessionQualityScore:
+    """supersession_quality_score excludes special-edition bonus unlike composite_quality_score."""
+
+    def test_special_edition_does_not_beat_non_edition(self) -> None:
+        """Extended cut must NOT score higher than theatrical in a supersession comparison.
+
+        composite_quality_score would award +10 to the extended cut; supersession must not.
+        """
+        cfg = Config()
+        extended_san = "The Matrix 1999 1080p BluRay Extended"
+        theatrical_san = "The Matrix 1999 1080p BluRay"
+        assert supersession_quality_score(extended_san, theatrical_san, cfg) == supersession_quality_score(
+            theatrical_san, extended_san, cfg
+        )
+
+    def test_preferred_group_bonus_still_applied(self) -> None:
+        """Group bonus is still included so genuine quality differences are detected."""
+        from movarr.config import FiltersConfig
+
+        cfg = Config().model_copy(update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])})
+        new_san = "The Matrix 1999 1080p BluRay PublicHD"
+        lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
+        assert supersession_quality_score(new_san, lib_san, cfg) > supersession_quality_score(lib_san, new_san, cfg)
+
+    def test_remux_beats_bluray(self) -> None:
+        """Remux still scores higher than BluRay encode."""
+        cfg = Config()
+        assert supersession_quality_score(
+            "The Matrix 1999 1080p Remux", "The Matrix 1999 1080p BluRay", cfg
+        ) > supersession_quality_score("The Matrix 1999 1080p BluRay", "The Matrix 1999 1080p Remux", cfg)
+
+
+class TestDeleteSupersededFiles:
+    """Tests for _delete_superseded_files — deletes lower-quality library videos."""
+
+    # ------------------------------------------------------------------
+    # Normal deletion cases
+    # ------------------------------------------------------------------
+
+    def test_deletes_lower_quality_same_resolution(self, tmp_path: Path) -> None:
+        """Lower-scored video at same resolution is deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        dst_dir = str(movie_dir)
+        dst_base = str(tmp_path)
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        cfg = Config()
+        count = _delete_superseded_files(dst_dir, dst_base, new_fname, cfg)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists()
+        assert (movie_dir / new_fname).exists()
+
+    def test_deletes_lower_resolution_library_file(self, tmp_path: Path) -> None:
+        """Library file at lower resolution is deleted when new file is higher res."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_multiple_lower_quality_files_all_deleted(self, tmp_path: Path) -> None:
+        """All lower-quality files in the directory are deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        for name in ["The Matrix 1999 1080p BluRay.mkv", "The Matrix 1999 1080p HDTV.mkv"]:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 2
+
+    # ------------------------------------------------------------------
+    # Conservative keep cases
+    # ------------------------------------------------------------------
+
+    def test_keeps_equal_quality(self, tmp_path: Path) -> None:
+        """Equal-scored video is NOT deleted (strictly-lower-only rule)."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay x264.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / old_fname).exists()
+
+    def test_keeps_higher_resolution_library_file(self, tmp_path: Path) -> None:
+        """Library file at higher resolution is NOT deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 2160p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_non_video_files(self, tmp_path: Path) -> None:
+        """Non-video files (NFO, SRT) are never touched."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        nfo = movie_dir / "The Matrix 1999.nfo"
+        nfo.write_bytes(b"metadata")
+        srt = movie_dir / "The Matrix 1999.srt"
+        srt.write_bytes(b"subs")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert nfo.exists()
+        assert srt.exists()
+
+    def test_skips_unparseable_resolution_library_file(self, tmp_path: Path) -> None:
+        """Conservative: library file with no parseable resolution is left alone."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_unparseable_resolution_new_file(self, tmp_path: Path) -> None:
+        """Conservative: if the new file has no parseable resolution, nothing is deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_does_not_delete_new_file_itself(self, tmp_path: Path) -> None:
+        """The newly copied file is never a deletion candidate."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"content")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / new_fname).exists()
+
+    def test_returns_zero_if_dst_dir_missing(self, tmp_path: Path) -> None:
+        """Non-existent directory returns 0 without raising."""
+        count = _delete_superseded_files(
+            str(tmp_path / "nonexistent" / "Movie (2000)"),
+            str(tmp_path / "nonexistent"),
+            "movie.mkv",
+            Config(),
+        )
+        assert count == 0
+
+    # ------------------------------------------------------------------
+    # Safety guard: depth / parent check
+    # ------------------------------------------------------------------
+
+    def test_safety_guard_rejects_dst_dir_equal_to_dst_base(self, tmp_path: Path) -> None:
+        """Guard 1: dst_dir == dst_base is rejected — we never operate on the library root."""
+        lib_root = tmp_path / "Movies"
+        lib_root.mkdir()
+        (lib_root / "some_movie.mkv").write_bytes(b"x")
+
+        count = _delete_superseded_files(
+            str(lib_root),  # dst_dir == dst_base -> MUST abort
+            str(lib_root),
+            "new_movie.mkv",
+            Config(),
+        )
+        assert count == 0
+        assert (lib_root / "some_movie.mkv").exists()
+
+    def test_safety_guard_rejects_grandchild_dir(self, tmp_path: Path) -> None:
+        """Guard 1: dst_dir two levels below dst_base is rejected."""
+        lib_root = tmp_path / "Movies"
+        deep_dir = lib_root / "subcat" / "Movie (2000)"
+        deep_dir.mkdir(parents=True)
+        (deep_dir / "old.mkv").write_bytes(b"x")
+
+        # dst_base is lib_root but dst_dir is two levels deep -> abort
+        count = _delete_superseded_files(
+            str(deep_dir),
+            str(lib_root),
+            "new.mkv",
+            Config(),
+        )
+        assert count == 0
+        assert (deep_dir / "old.mkv").exists()
+
+    # ------------------------------------------------------------------
+    # Safety guard: video file count cap
+    # ------------------------------------------------------------------
+
+    def test_safety_guard_rejects_too_many_video_files(self, tmp_path: Path) -> None:
+        """Guard 2: more than _MAX_VIDEO_FILES_IN_MOVIE_DIR video files -> abort, nothing deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Create 4 more video files -- total 5 (> cap of 4)
+        lower_quality_files = [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+            "The Matrix 1999 720p HDTV.mkv",
+        ]
+        for name in lower_quality_files:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        # All files untouched
+        for name in lower_quality_files:
+            assert (movie_dir / name).exists(), f"{name} should not have been deleted"
+
+    def test_safety_guard_rejects_too_many_video_files_emits_warning(self, tmp_path: Path) -> None:
+        """Guard 2: warning log includes the actual video file count."""
+        from loguru import logger as _loguru_logger
+
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        for name in [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+            "The Matrix 1999 720p HDTV.mkv",
+        ]:
+            (movie_dir / name).write_bytes(b"old")
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        finally:
+            _loguru_logger.remove(sink_id)
+
+        assert count == 0
+        warning_messages = [r["message"] for r in records if r["level"].name == "WARNING"]
+        assert any("5" in msg for msg in warning_messages), (
+            f"Expected file count '5' in warning log; got: {warning_messages}"
+        )
+
+    def test_safety_guard_allows_exactly_four_video_files(self, tmp_path: Path) -> None:
+        """Guard 2: exactly _MAX_VIDEO_FILES_IN_MOVIE_DIR video files -> proceeds normally."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # 3 lower-quality files -> total 4 (= cap, allowed)
+        for name in [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+        ]:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 3  # all three lower-quality files deleted
+
+    def test_aborts_if_primary_file_absent(self, tmp_path: Path) -> None:
+        """Abort if new_primary_fname is not present in dst_dir.
+
+        If the primary file was filtered out by exclusion rules, canonical_fname
+        won't exist in the directory. We must not delete anything in that case —
+        we cannot safely tell 'new' from 'old'.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        # Only the *real* copied file is present — NOT canonical_fname.
+        real_copied = movie_dir / "The Matrix 1999 1080p BluRay.mkv"
+        real_copied.write_bytes(b"real")
+        lib_fname = "The Matrix 1999 720p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        # Pass a canonical_fname that doesn't exist (largest torrent entry was excluded).
+        count = _delete_superseded_files(
+            str(movie_dir),
+            str(tmp_path),
+            "The Matrix 1999 2160p Remux.mkv",  # not present
+            Config(),
+        )
+        assert count == 0
+        assert (movie_dir / lib_fname).exists(), "lib file must be preserved"
+        assert real_copied.exists(), "real copied file must be preserved"
+
+    def test_companion_file_from_same_torrent_is_protected(self, tmp_path: Path) -> None:
+        """Files listed in copied_fnames are never deleted, even if lower quality.
+
+        A multi-file torrent may include a 1080p bonus-feature alongside a 2160p
+        main feature. Both are 'new' — the 1080p must not be deleted.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        companion_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / companion_fname).write_bytes(b"companion")
+
+        count = _delete_superseded_files(
+            str(movie_dir),
+            str(tmp_path),
+            new_fname,
+            Config(),
+            copied_fnames=frozenset({new_fname, companion_fname}),
+        )
+        assert count == 0
+        assert (movie_dir / companion_fname).exists(), "companion must not be deleted"
+
+    def test_special_edition_not_deleted_when_it_replaces_theatrical(self, tmp_path: Path) -> None:
+        """Copying an Extended cut must not delete the theatrical cut at same resolution.
+
+        composite_quality_score awards +10 to Extended vs non-Extended;
+        supersession_quality_score does not, so both editions survive.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay Extended.mkv"
+        (movie_dir / new_fname).write_bytes(b"extended")
+        theatrical_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / theatrical_fname).write_bytes(b"theatrical")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / theatrical_fname).exists(), "theatrical cut must not be deleted"
+
+    def test_non_video_primary_skips_deletion(self, tmp_path: Path) -> None:
+        """A non-video primary file (.rar, .nfo) must not trigger any deletions."""
+        movie_dir = tmp_path / "Movie (2024)"
+        movie_dir.mkdir()
+        non_video_primary = "Movie 2024 2160p BluRay.rar"
+        (movie_dir / non_video_primary).write_bytes(b"archive")
+        lib_fname = "Movie 2024 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), non_video_primary, Config())
+        assert count == 0
+        assert (movie_dir / lib_fname).exists(), "lib file must not be deleted for non-video primary"
+
+    def test_different_title_sibling_is_preserved(self, tmp_path: Path) -> None:
+        """A file with a different movie title in the same folder is never deleted.
+
+        Protects bonus features/companion docs whose titles differ from the main film.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        bonus_fname = "The Matrix Revisited 2001 1080p HDTV.mkv"
+        (movie_dir / bonus_fname).write_bytes(b"bonus")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / bonus_fname).exists(), "different-title file must not be deleted"
+
+    def test_skips_file_with_unparseable_title(self, tmp_path: Path) -> None:
+        """Fail-closed: lib file with no parseable title is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # No year in name => extract_movie_title returns None
+        no_title_fname = "1080p BluRay.mkv"
+        (movie_dir / no_title_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / no_title_fname).exists(), "unparseable-title file must not be deleted"
+
+    def test_skips_file_with_mismatched_year(self, tmp_path: Path) -> None:
+        """Fail-closed: lib file with a different year is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Same title but different year (could be a sequel or a different release)
+        diff_year_fname = "The Matrix 2003 1080p BluRay.mkv"
+        (movie_dir / diff_year_fname).write_bytes(b"lib")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / diff_year_fname).exists(), "different-year file must not be deleted"
+
+    def test_skips_behind_the_scenes_extra(self, tmp_path: Path) -> None:
+        """Extras keyword guard: 'Behind the Scenes' file is never deleted.
+
+        This file shares the same title and year as the main feature but contains
+        a known extras keyword in the post-year segment.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        behind_scenes = "The Matrix 1999 Behind the Scenes 1080p BluRay.mkv"
+        (movie_dir / behind_scenes).write_bytes(b"extra")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / behind_scenes).exists(), "behind-the-scenes file must not be deleted"
+
+    def test_skips_making_of_extra(self, tmp_path: Path) -> None:
+        """Extras keyword guard: 'Making Of' file is never deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        making_of = "The Matrix 1999 Making Of 1080p.mkv"
+        (movie_dir / making_of).write_bytes(b"extra")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        assert count == 0
+        assert (movie_dir / making_of).exists(), "making-of file must not be deleted"
+
+    def test_skips_deletion_when_canonical_not_in_copied_fnames_in_process_one(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """If the largest torrent entry is excluded, canonical_fname is not in copied_fnames.
+
+        _process_one must NOT call _delete_superseded_files in that case even if a
+        stale library file with the same canonical name exists.
+        """
+        from movarr.config import DefaultCopyLibraryConfig, PostProcessConfig
+
+        dst_base = tmp_path
+        cfg = Config().model_copy(
+            update={
+                "post_process": PostProcessConfig(
+                    copy_completed=True,
+                    remove_completed=False,
+                    delete_lower_quality=True,
+                    # exclude the large remux by regex so it's filtered from src_files
+                    exclude_file_regex_list=["Remux"],
+                    default_copy_library=DefaultCopyLibraryConfig(hd_path=str(dst_base)),
+                )
+            }
+        )
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        # Torrent with remux (excluded by regex) + srt that passes
+        torrent = {
+            "torrent_tag": "tag_excluded",
+            "torrent_hash": "excl123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                # Remux is excluded by exclude_file_regex_list
+                {"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000},
+            ],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        # copy_with_verify is NOT patched — but src_files will be empty after filtering,
+        # so no copy occurs and copied_fnames stays empty.
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        # old_file must be untouched since the primary was never copied
+        assert old_file.exists(), "lib file must not be deleted when primary was excluded"
+
+    def test_skips_deletion_when_new_primary_is_extras(self, tmp_path: Path) -> None:
+        """New primary that is extras/bonus content must not trigger deletion of the real feature."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Making.Of.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_edition_differs_across_resolution(self, tmp_path: Path) -> None:
+        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"extended")
+        lib_fname = "The.Matrix.1999.Theatrical.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"theatrical")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_same_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """Extended 2160p should delete Extended 1080p — same edition, higher resolution."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_base_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """2160p (no edition) should delete 1080p (no edition) — same base, higher resolution."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_same_res_edition_mismatch(self, tmp_path: Path) -> None:
+        """Different editions at same resolution must NOT be deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Directors.Cut.1080p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_same_res_same_edition(self, tmp_path: Path) -> None:
+        """Same edition at same resolution: higher-scored variant deletes lower."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Extended.1080p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_new_primary_has_bracketed_extras(self, tmp_path: Path) -> None:
+        """New primary with bracketed extras token in raw filename must not trigger deletion."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_lib_file_has_bracketed_extras(self, tmp_path: Path) -> None:
+        """Library file with bracketed extras token in raw filename is not deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.[Behind.the.Scenes].1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_dotted_bracket_extras_detected(self, tmp_path: Path) -> None:
+        """Bracket extras with dot-separated words (e.g. [Behind.the.Scenes]) must be detected."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Behind.the.Scenes].mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_hyphenated_bracket_extras_detected(self, tmp_path: Path) -> None:
+        """Hyphen-separated bracket extras still prevent deletion."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Behind-the-Scenes].mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_no_false_positive_for_extra_in_title(self, tmp_path: Path) -> None:
+        """Movie titled 'Extra Ordinary' must NOT be treated as extras content."""
+        movie_dir = tmp_path / "Extra Ordinary (2019)"
+        movie_dir.mkdir()
+        new_fname = "Extra.Ordinary.2019.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Extra.Ordinary.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_bracketed_extras_still_detected(self, tmp_path: Path) -> None:
+        """Bracket-wrapped extras keyword still prevents deletion after false-positive fix."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_brace_wrapped_extras_detected(self, tmp_path: Path) -> None:
+        """Curly-brace-wrapped extras keyword prevents deletion (sanitise strips braces too)."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.{Featurettes}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_special_edition_not_treated_as_extras(self, tmp_path: Path) -> None:
+        """'Special Edition' in the post-year segment must NOT be treated as extras content.
+
+        A release like 'Movie.2019.Special.Edition.2160p.Remux' is the main feature,
+        not bonus content.  The extras guard must not fire and the lower-quality
+        library copy must be deleted.
+        """
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Special.Edition.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Special.Edition.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_special_features_is_treated_as_extras(self, tmp_path: Path) -> None:
+        """'Special Features' in the post-year segment IS extras content and must be skipped."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Special.Features.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_plural_extras_protected(self, tmp_path: Path) -> None:
+        """Plural extras keywords (deleted scenes, interviews, short films) must prevent deletion."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Deleted.Scenes.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0, "plural 'Deleted Scenes' must be treated as extras"
+        assert (movie_dir / lib_fname).exists()
+
+    def test_extra_singular_not_treated_as_extras(self, tmp_path: Path) -> None:
+        """'EXTRA' (singular) in the post-year segment must NOT be treated as extras content.
+
+        A release tagged 'Movie.2019.2160p.BluRay-EXTRA.mkv' is the main feature;
+        only the plural form 'extras' is a known extras keyword.
+        """
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.2160p.BluRay-EXTRA.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_theatrical_tag_treated_as_base_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """Theatrical 2160p should delete untagged 1080p — theatrical IS the base edition."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Theatrical.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_theatrical_vs_extended_preserved(self, tmp_path: Path) -> None:
+        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Theatrical.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_theatrical_extended_supersedes_lower_quality_extended(self, tmp_path: Path) -> None:
+        """Theatrical Extended 2160p Remux should delete Extended 1080p BluRay — both Extended."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Theatrical.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Extended.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_compound_edition_same_tags_different_order(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p Remux should delete Extended Unrated 1080p BluRay — same compound edition, higher res."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Extended.Unrated.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_compound_edition_different_tags_skipped(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p must NOT delete Directors Cut 1080p — different edition sets."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Directors.Cut.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
 
 # _safe_path_component
 
@@ -68,6 +921,66 @@ class TestSafePathComponent:
 
     def test_empty_string(self) -> None:
         assert _safe_path_component("") == ""
+
+
+# _run_hook
+
+
+class TestRunHook:
+    """Tests for the _run_hook subprocess helper."""
+
+    def test_returns_true_on_zero_exit(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo hello", "/tmp/movie", "post_copy") is True
+
+    def test_returns_false_on_nonzero_exit(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "error")
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+        assert _run_hook("false", "/tmp/movie", "pre_delete") is False
+
+    def test_substitutes_dir_placeholder(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("chattr -i {dir}/*", "/mnt/media/The Matrix (1999)", "pre_delete")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "chattr -i '/mnt/media/The Matrix (1999)'/*"
+
+    def test_uses_shell_true(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+        assert mock_popen.call_args[1]["shell"] is True
+
+    def test_returns_false_on_timeout(self, mocker: MockerFixture) -> None:
+        import subprocess as _subprocess
+
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.killpg")
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        mock_proc.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd="echo", timeout=300),
+            ("", ""),  # drain after SIGTERM
+        ]
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo {dir}", "/tmp/movie", "post_copy") is False
 
 
 # _cert_acceptable
@@ -1002,3 +1915,914 @@ class TestProcessOneCopyCompletedFalse:
 
         qbt.delete_torrent.assert_called_once_with("abc123", delete_data=False, state="completed")
         db.mark_completed.assert_called_once_with("tag1")
+
+
+class TestProcessOneSupersession:
+    """Integration tests for the delete_lower_quality path in _process_one."""
+
+    def _make_config(self, enabled: bool, dst_dir: str) -> Config:
+        from movarr.config import DefaultCopyLibraryConfig, PostProcessConfig
+
+        return Config().model_copy(
+            update={
+                "post_process": PostProcessConfig(
+                    copy_completed=True,
+                    remove_completed=False,
+                    delete_lower_quality=enabled,
+                    default_copy_library=DefaultCopyLibraryConfig(hd_path=dst_dir),
+                )
+            }
+        )
+
+    def test_deletes_lower_quality_when_option_enabled(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """After a successful copy, lower-quality library files in dst_dir are deleted."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+        # canonical_fname for a flat torrent entry is the filename itself; simulate the copy
+        (movie_folder / "The Matrix 1999 1080p Remux.mkv").write_bytes(b"new")
+
+        torrent = {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert not old_file.exists(), "Lower-quality file should have been deleted"
+
+    def test_does_not_delete_when_option_disabled(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """When delete_lower_quality is False, no library files are deleted."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=False, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        torrent = {
+            "torrent_tag": "tag2",
+            "torrent_hash": "def456",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert old_file.exists(), "File should be untouched when option is disabled"
+
+    def test_does_not_delete_when_copy_failed(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """Supersession is skipped entirely if the copy/verify step fails."""
+        dst_base = tmp_path
+        cfg = self._make_config(enabled=True, dst_dir=str(dst_base))
+
+        movie_folder = dst_base / "The Matrix (1999)"
+        movie_folder.mkdir()
+        old_file = movie_folder / "The Matrix 1999 1080p BluRay.mkv"
+        old_file.write_bytes(b"old")
+
+        torrent = {
+            "torrent_tag": "tag3",
+            "torrent_hash": "ghi789",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p Remux.mkv", "file_size": 20_000_000_000}],
+        }
+        db_record = mocker.MagicMock()
+        db_record.imdb_title = "The Matrix"
+        db_record.imdb_year = "1999"
+        db_record.imdb_genres_list = "[]"
+        db_record.imdb_certification = ""
+        db_record.imdb_cert_source = ""
+        db_record.index_title = "The Matrix 1999 1080p Remux"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = db_record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=False)
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+
+        _process_one(torrent, cfg, qbt, db)
+
+        assert old_file.exists(), "File should be untouched when copy failed"
+
+
+class TestProcessOneHooks:
+    """Tests for post_copy hook wiring in _process_one."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
+        return cfg
+
+    def _torrent(self) -> dict[str, Any]:
+        return {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "movie/The Matrix 1999 1080p.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+
+    def _db_record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        rec.imdb_genres_list = "[]"
+        rec.imdb_certification = ""
+        rec.imdb_cert_source = "imdbpie"
+        rec.index_title = "The Matrix 1999 1080p BluRay"
+        return rec
+
+    def test_post_copy_hook_fires_on_successful_copy(self, mocker: MockerFixture) -> None:
+        """post_copy hook is called after all files copy successfully."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "echo {dir}"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" in labels
+
+    def test_post_copy_hook_does_not_fire_on_copy_failure(self, mocker: MockerFixture) -> None:
+        """post_copy hook is NOT called when a copy fails."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "echo {dir}"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=False)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" not in labels
+
+    def test_post_copy_hook_not_called_when_empty(self, mocker: MockerFixture) -> None:
+        """No subprocess is spawned when post_copy is empty string (default)."""
+        config = self._config()
+        # hooks.post_copy defaults to "" — intentionally left unset
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        labels = [call[0][2] for call in mock_hook.call_args_list]
+        assert "post_copy" not in labels
+
+    def test_post_copy_hook_failure_does_not_block_cleanup(self, mocker: MockerFixture) -> None:
+        """When post_copy hook fails, mark_completed, delete_lower_quality, and remove_completed still run."""
+        config = self._config()
+        config.post_process.hooks.post_copy = "false"  # always fails
+        config.post_process.delete_lower_quality = True
+        config.post_process.remove_completed = True
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/The Matrix 1999 1080p.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_delete = mocker.patch("movarr.post_processor._delete_superseded_files")
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        db.mark_completed.assert_called_once()
+        mock_delete.assert_called_once()
+        qbt.delete_torrent.assert_called_once()
+
+
+class TestDeleteSupersededFilesHooks:
+    """Tests for pre_delete / post_delete hook wiring."""
+
+    def test_pre_delete_hook_fires_before_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """pre_delete hook is called when the deletion pass starts."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mock_hook = mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        mock_hook.assert_any_call("chattr -i {dir}/*", mocker.ANY, "pre_delete")
+
+    def test_pre_delete_hook_failure_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """If pre_delete hook returns False, no files are deleted and count is 0."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+        assert (movie_dir / old_fname).exists()
+
+    def test_post_delete_hook_fires_after_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """post_delete hook is called after the deletion loop completes."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+
+        call_order: list[str] = []
+
+        def fake_hook(cmd: str, d: str, label: str) -> bool:
+            call_order.append(label)
+            return True
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=fake_hook)
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert "post_delete" in call_order
+
+    def test_post_delete_does_not_fire_when_pre_delete_aborts(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """post_delete label never appears in call list when pre_delete fails."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+
+        called_labels: list[str] = []
+
+        def fake_hook(cmd: str, d: str, label: str) -> bool:
+            called_labels.append(label)
+            return False  # always fail
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=fake_hook)
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert "post_delete" not in called_labels
+
+    def test_hooks_not_called_when_empty(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """No subprocess is spawned when hooks are empty strings."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        # hooks default to "" — leave unset
+        mock_hook = mocker.patch("movarr.post_processor._run_hook")
+
+        _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        mock_hook.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunHookStdoutDebug:
+    """Covers the stdout debug-log path (line 128) in _run_hook."""
+
+    def test_stdout_triggers_debug_log(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("some hook output", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        result = _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+
+        assert result is True
+        debug_calls = [str(c) for c in mock_logger.debug.call_args_list]
+        assert any("some hook output" in c for c in debug_calls)
+
+
+class TestRunHookInnerTimeout:
+    """Covers lines 116-117: inner TimeoutExpired during SIGTERM communicate call."""
+
+    def test_sigterm_communicate_also_times_out(self, mocker: MockerFixture) -> None:
+        import subprocess as _subprocess
+
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mocker.patch("movarr.post_processor.os.killpg")
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        # First call: main 300s timeout; second call: SIGTERM inner 5s timeout;
+        # third call: SIGKILL inner 5s communicate succeeds.
+        mock_proc.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd="echo", timeout=300),
+            _subprocess.TimeoutExpired(cmd="echo", timeout=5),
+            ("", ""),
+        ]
+        mock_popen.return_value = mock_proc
+
+        result = _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+
+        assert result is False
+        # communicate was called three times total
+        assert mock_proc.communicate.call_count == 3
+
+
+class TestBuildCopyListEmptySavePath:
+    """Covers lines 293-295: _build_copy_list returns [] when torrent_save_path is empty."""
+
+    def test_empty_save_path_returns_empty_list(self) -> None:
+        torrent = {
+            "torrent_tag": "tag_empty",
+            "torrent_save_path": "",
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, Config())
+        assert result == []
+
+    def test_none_save_path_returns_empty_list(self) -> None:
+        torrent = {
+            "torrent_tag": "tag_none",
+            "torrent_save_path": None,
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, Config())
+        assert result == []
+
+
+class TestProcessOnePostCopyHookException:
+    """Covers lines 268-269: post_copy hook raises an unexpected exception."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
+        cfg.post_process.hooks.post_copy = "raise_hook"
+        return cfg
+
+    def _torrent(self) -> dict[str, Any]:
+        return {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "movie/The Matrix 1999 1080p.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+
+    def _db_record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        rec.imdb_genres_list = "[]"
+        rec.imdb_certification = ""
+        rec.imdb_cert_source = "imdbpie"
+        rec.index_title = "The Matrix 1999 1080p BluRay"
+        return rec
+
+    def test_post_copy_hook_exception_does_not_abort(self, mocker: MockerFixture) -> None:
+        config = self._config()
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/The Matrix 1999 1080p.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("boom"))
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        # Should not raise
+        _process_one(self._torrent(), config, qbt, db)
+
+        # mark_completed still called (processing did not abort)
+        db.mark_completed.assert_called_once()
+        # Warning was logged
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("boom" in c or "exception" in c.lower() for c in warning_calls)
+
+
+class TestDeleteSupersededFilesListdirOSError:
+    """Covers lines 586-588: os.listdir raises OSError in _delete_superseded_files."""
+
+    def test_listdir_oserror_returns_zero(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+
+        mocker.patch("movarr.post_processor.os.listdir", side_effect=OSError("cannot read"))
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+
+
+class TestDeleteSupersededFilesPreDeleteHookException:
+    """Covers lines 636-638: pre_delete hook raises exception."""
+
+    def test_pre_delete_exception_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("hook crash"))
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesPreDeleteHookListdirOSError:
+    """Covers lines 645-650: os.listdir raises OSError after pre_delete hook succeeds."""
+
+    def test_listdir_oserror_after_hook_returns_zero(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        # First listdir call (line 585) returns real listing; second call (line 644) raises OSError.
+        real_entries = [new_fname, "The Matrix 1999 1080p BluRay.mkv"]
+        mocker.patch(
+            "movarr.post_processor.os.listdir",
+            side_effect=[real_entries, OSError("gone")],
+        )
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesPreDeleteRenamedPrimary:
+    """Covers lines 652-656: pre_delete hook renames the primary file."""
+
+    def test_primary_renamed_by_hook_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        # First listdir returns normal listing; second (post-hook check) is missing the primary.
+        real_entries = [new_fname, "The Matrix 1999 1080p BluRay.mkv"]
+        remaining_without_primary = ["The Matrix 1999 1080p BluRay.mkv"]
+        mocker.patch(
+            "movarr.post_processor.os.listdir",
+            side_effect=[real_entries, remaining_without_primary],
+        )
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesNonNumericResolution:
+    """Covers lines 717-718: extract_resolution returns non-numeric string."""
+
+    def test_non_numeric_resolution_skips_file(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p HDTV.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        # Return a truthy non-numeric string so int() raises ValueError.
+        mocker.patch("movarr.post_processor.extract_resolution", return_value="unknown")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+
+class TestDeleteSupersededFilesDeleteFileFails:
+    """Covers line 751: delete_file returns False — error is logged, count stays 0."""
+
+    def test_delete_file_failure_logged(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=False)
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        error_calls = [str(c) for c in mock_logger.error.call_args_list]
+        assert any("Failed to auto-delete" in c for c in error_calls)
+
+
+class TestDeleteSupersededFilesPostDeleteHook:
+    """Covers lines 756-758: post_delete hook returns False or raises."""
+
+    def _setup(self, tmp_path: Path) -> tuple[Path, str, Config]:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"lib")
+        config = Config()
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+        return movie_dir, new_fname, config
+
+    def test_post_delete_returns_false_logs_warning(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir, new_fname, config = self._setup(tmp_path)
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        # Deletion happened (delete_file returned True) so count > 0
+        assert count == 1
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("post_delete hook failed" in c for c in warning_calls)
+
+    def test_post_delete_raises_logs_warning(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir, new_fname, config = self._setup(tmp_path)
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("hook exploded"))
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("exception" in c.lower() or "hook exploded" in c for c in warning_calls)
+
+
+# ===========================================================================
+# !! WARNING — REAL FILESYSTEM + REAL SUBPROCESS TESTS !!
+#
+# These tests do NOT mock subprocess.Popen or delete_file.  They spawn actual
+# shell commands and physically unlink files from disk.
+#
+# SAFETY CONTRACT — enforced by assertion inside every test:
+#   All file operations are confined to pytest's tmp_path fixture, which
+#   resolves to a subdirectory of /tmp on this host.  The tests assert
+#   that the working directory starts with /tmp before touching anything.
+#   They will HARD FAIL if tmp_path ever resolves outside /tmp (e.g. if
+#   TMPDIR is redirected to /media or another production path).
+#
+# Never add paths like /media, /data, /mnt, or any real library location
+# to these tests.  tmp_path only.
+# ===========================================================================
+
+
+def _assert_safe_tmpdir(path: Path) -> None:
+    """Abort immediately if path is not under /tmp.
+
+    This guard exists because the tests below perform real filesystem
+    deletions.  If pytest's tmp_path ever resolved outside /tmp (e.g.
+    due to an environment variable change) we must fail loudly rather
+    than risk touching production media.
+    """
+    import os
+
+    resolved = os.path.realpath(str(path))
+    assert resolved.startswith("/tmp"), (
+        f"SAFETY VIOLATION: test directory '{resolved}' is outside /tmp. "
+        "Refusing to run destructive tests against a non-temporary path. "
+        "Check TMPDIR / PYTEST_TMPDIR environment variables."
+    )
+
+
+class TestRunHookRealSubprocess:
+    """_run_hook with a real subprocess — no Popen mock.
+
+    WARNING: spawns actual shell commands.  Confined to /tmp via
+    _assert_safe_tmpdir().  Do not add real media paths here.
+    """
+
+    def test_echo_command_returns_true(self, tmp_path: Path) -> None:
+        """A successful command (exit 0) returns True."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("echo movarr_test_ok", str(tmp_path), "post_copy") is True
+
+    def test_false_command_returns_false(self, tmp_path: Path) -> None:
+        """A failing command (exit 1) returns False."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("false", str(tmp_path), "pre_delete") is False
+
+    def test_dir_placeholder_substituted_and_available(self, tmp_path: Path) -> None:
+        """{dir} is replaced with the real path and the shell can access it."""
+        _assert_safe_tmpdir(tmp_path)
+        sentinel = tmp_path / "sentinel.txt"
+        sentinel.write_text("ok")
+        # 'test -f <file>' exits 0 when the file exists
+        result = _run_hook(
+            "test -f {dir}/sentinel.txt",
+            str(tmp_path),
+            "post_copy",
+        )
+        assert result is True
+
+    def test_dir_placeholder_missing_file_exits_nonzero(self, tmp_path: Path) -> None:
+        """{dir} substitution points at the real dir; absent file makes test exit 1."""
+        _assert_safe_tmpdir(tmp_path)
+        result = _run_hook(
+            "test -f {dir}/does_not_exist.txt",
+            str(tmp_path),
+            "pre_delete",
+        )
+        assert result is False
+
+    def test_stdout_captured_does_not_raise(self, tmp_path: Path) -> None:
+        """Commands that produce stdout output complete without error."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("echo line1 && echo line2", str(tmp_path), "post_copy") is True
+
+
+class TestDeleteSupersededFilesEndToEnd:
+    """End-to-end: real files created, real deletion, real hook subprocess.
+
+    WARNING: physically unlinks files from disk and spawns shell commands.
+    Every test calls _assert_safe_tmpdir() first to ensure operations are
+    confined to /tmp.  Do NOT introduce /media, /data, /mnt, or any real
+    library path here.
+
+    Each test explicitly asserts the quality scores before checking the
+    filesystem so that it is obvious WHY a file is (or is not) deleted.
+    A test that only checks "one file is gone" without proving *which*
+    score won is not meaningfully different from a random deletion.
+    """
+
+    def test_lower_quality_file_physically_deleted_with_post_delete_hook(self, tmp_path: Path) -> None:
+        """Score-driven deletion: 2160p Remux (120) beats 1080p BluRay (70).
+
+        The lower-scored file must be physically gone; the post_delete hook
+        must have run (witness file); the higher-scored file must survive.
+        """
+        _assert_safe_tmpdir(tmp_path)
+
+        new_san = "The Matrix 1999 2160p Remux"
+        old_san = "The Matrix 1999 1080p BluRay"
+        config = Config()
+
+        # Prove the score drives the decision before touching the filesystem.
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, (
+            f"Precondition failed: new score ({new_score}) must exceed "
+            f"old score ({old_score}) for this test to be meaningful"
+        )
+
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new-high-quality")
+        (movie_dir / old_fname).write_bytes(b"old-low-quality")
+
+        witness = tmp_path / "hook_ran.txt"
+        config.post_process.hooks.post_delete = f"touch {witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1, "expected exactly one file deleted"
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be physically gone"
+        assert (movie_dir / new_fname).exists(), f"higher-scored file ({new_score}) must survive"
+        assert witness.exists(), "post_delete hook must have run (witness file missing)"
+
+    def test_higher_quality_library_file_never_deleted(self, tmp_path: Path) -> None:
+        """Reverse-score guard: when the library file outscores the new file, nothing is deleted.
+
+        This is the critical counterpart to the deletion test.  Without it, a
+        bug that blindly deleted the first non-primary file would pass all other
+        tests in this class.
+        """
+        _assert_safe_tmpdir(tmp_path)
+
+        # new file is 1080p BluRay; library file is 2160p Remux — library wins.
+        new_san = "Inception 2010 1080p BluRay"
+        lib_san = "Inception 2010 2160p Remux"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, lib_san, config)
+        lib_score = supersession_quality_score(lib_san, new_san, config)
+        assert new_score < lib_score, (
+            f"Precondition failed: new score ({new_score}) must be less than "
+            f"lib score ({lib_score}) for this test to be meaningful"
+        )
+
+        movie_dir = tmp_path / "Inception (2010)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        lib_fname = f"{lib_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new-lower-quality")
+        (movie_dir / lib_fname).write_bytes(b"lib-higher-quality")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0, f"library file scored higher ({lib_score} > {new_score}); nothing should be deleted"
+        assert (movie_dir / lib_fname).exists(), "higher-scored library file must survive"
+
+    def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
+        """Score-driven deletion with pre_delete hook: 2160p Remux beats 1080p BluRay.
+
+        pre_delete hook must run (witness created) and old file must be gone.
+        """
+        _assert_safe_tmpdir(tmp_path)
+
+        new_san = "Interstellar 2014 2160p Remux"
+        old_san = "Interstellar 2014 1080p BluRay"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, f"Precondition: new ({new_score}) must beat old ({old_score})"
+
+        movie_dir = tmp_path / "Interstellar (2014)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        witness = tmp_path / "pre_ran.txt"
+        config.post_process.hooks.pre_delete = f"touch {witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be gone"
+        assert witness.exists(), "pre_delete hook must have run (witness file missing)"
+
+    def test_failing_pre_delete_hook_leaves_old_file_intact(self, tmp_path: Path) -> None:
+        """pre_delete exits non-zero → deletion aborted → old file survives regardless of scores."""
+        _assert_safe_tmpdir(tmp_path)
+
+        new_san = "Dune 2021 2160p Remux"
+        old_san = "Dune 2021 1080p BluRay"
+        config = Config()
+
+        # Confirm the old file WOULD be deleted if the hook didn't abort.
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, (
+            f"Precondition: new ({new_score}) must beat old ({old_score}) "
+            "so that the hook is the only reason deletion is skipped"
+        )
+
+        movie_dir = tmp_path / "Dune (2021)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        config.post_process.hooks.pre_delete = "false"  # always exits 1
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0, "deletion must be aborted when pre_delete fails"
+        assert (movie_dir / old_fname).exists(), "old file must survive a failed pre_delete"
+
+    def test_both_hooks_run_in_correct_order(self, tmp_path: Path) -> None:
+        """pre_delete runs before deletion, post_delete after; both leave witnesses; old file gone."""
+        _assert_safe_tmpdir(tmp_path)
+
+        new_san = "Blade Runner 2049 2049 2160p Remux"
+        old_san = "Blade Runner 2049 2049 1080p BluRay"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, f"Precondition: new ({new_score}) must beat old ({old_score})"
+
+        movie_dir = tmp_path / "Blade Runner 2049 (2049)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        pre_witness = tmp_path / "pre_ran.txt"
+        post_witness = tmp_path / "post_ran.txt"
+        config.post_process.hooks.pre_delete = f"touch {pre_witness}"
+        config.post_process.hooks.post_delete = f"touch {post_witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be physically gone"
+        assert pre_witness.exists(), "pre_delete hook must have run"
+        assert post_witness.exists(), "post_delete hook must have run"

@@ -55,18 +55,7 @@ def send_service_alert(service_name: str, hours_elapsed: float, config: Config) 
         f"Check that {safe_service} is running and accessible.</p>"
     )
 
-    ap = apprise.Apprise()
-    for url in urls:
-        ap.add(url)
-
-    try:
-        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
-    except Exception:
-        logger.exception("Service alert send failed.")
-        return False
-
-    if not sent:
-        logger.warning("Service alert was not delivered (apprise returned False).")
+    if not _dispatch_apprise(subject, body, list(urls)):
         return False
 
     logger.warning("Service alert sent: {}", subject)
@@ -108,21 +97,32 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
     body = _build_body(result, config)
     subject = _build_subject(result)
 
-    ap = apprise.Apprise()
-    for url in urls:
-        ap.add(url)
-
-    try:
-        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
-    except Exception:
-        logger.exception("Notification send failed.")
-        return False
-
-    if not sent:
-        logger.warning("Notification was not delivered (apprise returned False).")
+    if not _dispatch_apprise(subject, body, list(urls)):
         return False
 
     logger.info("Notification sent: {}", subject)
+    return True
+
+
+def _dispatch_apprise(subject: str, body: str, urls: list[str]) -> bool:
+    """Send *subject*/*body* via Apprise to all *urls*.
+
+    Returns True if at least one notification was sent successfully.
+    Returns False on empty URL list, empty subject/body, or any error.
+    """
+    if not urls or not subject or not body:
+        return False
+    ap = apprise.Apprise()
+    for url in urls:
+        ap.add(url)
+    try:
+        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
+    except Exception:  # noqa: BLE001
+        logger.warning("Apprise notification failed.")
+        return False
+    if not sent:
+        logger.warning("Apprise notification was not sent (no valid targets or all failed).")
+        return False
     return True
 
 
@@ -143,64 +143,84 @@ def _build_subject(result: ResultDict) -> str:
     return f"movarr: {title}{year_str} \u2014 IMDb {rating} \u2014 Queued"
 
 
-def _build_body(result: ResultDict, config: Config) -> str:
+def _safe_url(raw: str) -> str:
+    """Return a sanitised href value: raw URL HTML-escaped, or '#' if invalid/empty.
+
+    Accepts only http and https schemes. Any parse error also falls back to '#'.
+    """
+    if not raw:
+        return "#"
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme not in ("http", "https"):
+            return "#"
+    except Exception:  # noqa: BLE001
+        return "#"
+    return html.escape(raw, quote=True)
+
+
+def _extract_imdb_fields(result: ResultDict) -> dict[str, str]:
+    """Extract and format IMDb identity fields."""
     title = html.escape(result.get("imdb_title") or "Unknown")
     year = html.escape(str(result.get("imdb_year") or ""))
     imdb_id = result.get("imdb_id") or ""
     rating = html.escape(str(result.get("imdb_rating") or "?"))
     votes = html.escape(str(result.get("imdb_votes") or "?"))
+    imdb_url = f"https://imdb.com/title/{html.escape(imdb_id)}" if imdb_id else "#"
+    return {"title": title, "year": year, "imdb_id": imdb_id, "imdb_url": imdb_url, "rating": rating, "votes": votes}
 
-    # Bug #2 fix: null-guard all list -> string conversions.
+
+def _extract_content_fields(result: ResultDict) -> dict[str, str]:
+    """Extract and format cast, genre, and plot fields."""
     cast_list: list[str] = result.get("imdb_credits_cast_list") or []
     directors: list[str] = result.get("imdb_credits_director_list") or []
     genres: list[str] = result.get("imdb_genres_list") or []
-
     actors_str = html.escape(", ".join(cast_list[:10]) or "\u2014")
     directors_str = html.escape(", ".join(directors) or "\u2014")
     genres_str = html.escape(", ".join(genres) or "\u2014")
-
     plot = html.escape(result.get("imdb_plot_outline") or result.get("imdb_plot_summary") or "\u2014")
+    return {"actors_str": actors_str, "directors_str": directors_str, "genres_str": genres_str, "plot": plot}
 
+
+def _extract_index_fields(result: ResultDict) -> dict[str, str]:
+    """Extract and format index/torrent release fields."""
     index_title = html.escape(result.get("index_title") or "")
     index_size_mb = html.escape(str(result.get("index_size_mb") or "?"))
-
-    # Validate and sanitise URL-like fields.
-    # 1. Accept only http/https scheme.
-    # 2. HTML-escape the URL (with quote=True) so that quote characters in
-    #    the raw URL cannot break out of the href attribute and inject
-    #    arbitrary HTML attributes.
-    def _safe_url(raw: str) -> str:
-        if not raw:
-            return "#"
-        try:
-            parsed = urllib.parse.urlparse(raw)
-            if parsed.scheme not in ("http", "https"):
-                return "#"
-        except Exception:  # noqa: BLE001
-            return "#"
-        return html.escape(raw, quote=True)
-
     index_details = _safe_url(result.get("index_details") or "")
+    return {"index_title": index_title, "index_size_mb": index_size_mb, "index_details": index_details}
 
+
+def _queue_status_str(config: Config) -> str:
+    """Return human-readable queue status based on add_paused setting."""
     add_paused = config.torrent_client.qbittorrent.add_paused
-    queue_status = "Paused" if add_paused is True else ("Started" if add_paused is False else "Unknown")
+    return "Paused" if add_paused is True else ("Started" if add_paused is False else "Unknown")
 
-    result_details_html = _format_result_details(result.get("result_details") or [])
 
-    # Validate IMDb URL.
-    imdb_url = f"https://imdb.com/title/{html.escape(imdb_id)}" if imdb_id else "#"
+def _extract_body_fields(result: ResultDict, config: Config) -> dict[str, str]:
+    """Extract and format all fields needed to render the notification body."""
+    fields: dict[str, str] = {}
+    fields.update(_extract_imdb_fields(result))
+    fields.update(_extract_content_fields(result))
+    fields.update(_extract_index_fields(result))
+    fields["queue_status"] = _queue_status_str(config)
+    fields["result_details_html"] = _format_result_details(result.get("result_details") or [])
+    return fields
 
+
+def _build_body(result: ResultDict, config: Config) -> str:
+    """Build the HTML notification body."""
+    f = _extract_body_fields(result, config)
     return f"""
-<p><strong>Title:</strong> <a href="{imdb_url}">{title} ({year})</a> \u2014 {rating} from {votes} users</p>
-<p><strong>Plot:</strong> {plot}</p>
-<p><strong>Actors:</strong> {actors_str}</p>
-<p><strong>Directors:</strong> {directors_str}</p>
-<p><strong>Genres:</strong> {genres_str}</p>
-<p><strong>Queue Status:</strong> {queue_status}</p>
-<p><strong>Release:</strong> <a href="{index_details}">{index_title}</a></p>
-<p><strong>Size:</strong> {index_size_mb} MB</p>
+<p><strong>Title:</strong> <a href="{f["imdb_url"]}">{f["title"]} ({f["year"]})</a> \u2014 {f["rating"]} from {f["votes"]} users</p>
+<p><strong>Plot:</strong> {f["plot"]}</p>
+<p><strong>Actors:</strong> {f["actors_str"]}</p>
+<p><strong>Directors:</strong> {f["directors_str"]}</p>
+<p><strong>Genres:</strong> {f["genres_str"]}</p>
+<p><strong>Queue Status:</strong> {f["queue_status"]}</p>
+<p><strong>Release:</strong> <a href="{f["index_details"]}">{f["index_title"]}</a></p>
+<p><strong>Size:</strong> {f["index_size_mb"]} MB</p>
 <p><strong>Result Details:</strong></p>
-{result_details_html}
+{f["result_details_html"]}
 """
 
 

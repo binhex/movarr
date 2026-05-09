@@ -171,3 +171,19 @@ class TestAlertFiring:
         db.kv_set(f"{_PREFIX}.unavailable_since", _past_iso(5.0))
         with patch("movarr.service_health.send_service_alert", side_effect=RuntimeError("boom")):
             check_service_health(False, "SVC", _PREFIX, 2.0, db, _config(2.0, ["ntfy://t"]))
+
+
+class TestNaiveDatetimeResetsStreak:
+    """Timezone-naive timestamp triggers ValueError at line 122, resets streak."""
+
+    def test_naive_iso_timestamp_resets_streak(self, tmp_path: Path) -> None:
+        """A valid but tz-naive ISO timestamp is treated as corrupt and replaced."""
+        db = _db(tmp_path)
+        naive_ts = "2024-01-01T12:00:00"  # parseable, but no tzinfo
+        db.kv_set(f"{_PREFIX}.unavailable_since", naive_ts)
+        with patch("movarr.service_health.send_service_alert") as mock_alert:
+            check_service_health(False, "SVC", _PREFIX, 2.0, db, _config(2.0, ["ntfy://t"]))
+        ts = db.kv_get(f"{_PREFIX}.unavailable_since")
+        assert ts is not None
+        assert ts != naive_ts  # streak was reset to a fresh aware timestamp
+        mock_alert.assert_not_called()

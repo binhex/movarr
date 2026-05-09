@@ -252,6 +252,41 @@ class TestCopyWithVerify:
             _loguru_logger.remove(sink_id)
         assert any("erifying" in r["message"] for r in records)
 
+    def test_returns_false_when_src_sha256_raises_during_dst_verification(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """Source disappears between listing and verification; must return False not raise."""
+        content = b"same content"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content)
+        dst.write_bytes(content)
+        mocker.patch("movarr.file_utils._sha256", side_effect=FileNotFoundError("gone"))
+        result = copy_with_verify(src, dst)
+        assert result is False
+
+    def test_returns_false_when_src_disappears_after_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """Source disappears between copy and post-copy sha256; must return False."""
+        src = tmp_path / "src.mkv"
+        src.write_bytes(b"data")
+        dst = tmp_path / "dst.mkv"
+
+        import movarr.file_utils as fu
+
+        original_sha = fu._sha256
+        call_count: list[int] = [0]
+
+        def fake_sha(p: Path) -> str:
+            call_count[0] += 1
+            if call_count[0] == 1:  # first call is src post-copy verification
+                raise OSError("gone")
+            return original_sha(p)
+
+        mocker.patch("movarr.file_utils._sha256", side_effect=fake_sha)
+        mocker.patch("shutil.copy2")
+        result = fu.copy_with_verify(src, dst)
+        assert result is False
+
 
 class TestResolutionLabelFromHeight:
     """Tests for resolution_label_from_height()."""

@@ -10,6 +10,7 @@ import xmltodict
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
+from movarr.models import build_result_dict
 from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
@@ -172,21 +173,19 @@ class JackettClient:
             tracker = tracker_elem.get("#text", "")
         else:
             tracker = str(tracker_elem) if tracker_elem else ""
-        result: ResultDict = {
-            "index_title": index_title,
-            "index_tracker": tracker,
-            "index_pubdate": item.get("pubDate", ""),
-            "index_details": item.get("comments", ""),
-            "index_seeders": self._attr(item, "seeders"),
-            "index_peers": self._attr(item, "peers"),
-            "index_size": item.get("size", ""),
-            "index_size_mb": bytes_to_mb(item.get("size", "")),
-            "torrent_url": self._torrent_url(item),
-            "magnet_url": magnet_url or self._enclosure_magnet(item),
-            "category": self._attr(item, "category"),
-            "result": "Passed",
-            "result_details": [],
-        }
+        result: ResultDict = build_result_dict(
+            index_title=index_title,
+            index_tracker=tracker,
+            index_pubdate=item.get("pubDate", ""),
+            index_details=item.get("comments", ""),
+            index_seeders=self._attr(item, "seeders"),
+            index_peers=self._attr(item, "peers"),
+            index_size=item.get("size", ""),
+            index_size_mb=bytes_to_mb(item.get("size", "")),
+            torrent_url=self._torrent_url(item),
+            magnet_url=magnet_url or self._enclosure_magnet(item),
+            category=self._attr(item, "category"),
+        )
 
         # Prefer an embedded IMDb ID if present.
         imdb_id = self._attr(item, "imdbid")

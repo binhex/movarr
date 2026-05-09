@@ -19,6 +19,8 @@ from movarr.config import (
     _migrate_v29_to_v210,
     _migrate_v210_to_v211,
     _migrate_v211_to_v212,
+    _migrate_v212_to_v213,
+    _migrate_v213_to_v214,
     load_config,
 )
 
@@ -44,6 +46,14 @@ class TestGeneralConfigDefaults:
     def test_invalid_daemon_mode_raises(self) -> None:
         with pytest.raises(ValidationError):
             GeneralConfig(daemon_mode="invalid")
+
+    def test_log_level_file_valid_accepted(self) -> None:
+        cfg = GeneralConfig.model_validate({"log_level_file": "debug"})
+        assert cfg.log_level_file == "DEBUG"
+
+    def test_log_level_file_invalid_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            GeneralConfig.model_validate({"log_level_file": "verbose"})
 
 
 # QueueManagementConfig fields
@@ -120,7 +130,7 @@ class TestLoadConfig:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  log_level_console: debug\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.log_level_console == "debug"
+        assert cfg.general.log_level_console == "DEBUG"
         assert cfg.general.daemon_mode == "foreground"  # default unchanged
 
     def test_creates_file_if_absent(self, tmp_path: Path) -> None:
@@ -160,7 +170,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -185,14 +195,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -203,7 +213,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -214,7 +224,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -225,7 +235,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -386,7 +396,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -425,7 +435,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -445,7 +455,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -460,7 +470,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -478,7 +488,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -490,7 +500,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.12.0"
+        assert cfg.general.config_version == "2.14.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -707,3 +717,186 @@ class TestMigrationV211ToV212:
     def test_bumps_version_to_v212(self) -> None:
         raw: dict = {"general": {"config_version": "2.11.0"}}
         assert _migrate_v211_to_v212(raw)["general"]["config_version"] == "2.12.0"
+
+
+class TestPostProcessConfigDefaults:
+    """PostProcessConfig.delete_lower_quality must default to False."""
+
+    def test_delete_lower_quality_defaults_to_false(self) -> None:
+        from movarr.config import PostProcessConfig
+
+        cfg = PostProcessConfig()
+        assert cfg.delete_lower_quality is False
+
+    def test_delete_lower_quality_can_be_enabled(self) -> None:
+        from movarr.config import PostProcessConfig
+
+        cfg = PostProcessConfig(delete_lower_quality=True)
+        assert cfg.delete_lower_quality is True
+
+
+class TestMigrationV212ToV213:
+    """Tests for the v2.12.0 -> v2.13.0 config migration."""
+
+    def test_adds_delete_lower_quality_false(self) -> None:
+        """Migration inserts post_process.delete_lower_quality: False."""
+        raw: dict = {"general": {"config_version": "2.12.0"}}
+        result = _migrate_v212_to_v213(raw)
+        assert result["post_process"]["delete_lower_quality"] is False
+
+    def test_does_not_overwrite_existing_value(self) -> None:
+        """Migration does not clobber a pre-existing delete_lower_quality value."""
+        raw: dict = {
+            "general": {"config_version": "2.12.0"},
+            "post_process": {"delete_lower_quality": True},
+        }
+        result = _migrate_v212_to_v213(raw)
+        assert result["post_process"]["delete_lower_quality"] is True
+
+    def test_bumps_version_to_v213(self) -> None:
+        raw: dict = {"general": {"config_version": "2.12.0"}}
+        assert _migrate_v212_to_v213(raw)["general"]["config_version"] == "2.13.0"
+
+    def test_preserves_existing_post_process_keys(self) -> None:
+        """Migration does not drop existing post_process settings."""
+        raw: dict = {
+            "general": {"config_version": "2.12.0"},
+            "post_process": {"remove_completed": False},
+        }
+        result = _migrate_v212_to_v213(raw)
+        assert result["post_process"]["remove_completed"] is False
+        assert "delete_lower_quality" in result["post_process"]
+
+
+class TestMigrationV213ToV214:
+    """Tests for the v2.13.0 -> v2.14.0 config migration."""
+
+    def test_adds_hooks_block(self) -> None:
+        """Migration inserts post_process.hooks as an empty dict."""
+        raw: dict = {"general": {"config_version": "2.13.0"}}
+        result = _migrate_v213_to_v214(raw)
+        assert result["post_process"]["hooks"] == {}
+
+    def test_does_not_overwrite_existing_hooks(self) -> None:
+        """Migration does not clobber a pre-existing hooks block."""
+        raw: dict = {
+            "general": {"config_version": "2.13.0"},
+            "post_process": {"hooks": {"pre_delete": "chattr -i {dir}/*"}},
+        }
+        result = _migrate_v213_to_v214(raw)
+        assert result["post_process"]["hooks"]["pre_delete"] == "chattr -i {dir}/*"
+
+    def test_bumps_version_to_v214(self) -> None:
+        raw: dict = {"general": {"config_version": "2.13.0"}}
+        assert _migrate_v213_to_v214(raw)["general"]["config_version"] == "2.14.0"
+
+    def test_preserves_existing_post_process_keys(self) -> None:
+        """Migration does not drop existing post_process settings."""
+        raw: dict = {
+            "general": {"config_version": "2.13.0"},
+            "post_process": {"delete_lower_quality": True},
+        }
+        result = _migrate_v213_to_v214(raw)
+        assert result["post_process"]["delete_lower_quality"] is True
+        assert "hooks" in result["post_process"]
+
+
+class TestLoadConfigUnknownKeys:
+    """load_config must warn when the config file contains unknown top-level keys."""
+
+    def test_warns_on_unknown_top_level_key(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A typo'd top-level key (e.g. 'gneral') must produce a logger.warning."""
+        cfg_file = tmp_path / "config.yml"
+        cfg_file.write_text("gneral: {}\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        cfg = load_config(str(cfg_file))
+        assert isinstance(cfg, Config)
+        mock_warning.assert_called_once()
+        call_args = mock_warning.call_args
+        # First positional arg is the format string; second is the key list string.
+        assert "gneral" in call_args.args[1]
+
+
+# ---------------------------------------------------------------------------
+# New coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLogLevelNonString:
+    """validate_log_level raises when a non-string value is passed."""
+
+    def test_log_level_non_string_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            Config.model_validate({"general": {"log_level_console": 42}})
+
+
+class TestNormaliseGenreKeysNonDict:
+    """_normalise_genre_keys early-returns when override_genre is not a dict."""
+
+    def test_override_genre_none_raises_after_validator_returns(self) -> None:
+        """Validator early-returns None; Pydantic then rejects it as non-dict."""
+        from movarr.config import FiltersConfig
+
+        with pytest.raises(ValidationError):
+            FiltersConfig.model_validate({"override_genre": None})
+
+    def test_override_genre_list_raises_after_validator_returns(self) -> None:
+        """Validator early-returns a list; Pydantic then rejects it as non-dict."""
+        from movarr.config import FiltersConfig
+
+        with pytest.raises(ValidationError):
+            FiltersConfig.model_validate({"override_genre": ["action"]})
+
+
+class TestTorrentClientUnsupported:
+    """TorrentClientConfig._validate_selected raises for unsupported clients."""
+
+    def test_unsupported_torrent_client_raises(self) -> None:
+        from movarr.config import TorrentClientConfig
+
+        with pytest.raises(ValidationError):
+            TorrentClientConfig(selected="transmission")
+
+
+class TestMigrationInfiniteLoopGuard:
+    """_run_migrations breaks out when a migration does not increment config_version."""
+
+    def test_no_op_migration_does_not_loop_forever(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        from movarr.config import _run_migrations
+
+        sentinel_version = "__test_loop_guard__"
+
+        def _no_op(raw: dict) -> dict:
+            # Deliberately does NOT increment config_version.
+            return raw
+
+        patched: dict = {sentinel_version: _no_op}
+        mocker.patch("movarr.config.MIGRATIONS", patched)
+
+        config_path = tmp_path / "config.yml"
+        raw: dict = {"general": {"config_version": sentinel_version}}
+        import yaml as _yaml
+
+        config_path.write_text(_yaml.dump(raw))
+
+        mock_error = mocker.patch("movarr.config.logger.error")
+        result = _run_migrations(raw, config_path)
+        # Must return (not hang) and must have logged the loop-detection error.
+        assert result is not None
+        mock_error.assert_called_once()
+
+
+class TestLoadConfigEdgeCases:
+    """Edge cases for load_config: empty file and non-dict YAML."""
+
+    def test_load_config_empty_file_returns_defaults(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.yml"
+        p.write_text("")
+        config = load_config(p)
+        assert isinstance(config, Config)
+
+    def test_load_config_scalar_yaml_raises(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.yml"
+        p.write_text("42")
+        with pytest.raises(ValueError, match="YAML mapping"):
+            load_config(p)

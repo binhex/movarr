@@ -160,7 +160,7 @@ class TestDeleteStuck:
     def test_calls_delete_stalled_when_candidates_found(self, mocker: MockerFixture) -> None:
         """Calls delete_stalled with the correct map and flags when candidates exist."""
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        torrent_map = {"hash1": {"state": "stalledDL", "name": "Movie", "tags": ""}}
+        torrent_map = {"hash1": {"state": "stalledDL", "name": "Movie", "tags": "movarr-uuid-test"}}
         to_delete = {"hash1": {"name": "Movie", "age_mins": 200, "state": "stalledDL"}}
         db = mocker.MagicMock()
 
@@ -212,7 +212,7 @@ class TestDeleteStuck:
         """The delete_data flag is forwarded to delete_stalled unchanged."""
         qbt = mocker.MagicMock(spec=QBittorrentClient)
         to_delete = {"hash1": {"name": "Movie", "age_mins": 200, "state": "metaDL"}}
-        qbt.list_by_category.return_value = {"hash1": {"tags": ""}}
+        qbt.list_by_category.return_value = {"hash1": {"tags": "movarr-uuid-test"}}
         qbt.identify_for_deletion.return_value = to_delete
         db = mocker.MagicMock()
 
@@ -307,3 +307,64 @@ class TestMarkStalledOnDeletion:
         )
 
         db.mark_stalled.assert_called_once_with("movarr-uuid-meta")
+
+
+class TestNonMovarrTorrentNotDeleted:
+    """Torrents without a movarr- tag must be excluded from deletion candidates."""
+
+    def test_non_movarr_torrent_not_deleted(self, mocker: MockerFixture) -> None:
+        """delete_stalled must NOT be called for a torrent that carries no movarr- tag."""
+        qbt = mocker.MagicMock(spec=QBittorrentClient)
+        db = mocker.MagicMock()
+        # Torrent has a non-movarr tag; identify_for_deletion returns it as a candidate.
+        torrent_map = {
+            "hash1": {"state": "stalledDL", "name": "Foreign Movie", "tags": "radarr,other-tag"},
+        }
+        to_delete = {"hash1": {"name": "Foreign Movie", "age_mins": 999, "state": "stalledDL"}}
+        qbt.list_by_category.return_value = torrent_map
+        qbt.identify_for_deletion.return_value = to_delete
+
+        _delete_stuck(
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
+        )
+
+        qbt.delete_stalled.assert_not_called()
+
+
+class TestDeleteStuckNoTagOnDeletedHash:
+    """Deleted hash not present in torrent_map triggers the else branch (line 125)."""
+
+    def test_debug_logged_when_deleted_hash_missing_from_torrent_map(self, mocker: MockerFixture) -> None:
+        """When delete_stalled returns a hash absent from torrent_map, mark_stalled is skipped."""
+        qbt = mocker.MagicMock(spec=QBittorrentClient)
+        db = mocker.MagicMock()
+        # torrent_map has a movarr-tagged entry so the pre-filter passes.
+        torrent_map = {"known-hash": {"state": "stalledDL", "name": "Known Movie", "tags": "movarr-uuid-known"}}
+        to_delete = {"known-hash": {"name": "Known Movie", "age_mins": 999, "state": "stalledDL"}}
+        qbt.list_by_category.return_value = torrent_map
+        qbt.identify_for_deletion.return_value = to_delete
+        # delete_stalled returns a hash that isn't in torrent_map — simulates a
+        # race condition where the torrent was already gone before lookup.
+        qbt.delete_stalled.return_value = {"ghost-hash"}
+
+        _delete_stuck(
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
+        )
+
+        db.mark_stalled.assert_not_called()

@@ -19,6 +19,14 @@ __all__ = ["QBittorrentClient", "QBittorrentError"]
 _TAG_PREFIX = "movarr-"
 
 
+def _extract_movarr_tag(tags_str: str) -> str:
+    """Return the first movarr- tag from *tags_str*, or empty string."""
+    return next(
+        (t.strip() for t in tags_str.split(",") if t.strip().startswith(_TAG_PREFIX)),
+        "",
+    )
+
+
 class QBittorrentError(Exception):
     """Raised when a qBittorrent API call fails unrecoverably."""
 
@@ -133,6 +141,22 @@ class QBittorrentClient:
         _logger.debug("Found {} torrent(s) in category '{}'.", len(torrent_map), self._category)
         return torrent_map
 
+    @staticmethod
+    def _torrent_has_movarr_tag(tags_str: str) -> bool:
+        """Return True if *tags_str* contains at least one movarr- prefixed tag."""
+        return bool(_extract_movarr_tag(tags_str))
+
+    @staticmethod
+    def _build_torrent_entry(torrent: Any, files: Any, props: Any) -> dict[str, Any]:
+        """Build a torrent info dict from qBittorrent API objects."""
+        return {
+            "torrent_name": torrent.name,
+            "torrent_hash": torrent.hash,
+            "torrent_tag": _extract_movarr_tag(torrent.tags),
+            "torrent_save_path": props.save_path,
+            "torrent_file_list": [{"file_name": f.name, "file_size": f.size} for f in files],
+        }
+
     def list_completed(self) -> list[dict[str, Any]]:
         """Return details for all 100%-complete movarr-tagged torrents.
 
@@ -150,7 +174,7 @@ class QBittorrentClient:
 
         results = []
         for torrent in all_torrents:
-            if not any(t.strip().startswith(_TAG_PREFIX) for t in torrent.tags.split(",")):
+            if not self._torrent_has_movarr_tag(torrent.tags):
                 continue
             if int(torrent.amount_left) != 0:
                 continue
@@ -161,19 +185,58 @@ class QBittorrentClient:
             except qbittorrentapi.APIError as exc:
                 _logger.warning("Failed to fetch metadata for torrent '{}': {}; skipping.", torrent.hash, exc)
                 continue
-            results.append(
-                {
-                    "torrent_name": torrent.name,
-                    "torrent_hash": torrent.hash,
-                    "torrent_tag": next(
-                        (t.strip() for t in torrent.tags.split(",") if t.strip().startswith(_TAG_PREFIX)),
-                        "",
-                    ),
-                    "torrent_save_path": props.save_path,
-                    "torrent_file_list": [{"file_name": f.name, "file_size": f.size} for f in files],
-                }
-            )
+            results.append(self._build_torrent_entry(torrent, files, props))
         return results
+
+    @staticmethod
+    def _compute_torrent_age_mins(
+        info: dict[str, Any],
+        filter_type: str,
+        now: datetime.datetime,
+    ) -> int | None:
+        """Return the staleness age in minutes for *info*, or None if undetermined.
+
+        For ``last_activity`` filter: falls back to ``added_on`` when last_activity==0.
+        For ``added_on`` filter: skips when ``added_on==0`` (not yet set).
+        """
+        if filter_type == "last_activity":
+            ts = info.get("last_activity")
+            if ts is None:
+                return None
+            if ts == 0:
+                added_ts = info.get("added_on") or 0
+                if added_ts == 0:
+                    return None
+                return int((now - datetime.datetime.fromtimestamp(added_ts, tz=datetime.UTC)).total_seconds() / 60)
+            return int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
+        else:
+            # added_on: 0 is "not set" in qBittorrent — skip.
+            ts = info.get("added_on")
+            if ts is None or ts == 0:
+                return None
+            return int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
+
+    @staticmethod
+    def _collect_deletion_candidates(
+        torrent_map: dict[str, Any],
+        state: str,
+        filter_type: str,
+        now: datetime.datetime,
+    ) -> dict[str, Any]:
+        """Build the candidate map for *state* torrents with a measurable age."""
+        candidates: dict[str, Any] = {}
+        for torrent_hash, info in torrent_map.items():
+            if info.get("state") != state or "name" not in info:
+                continue
+            age_mins = QBittorrentClient._compute_torrent_age_mins(info, filter_type, now)
+            if age_mins is None:
+                continue
+            candidates[torrent_hash] = {
+                "name": info["name"],
+                "age_mins": age_mins,
+                "state": state,
+            }
+        return candidates
 
     def identify_for_deletion(
         self,
@@ -194,40 +257,7 @@ class QBittorrentClient:
             raise ValueError("filter_type must be 'last_activity' or 'added_on'.")
 
         now = datetime.datetime.now(tz=datetime.UTC)
-        candidates: dict[str, Any] = {}
-
-        for torrent_hash, info in torrent_map.items():
-            if info.get("state") != state or "name" not in info:
-                continue
-
-            ts = info.get("last_activity") if filter_type == "last_activity" else info.get("added_on")
-            if ts is None:
-                continue
-
-            if filter_type == "last_activity":
-                if ts == 0:
-                    # Never had network activity. Fall back to added_on so
-                    # brand-new torrents (just added, no peers yet) are not
-                    # immediately eligible for deletion.
-                    added_ts = info.get("added_on") or 0
-                    if added_ts == 0:
-                        continue  # Cannot determine age; skip.
-                    age_mins = int(
-                        (now - datetime.datetime.fromtimestamp(added_ts, tz=datetime.UTC)).total_seconds() / 60
-                    )
-                else:
-                    age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
-            else:
-                # added_on: 0 is "not set" in qBittorrent — skip.
-                if ts == 0:
-                    continue
-                age_mins = int((now - datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)).total_seconds() / 60)
-            candidates[torrent_hash] = {
-                "name": info["name"],
-                "age_mins": age_mins,
-                "state": state,
-            }
-
+        candidates = self._collect_deletion_candidates(torrent_map, state, filter_type, now)
         return {h: v for h, v in candidates.items() if v["age_mins"] > delay_max_mins}
 
     # ------------------------------------------------------------------

@@ -88,8 +88,8 @@ def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
                 match = _re_imdb_id.search(returned_id)
                 if match:
                     return match.group()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        _logger.debug("IMDb redirect lookup failed for %s: %s", imdb_id, e, exc_info=True)
     return imdb_id
 
 
@@ -211,29 +211,11 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
             client.session.close()
         return result
 
-    result.update(
-        {
-            "imdb_title": payload["title"],
-            "imdb_year": payload["year"],
-            "imdb_poster_url": payload["poster"],
-            "imdb_trailer_url": payload["trailer_url"],
-            "imdb_plot_summary": payload["plot_summary"],
-            "imdb_plot_outline": payload["plot_outline"],
-            "imdb_rating": payload["rating"],
-            "imdb_votes": payload["votes"],
-            "imdb_title_type": payload["title_type"],
-            "imdb_running_time_in_minutes": payload["runtime"],
-            "imdb_genres_list": payload["genres"],
-            "imdb_certification": payload["cert"],
-            "imdb_cert_source": "imdbpie" if payload["cert"] else None,
-            "imdb_credits_character_list": payload["characters"],
-            "imdb_credits_director_list": payload["directors"],
-            "imdb_credits_writer_list": payload["writers"],
-            "imdb_credits_cast_list": payload["cast"],
-            "imdb_language_list": payload["languages"],
-            "imdb_country_list": payload["countries"],
-        }
-    )
+    canonical: dict[str, Any] = {
+        **payload,
+        "cert_source": "imdbpie" if payload["cert"] else None,
+    }
+    _apply_metadata(result, canonical)
 
     msg = f"Identified IMDb metadata for '{imdb_id}' using IMDbPie."
     _logger.info(msg)
@@ -247,6 +229,78 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
 
 
 # OMDb fallback strategy
+
+
+def _omit_na(data: dict, key: str) -> str | None:
+    """Return None if *data[key]* is absent, None, or 'N/A'; else return as str."""
+    val = data.get(key)
+    if val in (None, "N/A", ""):
+        return None
+    return str(val)
+
+
+def _split_csv_field(data: dict, key: str) -> list[str] | None:
+    """Return a non-empty list of stripped tokens from a comma-separated OMDb field, or None."""
+    val = _omit_na(data, key) or ""
+    items = [x.strip() for x in val.split(",") if x.strip()]
+    return items or None
+
+
+def _parse_digits_to_int(raw: str | None) -> int | None:
+    """Extract all digit characters from *raw* and return as int, or None if *raw* is falsy."""
+    return int("".join(re.findall(r"\d+", raw))) if raw else None
+
+
+def _parse_omdb_canonical(data: dict) -> dict:
+    """Build a canonically-shaped metadata dict from a raw OMDb response *data*."""
+    _year_digits = 4  # noqa: PLR2004
+
+    votes = _parse_digits_to_int(_omit_na(data, "imdb_votes"))
+    runtime = _parse_digits_to_int(_omit_na(data, "runtime"))
+
+    cast = _split_csv_field(data, "actors")
+    directors = _split_csv_field(data, "director")
+    writers = _split_csv_field(data, "writer")
+    genres = _split_csv_field(data, "genre")
+
+    # Rated — skip MPAA-specific non-values.
+    rated = _omit_na(data, "rated")
+    if rated in ("Not Rated", "Unrated"):
+        rated = None
+
+    countries = _convert_countries(_omit_na(data, "country"))
+    languages = _convert_languages(_omit_na(data, "language"))
+
+    # Normalise year and rating to canonical numeric types.
+    # OMDb may return '2026–' for ongoing series — extract leading 4-digit year.
+    raw_year = _omit_na(data, "year")
+    year_digits = "".join(re.findall(r"\d+", raw_year))[:_year_digits] if raw_year else ""
+    year: int | None = int(year_digits) if len(year_digits) == _year_digits else None
+
+    raw_rating = _omit_na(data, "imdb_rating")
+    rating: float | None = float(raw_rating) if raw_rating else None
+
+    return {
+        "title": _omit_na(data, "title"),
+        "year": year,
+        "poster": _omit_na(data, "poster"),
+        "trailer_url": None,
+        "plot_summary": _omit_na(data, "plot"),
+        "plot_outline": None,
+        "rating": rating,
+        "votes": votes,
+        "title_type": _omit_na(data, "type"),
+        "runtime": runtime,
+        "genres": genres,
+        "cert": rated,
+        "cert_source": "omdb" if rated else None,
+        "characters": None,
+        "directors": directors,
+        "writers": writers,
+        "cast": cast,
+        "languages": languages,
+        "countries": countries,
+    }
 
 
 def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
@@ -279,68 +333,8 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         result["result_details"] = details
         return result
 
-    def _omit_na(key: str) -> str | None:
-        """Return None if value is absent, None, or 'N/A'."""
-        val = data.get(key)
-        if val in (None, "N/A", ""):
-            return None
-        return str(val)
-
-    # Strip non-digits from votes and runtime, then normalise to int.
-    raw_votes = _omit_na("imdb_votes")
-    votes: int | None = int("".join(re.findall(r"\d+", raw_votes))) if raw_votes else None
-
-    raw_runtime = _omit_na("runtime")
-    runtime: int | None = int("".join(re.findall(r"\d+", raw_runtime))) if raw_runtime else None
-
-    # Split comma-separated credits.
-    cast = [x.strip() for x in (_omit_na("actors") or "").split(",") if x.strip()] or None
-    directors = [x.strip() for x in (_omit_na("director") or "").split(",") if x.strip()] or None
-    writers = [x.strip() for x in (_omit_na("writer") or "").split(",") if x.strip()] or None
-    genres = [x.strip() for x in (_omit_na("genre") or "").split(",") if x.strip()] or None
-
-    # Rated — skip MPAA-specific non-values but keep the value so callers can
-    # set imdb_cert_source='omdb' and use it only where appropriate.
-    rated = _omit_na("rated")
-    if rated in ("Not Rated", "Unrated"):
-        rated = None
-
-    countries = _convert_countries(_omit_na("country"))
-    languages = _convert_languages(_omit_na("language"))
-
-    # Normalise year and rating to canonical numeric types.
-    # OMDb may return '2026–' for ongoing series — extract leading 4-digit year.
-    _year_digits = 4  # noqa: PLR2004
-    raw_year = _omit_na("year")
-    year_digits = "".join(re.findall(r"\d+", raw_year))[:_year_digits] if raw_year else ""
-    year: int | None = int(year_digits) if len(year_digits) == _year_digits else None
-
-    raw_rating = _omit_na("imdb_rating")
-    rating: float | None = float(raw_rating) if raw_rating else None
-
-    result.update(
-        {
-            "imdb_title": _omit_na("title"),
-            "imdb_year": year,
-            "imdb_poster_url": _omit_na("poster"),
-            "imdb_trailer_url": None,
-            "imdb_plot_summary": _omit_na("plot"),
-            "imdb_plot_outline": None,
-            "imdb_rating": rating,
-            "imdb_votes": votes,
-            "imdb_title_type": _omit_na("type"),
-            "imdb_running_time_in_minutes": runtime,
-            "imdb_genres_list": genres,
-            "imdb_certification": rated,
-            "imdb_cert_source": "omdb" if rated else None,
-            "imdb_credits_character_list": None,
-            "imdb_credits_director_list": directors,
-            "imdb_credits_writer_list": writers,
-            "imdb_credits_cast_list": cast,
-            "imdb_language_list": languages,
-            "imdb_country_list": countries,
-        }
-    )
+    canonical = _parse_omdb_canonical(data)
+    _apply_metadata(result, canonical)
 
     msg = f"Identified IMDb metadata for '{imdb_id}' using OMDb."
     _logger.info(msg)
@@ -351,6 +345,33 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
 
 
 # Private helpers
+
+
+def _apply_metadata(result: ResultDict, data: dict[str, Any]) -> None:
+    """Apply a canonically-shaped metadata dict to *result* in-place."""
+    result.update(
+        {
+            "imdb_title": data.get("title"),
+            "imdb_year": data.get("year"),
+            "imdb_poster_url": data.get("poster"),
+            "imdb_trailer_url": data.get("trailer_url"),
+            "imdb_plot_summary": data.get("plot_summary"),
+            "imdb_plot_outline": data.get("plot_outline"),
+            "imdb_rating": data.get("rating"),
+            "imdb_votes": data.get("votes"),
+            "imdb_title_type": data.get("title_type"),
+            "imdb_running_time_in_minutes": data.get("runtime"),
+            "imdb_genres_list": data.get("genres"),
+            "imdb_certification": data.get("cert"),
+            "imdb_cert_source": data.get("cert_source"),
+            "imdb_credits_character_list": data.get("characters"),
+            "imdb_credits_director_list": data.get("directors"),
+            "imdb_credits_writer_list": data.get("writers"),
+            "imdb_credits_cast_list": data.get("cast"),
+            "imdb_language_list": data.get("languages"),
+            "imdb_country_list": data.get("countries"),
+        }
+    )
 
 
 def _credits_names(credits: dict, role: str) -> list[str] | None:
@@ -493,15 +514,38 @@ def _convert_countries(raw: str | None) -> list[str] | None:
     return result or None
 
 
-def _convert_languages(raw: str | None) -> list[str] | None:
-    """Convert a comma-separated string of language names or codes to ISO 639-1 alpha-2 codes.
+def _lang_code_from(lang: object | None) -> str | None:
+    """Return the best available ISO code (alpha-2 preferred, alpha-3 fallback) for *lang*, or None."""
+    if lang is None:
+        return None
+    code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
+    return code.lower() if code else None
 
-    Tries multiple lookup strategies so that both full names ("English") and
-    ISO codes already present in the data ("en", "eng") are handled correctly.
-    The name-only lookup must NOT be used alone because pycountry will match
-    short strings like "en" against obscure language names (e.g. Endo, alpha_3
-    ="enc") instead of treating them as codes.
+
+def _lookup_language_code(name: str) -> str | None:
+    """Resolve one language token to an ISO 639-1 alpha-2 code using four lookup strategies.
+
+    Strategies tried in order:
+    1. ISO 639-1 alpha-2 code (e.g. "en", "de")
+    2. ISO 639-2/3 alpha-3 code (e.g. "eng", "deu")
+    3. ISO 639-2/B bibliographic alpha-3 code (e.g. "ger" for German)
+    4. Official language name (e.g. "English", "German")
+
+    Returns the resolved alpha-2 code (lower-case), or alpha-3 as fallback if no alpha-2 exists.
+    Returns None if no strategy matches.
     """
+    lower = name.lower()
+    lang = (
+        pycountry.languages.get(alpha_2=lower)
+        or pycountry.languages.get(alpha_3=lower)
+        or pycountry.languages.get(bibliographic=lower)
+        or pycountry.languages.get(name=name)
+    )
+    return _lang_code_from(lang)
+
+
+def _convert_languages(raw: str | None) -> list[str] | None:
+    """Convert a comma-separated string of language names or codes to ISO 639-1 alpha-2 codes."""
     if not raw:
         return None
     result = []
@@ -509,42 +553,7 @@ def _convert_languages(raw: str | None) -> list[str] | None:
         name = raw_name.strip()
         if not name:
             continue
-
-        # 1. Try as an ISO 639-1 alpha-2 code (e.g. "en", "de") first.
-        #    This must come before the name lookup to avoid false matches
-        #    where pycountry finds an obscure language by its short name.
-        lang = pycountry.languages.get(alpha_2=name.lower())
-        if lang:
-            result.append(lang.alpha_2.lower())
-            continue
-
-        # 2. Try as an ISO 639-2/3 alpha-3 code (e.g. "eng", "deu").
-        lang = pycountry.languages.get(alpha_3=name.lower())
-        if lang:
-            code = getattr(lang, "alpha_2", None) or lang.alpha_3
-            result.append(code.lower())
-            continue
-
-        # 3. Try as an ISO 639-2/B bibliographic alpha-3 code (e.g. "ger" for German).
-        lang = pycountry.languages.get(bibliographic=name.lower())
-        if lang:
-            code = getattr(lang, "alpha_2", None) or lang.alpha_3
-            result.append(code.lower())
-            continue
-
-        # 3. Try by official name (e.g. "English", "German").
-        lang = pycountry.languages.get(name=name)
-        if lang:
-            code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
-            if code:
-                result.append(code.lower())
-            continue
-
-        # 4. Try case-insensitive name match (OMDb/IMDbPie sometimes lowercases).
-        lang = pycountry.languages.get(name=name.title())
-        if lang:
-            code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
-            if code:
-                result.append(code.lower())
-
+        code = _lookup_language_code(name)
+        if code is not None:
+            result.append(code)
     return result or None
