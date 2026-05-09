@@ -797,6 +797,36 @@ class TestDeleteSupersededFiles:
 
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
+
+    def test_theatrical_tag_treated_as_base_edition_resolution_upgrade(self, tmp_path: Path) -> None:
+        """Theatrical 2160p should delete untagged 1080p — theatrical IS the base edition."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.Theatrical.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_theatrical_vs_extended_preserved(self, tmp_path: Path) -> None:
+        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Theatrical.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+
 # _safe_path_component
 
 
@@ -2071,7 +2101,6 @@ class TestProcessOneHooks:
         db.mark_completed.assert_called_once()
         mock_delete.assert_called_once()
         qbt.delete_torrent.assert_called_once()
-
 
 class TestDeleteSupersededFilesHooks:
     """Tests for pre_delete / post_delete hook wiring."""

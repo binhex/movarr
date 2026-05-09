@@ -493,6 +493,19 @@ def _parse_genres(raw: object) -> list[str]:
 # Library supersession
 
 
+def _edition_token(san: str) -> str:
+    """Return the normalized edition token for supersession comparison.
+
+    ``"theatrical"`` is treated as the base edition (empty string) because
+    the theatrical cut is the implicit default release. This allows
+    a higher-quality theatrical encode to supersede an untagged base copy
+    (and vice-versa), while still preventing extended/director's-cut editions
+    from deleting different edition types.
+    """
+    token = special_edition_token(san)
+    return "" if token == "theatrical" else token
+
+
 def _delete_superseded_files(
     dst_dir: str,
     dst_base: str,
@@ -699,22 +712,22 @@ def _delete_superseded_files(
 
         should_delete = False
         if new_res_int > lib_res_int:
-            if special_edition_token(new_san) != special_edition_token(lib_san):
+            if _edition_token(new_san) != _edition_token(lib_san):
                 logger.debug(
                     "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
                     fname,
-                    special_edition_token(new_san) or "base",
-                    special_edition_token(lib_san) or "base",
+                    _edition_token(new_san) or "base",
+                    _edition_token(lib_san) or "base",
                 )
                 continue
             should_delete = True
         elif new_res_int == lib_res_int:
-            if special_edition_token(new_san) != special_edition_token(lib_san):
+            if _edition_token(new_san) != _edition_token(lib_san):
                 logger.debug(
                     "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
                     fname,
-                    special_edition_token(new_san) or "base",
-                    special_edition_token(lib_san) or "base",
+                    _edition_token(new_san) or "base",
+                    _edition_token(lib_san) or "base",
                 )
                 continue
             new_score = supersession_quality_score(new_san, lib_san, config)
