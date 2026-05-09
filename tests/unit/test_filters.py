@@ -1359,3 +1359,27 @@ class TestPrimaryEditionToken:
         from movarr.filters import primary_edition_token
 
         assert primary_edition_token("Extended 1080p BluRay") == "extended"
+
+
+class TestEditionTokenSet:
+    """Tests for the public edition_token_set helper."""
+
+    def test_returns_frozenset_of_tokens(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Extended Unrated 2160p") == frozenset({"extended", "unrated"})
+
+    def test_skips_theatrical(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Theatrical Extended 2160p") == frozenset({"extended"})
+
+    def test_empty_for_base(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Movie 2019 2160p") == frozenset()
+
+    def test_order_independent(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Extended Unrated") == edition_token_set("Unrated Extended")

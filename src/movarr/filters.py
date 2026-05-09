@@ -42,6 +42,7 @@ __all__ = [
     "composite_quality_score",
     "filter_by_index",
     "filter_by_imdb",
+    "edition_token_set",
     "primary_edition_token",
     "special_edition_token",
     "supersession_quality_score",
@@ -91,6 +92,29 @@ def primary_edition_token(san: str) -> str:
             return "directors cut"
         return token
     return ""
+
+
+def edition_token_set(san: str) -> frozenset[str]:
+    """Return the set of all non-theatrical special-edition tokens in *san*.
+
+    Unlike ``primary_edition_token``, this function returns every non-theatrical
+    edition token as a frozenset, allowing order-insensitive comparison between
+    filenames with the same tags in a different order.
+
+    ``theatrical`` is excluded (base edition). Director's-cut variants are
+    canonicalized. Typographic apostrophes are normalized before matching.
+    """
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    tokens: set[str] = set()
+    for m in _RE_SPECIAL.finditer(norm):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            tokens.add("directors cut")
+        else:
+            tokens.add(token)
+    return frozenset(tokens)
 
 
 def filter_by_index(

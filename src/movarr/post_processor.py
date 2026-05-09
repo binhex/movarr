@@ -28,7 +28,7 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import primary_edition_token, supersession_quality_score
+from movarr.filters import edition_token_set, primary_edition_token, supersession_quality_score
 from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
 
 if TYPE_CHECKING:
@@ -719,7 +719,7 @@ def _delete_superseded_files(
 
         should_delete = False
         if new_res_int > lib_res_int:
-            if _edition_token(new_san) != _edition_token(lib_san):
+            if edition_token_set(new_san) != edition_token_set(lib_san):
                 logger.debug(
                     "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
                     fname,
@@ -729,7 +729,7 @@ def _delete_superseded_files(
                 continue
             should_delete = True
         elif new_res_int == lib_res_int:
-            if _edition_token(new_san) != _edition_token(lib_san):
+            if edition_token_set(new_san) != edition_token_set(lib_san):
                 logger.debug(
                     "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
                     fname,

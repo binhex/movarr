@@ -857,6 +857,34 @@ class TestDeleteSupersededFiles:
         assert not (movie_dir / lib_fname).exists()
 
 
+    def test_compound_edition_same_tags_different_order(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p Remux should delete Extended Unrated 1080p BluRay — same compound edition, higher res."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Extended.Unrated.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_compound_edition_different_tags_skipped(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p must NOT delete Directors Cut 1080p — different edition sets."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Directors.Cut.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
 # _safe_path_component
 
 
