@@ -305,7 +305,7 @@ class TestDatabaseVacuum:
     """Database.vacuum() must not raise."""
 
     def test_vacuum_runs_without_error(self, db: Database) -> None:
-        db.vacuum()
+        db.vacuum()  # must not raise
 
 
 # has_passed
@@ -437,6 +437,7 @@ class TestMarkStalled:
 
     def test_unknown_tag_is_noop(self, db: Database) -> None:
         db.mark_stalled("movarr-unknown")  # must not raise
+        assert db.find_by_tag("movarr-unknown") is None
 
 
 # mark_completed
@@ -455,6 +456,7 @@ class TestMarkCompleted:
 
     def test_unknown_tag_is_noop(self, db: Database) -> None:
         db.mark_completed("movarr-unknown")  # must not raise
+        assert db.find_by_tag("movarr-unknown") is None
 
 
 # expire_stalled

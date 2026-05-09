@@ -18,9 +18,6 @@ __all__ = [
     "resolution_label_from_height",
 ]
 
-# Resolution height strings recognised by the post-processor routing logic.
-_KNOWN_HEIGHTS: frozenset[str] = frozenset({"720", "1080", "2160"})
-
 
 def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[str]]]:
     """Yield ``(root, dirs, files)`` tuples for every path in *library_paths*.
@@ -84,7 +81,79 @@ def delete_file(path: str | Path) -> bool:
     return False
 
 
-def copy_with_verify(src: str | Path, dst: str | Path) -> bool:  # noqa: PLR0911
+def _verify_existing(src: Path, dst: Path) -> bool | None:
+    """Check if *dst* already matches *src* by SHA-256.
+
+    Returns:
+        True  — dst is identical to src; skip the copy.
+        None  — dst was mismatched and has been deleted; proceed to copy.
+        False — an error occurred (src disappeared or delete failed).
+    """
+    _logger.info("Verifying existing destination '{}' checksum.", dst)
+    try:
+        src_hash = _sha256(src)
+    except OSError:
+        _logger.error("Source file disappeared during verification: '{}'", src)
+        return False
+    dst_hash = _sha256(dst)
+    if src_hash == dst_hash:
+        _logger.info(
+            "Destination '{}' already matches source (sha256={}); skipping copy.",
+            dst,
+            src_hash[:12],
+        )
+        return True
+    _logger.warning(
+        "Destination '{}' checksum mismatch (src={}, dst={}); re-copying.",
+        dst,
+        src_hash[:12],
+        dst_hash[:12],
+    )
+    if not delete_file(dst):
+        return False
+    return None
+
+
+def _perform_copy(src: Path, dst: Path) -> bool:
+    """Copy *src* to *dst* via :func:`shutil.copy2` and verify checksums.
+
+    Returns:
+        True on success, False on any copy or verification failure.
+    """
+    try:
+        shutil.copy2(str(src), str(dst))
+        _logger.info("Copied '{}' → '{}'.", src, dst)
+    except FileNotFoundError as exc:
+        _logger.warning("Source '{}' not found during copy: {}.", src, exc)
+        return False
+    except PermissionError as exc:
+        _logger.warning("Permission denied copying '{}' → '{}': {}.", src, dst, exc)
+        return False
+    except OSError as exc:
+        _logger.warning("OS error copying '{}' → '{}': {}.", src, dst, exc)
+        return False
+
+    _logger.info("Verifying copy integrity for '{}'.", dst)
+    try:
+        src_hash = _sha256(src)
+    except OSError:
+        _logger.error("Source file disappeared during post-copy verification: '{}'", src)
+        return False
+    dst_hash = _sha256(dst)
+    if src_hash != dst_hash:
+        _logger.warning(
+            "Post-copy checksum mismatch for '{}': src={}, dst={}.",
+            dst,
+            src_hash[:12],
+            dst_hash[:12],
+        )
+        return False
+
+    _logger.info("Verified '{}' (sha256={}).", dst, dst_hash[:12])
+    return True
+
+
+def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
     """Copy *src* to *dst* with SHA-256 pre/post verification.
 
     - If *dst* already exists and checksums match, the copy is skipped.
@@ -101,57 +170,17 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:  # noqa: PLR0911
     """
     src_path = Path(src)
     dst_path = Path(dst)
-
     if not make_directory(dst_path.parent):
         return False
-
     if dst_path.is_file():
-        _logger.info("Verifying existing destination '{}' checksum.", dst_path)
-        src_hash = _sha256(src_path)
-        dst_hash = _sha256(dst_path)
-        if src_hash == dst_hash:
-            _logger.info(
-                "Destination '{}' already matches source (sha256={}); skipping copy.",
-                dst_path,
-                src_hash[:12],
-            )
+        existing = _verify_existing(src_path, dst_path)
+        if existing is True:
             return True
-        _logger.warning(
-            "Destination '{}' checksum mismatch (src={}, dst={}); re-copying.",
-            dst_path,
-            src_hash[:12],
-            dst_hash[:12],
-        )
-        if not delete_file(dst_path):
+        if existing is False:
             return False
+        # existing is None: dst was deleted, fall through to copy
 
-    try:
-        shutil.copy2(str(src_path), str(dst_path))
-        _logger.info("Copied '{}' → '{}'.", src_path, dst_path)
-    except FileNotFoundError as exc:
-        _logger.warning("Source '{}' not found during copy: {}.", src_path, exc)
-        return False
-    except PermissionError as exc:
-        _logger.warning("Permission denied copying '{}' → '{}': {}.", src_path, dst_path, exc)
-        return False
-    except OSError as exc:
-        _logger.warning("OS error copying '{}' → '{}': {}.", src_path, dst_path, exc)
-        return False
-
-    _logger.info("Verifying copy integrity for '{}'.", dst_path)
-    src_hash = _sha256(src_path)
-    dst_hash = _sha256(dst_path)
-    if src_hash != dst_hash:
-        _logger.warning(
-            "Post-copy checksum mismatch for '{}': src={}, dst={}.",
-            dst_path,
-            src_hash[:12],
-            dst_hash[:12],
-        )
-        return False
-
-    _logger.info("Verified '{}' (sha256={}).", dst_path, dst_hash[:12])
-    return True
+    return _perform_copy(src_path, dst_path)
 
 
 def resolution_label_from_height(height: str | None) -> str:

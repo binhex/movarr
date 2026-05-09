@@ -1177,6 +1177,30 @@ class TestGroupAndEditionBonus:
         )
         assert bonus == 0
 
+    def test_theatrical_candidate_earns_no_bonus_over_base(self) -> None:
+        from movarr.config import Config
+        from movarr.filters import composite_quality_score
+
+        cfg = Config()
+        score_theatrical_vs_base = composite_quality_score("Movie 2019 Theatrical 2160p", "Movie 2019 2160p", cfg)
+        score_base_vs_theatrical = composite_quality_score("Movie 2019 2160p", "Movie 2019 Theatrical 2160p", cfg)
+        assert score_theatrical_vs_base == score_base_vs_theatrical, (
+            "theatrical vs base should have no special-edition bonus in either direction"
+        )
+
+    def test_theatrical_extended_earns_bonus_over_base(self) -> None:
+        from movarr.config import Config
+        from movarr.filters import composite_quality_score
+
+        cfg = Config()
+        score_compound = composite_quality_score(
+            "Movie 2019 Theatrical Extended 2160p BluRay", "Movie 2019 2160p BluRay", cfg
+        )
+        score_base = composite_quality_score(
+            "Movie 2019 2160p BluRay", "Movie 2019 Theatrical Extended 2160p BluRay", cfg
+        )
+        assert score_compound > score_base, "Theatrical Extended should earn +10 bonus over a base release"
+
 
 # Log-level behaviour
 
@@ -1250,3 +1274,147 @@ class TestCheckBitrateEdgeCases:
         result["index_size"] = "8000000000"
         out = _check_bitrate(result)
         assert out["result"] == "Failed"
+
+
+class TestSpecialEditionToken:
+    """Tests for the public special_edition_token helper."""
+
+    def test_returns_empty_string_for_no_token(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 1080p BluRay") == ""
+
+    def test_returns_extended(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 Extended 1080p BluRay") == "extended"
+
+    def test_returns_theatrical(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 Theatrical 1080p BluRay") == "theatrical"
+
+    def test_case_insensitive(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("The Matrix 1999 EXTENDED 1080p BluRay") == "extended"
+
+    def test_matches_directors_cut_with_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director's Cut 2160p") == "directors cut"
+
+    def test_matches_directors_cut_without_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Directors Cut 2160p") == "directors cut"
+
+    def test_matches_director_s_cut_space_separated(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director s Cut 2160p") == "directors cut"
+
+    def test_canonicalizes_directors_cut_variants(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Director's Cut") == special_edition_token("Directors Cut") == "directors cut"
+
+    def test_handles_unicode_curly_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director\u2019s Cut 2160p Remux") == "directors cut"
+
+
+class TestPrimaryEditionToken:
+    """Tests for the public primary_edition_token helper."""
+
+    def test_theatrical_extended_returns_extended(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Theatrical Extended 2160p Remux") == "extended"
+
+    def test_theatrical_only_returns_empty(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Theatrical 2160p Remux") == ""
+
+    def test_directors_cut_canonical(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Director's Cut 2160p") == "directors cut"
+
+    def test_no_edition_returns_empty(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("The Matrix 1999 2160p BluRay") == ""
+
+    def test_extended_no_theatrical_returns_extended(self) -> None:
+        from movarr.filters import primary_edition_token
+
+        assert primary_edition_token("Extended 1080p BluRay") == "extended"
+
+
+class TestEditionTokenSet:
+    """Tests for the public edition_token_set helper."""
+
+    def test_returns_frozenset_of_tokens(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Extended Unrated 2160p") == frozenset({"extended", "unrated"})
+
+    def test_skips_theatrical(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Theatrical Extended 2160p") == frozenset({"extended"})
+
+    def test_empty_for_base(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Movie 2019 2160p") == frozenset()
+
+    def test_order_independent(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Extended Unrated") == edition_token_set("Unrated Extended")
+
+
+# _check_bitrate — zero threshold treated as disabled
+
+
+class TestCheckBitrateZeroThreshold:
+    """minimum_bitrate_mb=0 must disable the bitrate check (README-documented)."""
+
+    def test_zero_bitrate_passes_without_index_size(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result = _imdb_result()
+        result["_filter_minimum_bitrate_mb"] = 0
+        result.pop("index_size", None)
+        result.pop("imdb_running_time_in_minutes", None)
+        out = _check_bitrate(result)
+        assert out["result"] == "Passed"
+
+    def test_zero_bitrate_passes_via_filter_by_imdb(self) -> None:
+        result = _imdb_result()
+        result["_filter_minimum_bitrate_mb"] = 0
+        result.pop("index_size", None)
+        cfg = Config()
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
+
+
+# _check_reject_movie_titles — empty-normalised reject entry is skipped
+
+
+class TestRejectMovieTitleEmptyNorm:
+    """A reject entry that normalises to an empty string must be skipped."""
+
+    def test_all_punctuation_reject_entry_does_not_reject(self) -> None:
+        """'---' normalises to '' and must NOT reject a valid title."""
+        cfg = _make_config(reject_movie_title_list=["---"])
+        result = _index_result(
+            movie_title_compare="thedarkknight",
+            movie_title_and_year_compare="thedarkknight2008",
+        )
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"

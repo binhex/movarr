@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from movarr.config import Config
 from movarr.downloader import HttpError
 from movarr.prowlarr import ProwlarrClient
-from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -19,22 +18,6 @@ def _make_client(mocker: MockerFixture) -> tuple[ProwlarrClient, Any]:
     cfg = Config()
     client = ProwlarrClient(cfg)
     return client, mock_http_cls.return_value
-
-
-class TestToMb:
-    """Tests for bytes_to_mb shared helper (was ProwlarrClient._to_mb)."""
-
-    def test_converts_bytes_to_mb(self) -> None:
-        assert bytes_to_mb(8_589_934_592) == "8589"
-
-    def test_truncates_remainder(self) -> None:
-        assert bytes_to_mb(1_000_001) == "1"
-
-    def test_zero_returns_zero(self) -> None:
-        assert bytes_to_mb(0) == "0"
-
-    def test_non_numeric_returns_zero(self) -> None:
-        assert bytes_to_mb("bad") == "0"
 
 
 class TestResolveIndexerId:

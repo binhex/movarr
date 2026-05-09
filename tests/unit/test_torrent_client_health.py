@@ -72,14 +72,6 @@ class TestTorrentClientHealthWrapper:
             check_and_notify(is_reachable=False, db=db, config=config)
         assert mock_engine.call_args.kwargs["service_name"] == "qBittorrent"
 
-    def test_qbittorrent_client_displays_correctly(self, tmp_path: Path) -> None:
-        """qbittorrent selected maps to 'qBittorrent' display name."""
-        db = _db(tmp_path)
-        config = _config(2.0, selected="qbittorrent")
-        with patch("movarr.torrent_client_health.check_service_health") as mock_engine:
-            check_and_notify(is_reachable=False, db=db, config=config)
-        assert mock_engine.call_args.kwargs["service_name"] == "qBittorrent"
-
     def test_end_to_end_alert_fires(self, tmp_path: Path) -> None:
         """Integration: unreachable streak exceeds threshold -> apprise called."""
         db = _db(tmp_path)

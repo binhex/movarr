@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-__all__ = ["ResultDict"]
+__all__ = ["ResultDict", "build_result_dict"]
 
 
 class ResultDict(TypedDict, total=False):
@@ -71,3 +71,57 @@ class ResultDict(TypedDict, total=False):
     result: str  # "Passed" | "Failed"
     result_details: list[str]  # human-readable chain of pass/fail reasons
     verified: str  # "true" once post-processing copy succeeds
+
+
+def build_result_dict(
+    *,
+    index_title: str,
+    index_tracker: str,
+    index_pubdate: str,
+    index_details: str,
+    index_seeders: str,
+    index_peers: str,
+    index_size: str,
+    index_size_mb: str,
+    torrent_url: str,
+    magnet_url: str,
+    category: str,
+) -> ResultDict:
+    """Return a base :class:`ResultDict` populated with the shared index fields.
+
+    Both Jackett and Prowlarr parsers produce the same thirteen fields from
+    different source shapes.  This factory centralises construction so that
+    adding a new shared field only requires one edit.
+
+    Args:
+        index_title: Raw torrent title from the indexer.
+        index_tracker: Indexer / tracker name.
+        index_pubdate: Publication date string (ISO-8601 or RSS date).
+        index_details: Detail / info URL or description string.
+        index_seeders: Seeder count as a string.
+        index_peers: Peer / leecher count as a string.
+        index_size: Raw size in bytes as a string.
+        index_size_mb: Size converted to megabytes (as a string).
+        torrent_url: Direct torrent download URL.
+        magnet_url: Magnet URI (may be empty).
+        category: Torznab category ID string (may be empty).
+
+    Returns:
+        A :class:`ResultDict` with ``result`` preset to ``"Passed"`` and
+        ``result_details`` preset to an empty list.
+    """
+    return {
+        "index_title": index_title,
+        "index_tracker": index_tracker,
+        "index_pubdate": index_pubdate,
+        "index_details": index_details,
+        "index_seeders": index_seeders,
+        "index_peers": index_peers,
+        "index_size": index_size,
+        "index_size_mb": index_size_mb,
+        "torrent_url": torrent_url,
+        "magnet_url": magnet_url,
+        "category": category,
+        "result": "Passed",
+        "result_details": [],
+    }

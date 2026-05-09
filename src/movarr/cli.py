@@ -19,17 +19,18 @@ except PackageNotFoundError:
     _VERSION = "unknown"
 
 
-def _apply_cli_overrides(config: Config, **overrides: object) -> None:
-    """Apply non-None CLI override values onto *config* in-place.
-
-    Any kwarg whose value is ``None`` is skipped (user did not supply it).
-    """
+def _apply_general_overrides(config: Config, overrides: dict[str, object]) -> None:
     if overrides.get("db_path") is not None:
         config.general.db_path = str(overrides["db_path"])
     if overrides.get("library_path_list") is not None:
         config.general.library_path_list = [
             p.strip() for p in str(overrides["library_path_list"]).split(",") if p.strip()
         ]
+    if overrides.get("daemon"):
+        config.general.daemon_mode = "background"
+
+
+def _apply_qbt_overrides(config: Config, overrides: dict[str, object]) -> None:
     if overrides.get("qbt_host") is not None:
         config.torrent_client.qbittorrent.host = str(overrides["qbt_host"])
     if overrides.get("qbt_port") is not None:
@@ -38,6 +39,9 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.torrent_client.qbittorrent.username = str(overrides["qbt_username"])
     if overrides.get("qbt_password") is not None:
         config.torrent_client.qbittorrent.password = str(overrides["qbt_password"])
+
+
+def _apply_index_proxy_overrides(config: Config, overrides: dict[str, object]) -> None:
     if overrides.get("index_proxy") is not None:
         config.index_proxy.selected = str(overrides["index_proxy"])
     if overrides.get("jackett_host") is not None:
@@ -52,6 +56,16 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.index_proxy.prowlarr.port = cast("int", overrides["prowlarr_port"])
     if overrides.get("prowlarr_api_key") is not None:
         config.index_proxy.prowlarr.api_key = str(overrides["prowlarr_api_key"])
+
+
+def _apply_cli_overrides(config: Config, **overrides: object) -> None:
+    """Apply non-None CLI override values onto *config* in-place.
+
+    Any kwarg whose value is ``None`` is skipped (user did not supply it).
+    """
+    _apply_general_overrides(config, overrides)
+    _apply_qbt_overrides(config, overrides)
+    _apply_index_proxy_overrides(config, overrides)
 
 
 @click.command()
@@ -179,7 +193,7 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     "--daemon",
     is_flag=True,
     default=False,
-    help="Run in daemon (background) mode; otherwise single-pass foreground.",
+    help="Run in continuous scheduling mode (long-running foreground process; use systemd or Docker for daemonization).",
 )
 @click.option(
     "--test",
@@ -222,10 +236,6 @@ def cli(
 
     config = load_config(config_path)
 
-    # --daemon flag overrides general.daemon_mode in config.
-    if daemon:
-        config.general.daemon_mode = "background"
-
     _apply_cli_overrides(
         config,
         db_path=db_path,
@@ -241,6 +251,7 @@ def cli(
         prowlarr_host=prowlarr_host,
         prowlarr_port=prowlarr_port,
         prowlarr_api_key=prowlarr_api_key,
+        daemon=daemon,
     )
 
     def _log_format(record: dict) -> str:
@@ -259,6 +270,7 @@ def cli(
     create_logger(
         log_format=_log_format,
         log_level=effective_log_level,
+        log_level_file=config.general.log_level_file.upper(),
         log_path=effective_log_path,
     )
     _logger.info("movarr v{}", _VERSION)

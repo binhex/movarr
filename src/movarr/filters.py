@@ -38,13 +38,83 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["filter_by_index", "filter_by_imdb"]
+__all__ = [
+    "composite_quality_score",
+    "filter_by_index",
+    "filter_by_imdb",
+    "edition_token_set",
+    "primary_edition_token",
+    "special_edition_token",
+    "supersession_quality_score",
+]
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
-_RE_SPECIAL = re.compile(r"\b(extended|directors\scut|unrated|theatrical)\b", re.IGNORECASE)
+_RE_SPECIAL = re.compile(r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
+_UNICODE_APOSTROPHES = re.compile(r"[\u2018\u2019\u02bc\u02bb]")
 
 
 # Public entry points
+
+
+def special_edition_token(san: str) -> str:
+    """Return the special-edition token found in *san* (lowercase), or empty string.
+
+    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+    Typographic apostrophes are normalized to ASCII before matching.
+    """
+    normalized = _UNICODE_APOSTROPHES.sub("'", san)
+    m = _RE_SPECIAL.search(normalized)
+    if not m:
+        return ""
+    token = m.group(0).lower()
+    if "director" in token and "cut" in token:
+        return "directors cut"
+    return token
+
+
+def primary_edition_token(san: str) -> str:
+    """Return the primary non-theatrical special-edition token found in *san*.
+
+    Unlike ``special_edition_token``, this function iterates over **all** edition
+    tokens and returns the first one that is not ``theatrical``, which is treated
+    as the base edition.  Returns empty string when no non-theatrical token is
+    found (the file is untagged or tagged only as theatrical).
+
+    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+    Typographic apostrophes are normalized to ASCII before matching.
+    """
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    for m in _RE_SPECIAL.finditer(norm):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            return "directors cut"
+        return token
+    return ""
+
+
+def edition_token_set(san: str) -> frozenset[str]:
+    """Return the set of all non-theatrical special-edition tokens in *san*.
+
+    Unlike ``primary_edition_token``, this function returns every non-theatrical
+    edition token as a frozenset, allowing order-insensitive comparison between
+    filenames with the same tags in a different order.
+
+    ``theatrical`` is excluded (base edition). Director's-cut variants are
+    canonicalized. Typographic apostrophes are normalized before matching.
+    """
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    tokens: set[str] = set()
+    for m in _RE_SPECIAL.finditer(norm):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            tokens.add("directors cut")
+        else:
+            tokens.add(token)
+    return frozenset(tokens)
 
 
 def filter_by_index(
@@ -81,6 +151,33 @@ def filter_by_index(
     return result
 
 
+def _apply_override_gate(result: ResultDict, config: Config) -> tuple[bool, ResultDict]:
+    """Check all override conditions; return (override_matched, updated_result).
+
+    A matched person/title override hard-passes the result (skipping rating/votes).
+    Genre overrides are not hard-passes — they only relax thresholds.
+    """
+    for person_type in ("character", "director", "writer", "cast"):
+        if _override_person(result, config, person_type):
+            _pass(result, f"Override {person_type} match; skipping rating/votes gates.")
+            return True, result
+    if _override_movie_title(result, config):
+        return True, result
+    return False, result
+
+
+def _apply_rating_votes_gate(result: ResultDict, config: Config) -> ResultDict:
+    """Apply genre-override-relaxed rating and votes gates.
+
+    Short-circuits after the first failure: if rating fails, votes check is skipped.
+    """
+    override_thresholds = _override_genre(result, config)
+    if not _check_rating(result, config, override_thresholds):
+        return result
+    _check_votes(result, config, override_thresholds)
+    return result
+
+
 def filter_by_imdb(
     result: ResultDict,
     config: Config,
@@ -111,23 +208,11 @@ def filter_by_imdb(
         if result.get("result") != "Passed":
             return result
 
-    # Override chain: hard-pass any of these → skip rating/votes (but still dedup).
-    override_matched = False
-    for person_type in ("character", "director", "writer", "cast"):
-        if _override_person(result, config, person_type):
-            _pass(result, f"Override {person_type} match; skipping rating/votes gates.")
-            override_matched = True
-            break
-    if not override_matched and _override_movie_title(result, config):
-        override_matched = True
+    override_matched, result = _apply_override_gate(result, config)
 
     if not override_matched:
-        # Genre override can relax rating/votes thresholds.
-        override_thresholds = _override_genre(result, config)
-
-        if not (
-            _check_rating(result, config, override_thresholds) and _check_votes(result, config, override_thresholds)
-        ):
+        _apply_rating_votes_gate(result, config)
+        if result.get("result") != "Passed":
             return result
 
     # Library dedup post-IMDb using canonical title (runs even on override hard-passes).
@@ -138,6 +223,12 @@ def filter_by_imdb(
 
 
 # Stage 1 helpers
+
+
+def _group_is_rejected(group: str, reject_list: list[str]) -> bool:
+    """Return True if *group* (case-insensitive) is in *reject_list*."""
+    reject_lower = [g.lower() for g in reject_list]
+    return group.lower() in reject_lower
 
 
 def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
@@ -153,14 +244,11 @@ def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
     reject_list = config.filters.reject_index_group_list
     if not reject_list:
         return _pass(result, "No reject_index_group_list defined.")
-
     index_title = result.get("index_title") or ""
     group = extract_group(sanitise(index_title) or "")
     if not group:
         return _pass(result, "No release group detected; skipping group check.")
-
-    reject_lower = [g.lower() for g in reject_list]
-    if group.lower() in reject_lower:
+    if _group_is_rejected(group, reject_list):
         return _fail(result, f"Release group '{group}' is in reject_index_group_list.")
     return _pass(result, f"Release group '{group}' is not in reject_index_group_list.")
 
@@ -303,7 +391,7 @@ def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
 def _check_bitrate(result: ResultDict) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
-    if min_bitrate_mb is None:
+    if min_bitrate_mb is None or min_bitrate_mb == 0:
         return _pass(result, "No minimum bitrate defined.")
 
     raw_size = result.get("index_size")
@@ -371,13 +459,11 @@ def _check_language_country(result: ResultDict, config: Config, kind: str) -> Re
     allow_list = getattr(config.filters, f"allow_{kind}_list", []) or []
     if not allow_list:
         return _pass(result, f"No allow {kind} list defined.")
-
     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
         # Fail closed: allow-list is configured but metadata is missing or
         # unmappable. Passing silently would defeat the allow-list on bad data.
         return _fail(result, f"No IMDb {kind} data available; failing closed (allow_{kind}_list is configured).")
-
     imdb_lower = [x.lower() for x in imdb_list]
     allow_lower = [x.lower() for x in allow_list]
 
@@ -415,7 +501,6 @@ def _override_movie_title(result: ResultDict, config: Config) -> bool:
     override_list = config.filters.override_movie_title_list or []
     if not override_list:
         return False
-
     compare_title = result.get("movie_title_compare") or ""
     compare_title_year = result.get("movie_title_and_year_compare") or ""
     for title in override_list:
@@ -423,7 +508,6 @@ def _override_movie_title(result: ResultDict, config: Config) -> bool:
         if norm and norm in (compare_title, compare_title_year):
             _pass(result, f"Override movie title '{title}' matched.")
             return True
-
     return False
 
 
@@ -512,7 +596,7 @@ def _check_library_canonical(
     canonical_compare = normalise_for_compare(imdb_title)
     if not canonical_compare:
         return _pass(result, "Cannot normalise IMDb title for canonical library check.")
-    matches = _find_library_files_by_compare(canonical_compare, imdb_year, library_walk)
+    matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
 
@@ -549,28 +633,74 @@ def _match_library_file(
     return fname
 
 
+def _walk_library_files(
+    title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
+) -> list[str]:
+    """Walk *library_walk* and return video-file paths matching *title_compare* and *year*."""
+    found: list[str] = []
+    for root, _dirs, files in library_walk:
+        for fname in files:
+            if _match_library_file(fname, title_compare, year):
+                found.append(os.path.join(root, fname))
+    return found
+
+
 def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
     """Return absolute paths to library video files matching the index title+year."""
     title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
-    found: list[str] = []
-    for root, _dirs, files in library_walk:
-        for fname in files:
-            if _match_library_file(fname, title_compare, year):
-                found.append(os.path.join(root, fname))
-    return found
+    return _walk_library_files(title_compare, year, library_walk)
 
 
-def _find_library_files_by_compare(
-    title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
-) -> list[str]:
-    """Walk the library and return video files matching *title_compare* and *year*."""
-    found: list[str] = []
-    for root, _dirs, files in library_walk:
-        for fname in files:
-            if _match_library_file(fname, title_compare, year):
-                found.append(os.path.join(root, fname))
-    return found
+def _evaluate_single_library_file(
+    lib_path: str,
+    index_resolution: str,
+    index_san: str,
+    config: Config,
+) -> tuple[str, str] | None:
+    """Evaluate one library file against the index entry.
+
+    Returns:
+        ("fail", reason) — library is at least as good; caller should fail the result.
+        ("better", reason) — index is better; continue checking other files.
+        None — resolution unparseable; skip this file.
+    """
+    lib_fname = os.path.basename(lib_path)
+    lib_san = sanitise(lib_fname) or ""
+    lib_res = extract_resolution(lib_san)
+
+    if not lib_res:
+        return (
+            "fail",
+            f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present.",
+        )
+
+    try:
+        idx_res_int = int(index_resolution)
+        lib_res_int = int(lib_res)
+    except (ValueError, TypeError):
+        return None
+
+    if idx_res_int < lib_res_int:
+        return "fail", f"Library has higher resolution ({lib_res}p > {index_resolution}p)."
+
+    if idx_res_int > lib_res_int:
+        reason = f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
+        return "better", reason
+
+    # Same resolution — compare quality scores.
+    idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
+    lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
+    idx_score += _special_edition_bonus(index_san, lib_san)
+    lib_score += _special_edition_bonus(lib_san, index_san)
+
+    if lib_score >= idx_score:
+        return "fail", f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
+
+    reason = (
+        f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+    )
+    return "better", reason
 
 
 def _evaluate_library_files(
@@ -592,44 +722,13 @@ def _evaluate_library_files(
     best_reason = ""
 
     for lib_path in library_files:
-        lib_fname = os.path.basename(lib_path)
-        lib_san = sanitise(lib_fname) or ""
-        lib_res = extract_resolution(lib_san)
-
-        if not lib_res:
-            # Conservative: library file matched by title/year but resolution is unknown.
-            # Treat as present and skip re-download to avoid duplicates.
-            return _fail(
-                result, f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present."
-            )
-
-        try:
-            idx_res_int = int(index_resolution)
-            lib_res_int = int(lib_res)
-        except (ValueError, TypeError):
+        outcome = _evaluate_single_library_file(lib_path, index_resolution, index_san, config)
+        if outcome is None:
             continue
-
-        if idx_res_int < lib_res_int:
-            return _fail(result, f"Library has higher resolution ({lib_res}p > {index_resolution}p).")
-
-        if idx_res_int > lib_res_int:
-            best_reason = (
-                f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
-            )
-            continue
-
-        # Same resolution — compare quality scores.
-        idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
-        lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
-        idx_score += _special_edition_bonus(index_san, lib_san)
-        lib_score += _special_edition_bonus(lib_san, index_san)
-
-        if lib_score >= idx_score:
-            return _fail(
-                result, f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
-            )
-
-        best_reason = f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+        outcome_type, reason = outcome
+        if outcome_type == "fail":
+            return _fail(result, reason)
+        best_reason = reason  # outcome_type == "better"
 
     if best_reason:
         return _pass(result, f"Index title '{index_title}' passes library check — {best_reason}.")
@@ -649,11 +748,63 @@ def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
     return 0
 
 
+def _has_non_theatrical_edition(san: str) -> bool:
+    """Return True if *san* contains any special-edition token that is not ``theatrical``."""
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    return any(m.group(0).lower() != "theatrical" for m in _RE_SPECIAL.finditer(norm))
+
+
 def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
-    """Return +10 if *candidate* has a special edition token and *other* does not."""
-    if _RE_SPECIAL.search(candidate_san) and not _RE_SPECIAL.search(other_san):
+    """Return +10 if *candidate* has a non-theatrical special edition and *other* does not.
+
+    ``theatrical`` is treated as the base edition. When the candidate carries multiple
+    edition tokens (e.g. ``Theatrical Extended``), any non-theatrical token triggers
+    the bonus.
+    """
+    if not _has_non_theatrical_edition(candidate_san):
+        return 0
+    if not _has_non_theatrical_edition(other_san):
         return 10
     return 0
+
+
+def composite_quality_score(san: str, other_san: str, config: Config) -> int:
+    """Return the composite quality score for *san* relative to *other_san*.
+
+    Combines ``quality_score`` with the preferred-group and special-edition
+    bonuses so callers outside this module get a consistent score without
+    importing private symbols.
+
+    ``quality_score`` is already imported at the module level in this file.
+
+    Args:
+        san: Sanitised title of the candidate file.
+        other_san: Sanitised title of the file being compared against.
+        config: Application configuration (used for preferred group list).
+    """
+    score = quality_score(san)
+    score += _group_bonus(san, other_san, config)
+    score += _special_edition_bonus(san, other_san)
+    return score
+
+
+def supersession_quality_score(san: str, other_san: str, config: Config) -> int:
+    """Return the quality score for *san* relative to *other_san* for supersession comparisons.
+
+    Like ``composite_quality_score`` but deliberately excludes
+    ``_special_edition_bonus``. Special-edition tokens (extended, director's cut,
+    theatrical, unrated) represent different cuts of a film, not superior audio/video
+    quality. Including them in a deletion-decision score would permanently destroy
+    alternate editions the user may have intentionally kept.
+
+    Args:
+        san: Sanitised title of the candidate file.
+        other_san: Sanitised title of the file being compared against.
+        config: Application configuration (used for preferred group list).
+    """
+    score = quality_score(san)
+    score += _group_bonus(san, other_san, config)
+    return score
 
 
 # Result helpers

@@ -6,7 +6,7 @@ Three tasks run on configurable intervals:
   3. **post_processing** — copy completed torrents to the library.
 
 The scheduler can run in:
-  - **daemon mode** — background process (detaches, writes PID file).
+  - **daemon mode** — long-running foreground process (suitable for systemd/Docker, writes PID file).
   - **foreground mode** — runs each task once then exits (useful for testing).
 """
 
@@ -31,10 +31,17 @@ from movarr.search import run_search
 
 if TYPE_CHECKING:
     import types
+    from collections.abc import Callable
 
-    from movarr.config import Config
+    from movarr.config import Config, ScheduleTaskConfig
 
 __all__ = ["run", "run_once"]
+
+
+def _cleanup_pid_file(pid_path: str | None) -> None:
+    """Remove the PID file at *pid_path* if it exists."""
+    if pid_path and os.path.exists(pid_path):
+        os.unlink(pid_path)
 
 
 def run(config: Config) -> None:
@@ -57,8 +64,7 @@ def run(config: Config) -> None:
         else:
             run_once(config)
     finally:
-        if pid_path and os.path.exists(pid_path):
-            os.unlink(pid_path)
+        _cleanup_pid_file(pid_path)
 
 
 def run_once(config: Config) -> None:
@@ -93,7 +99,7 @@ def run_once(config: Config) -> None:
 def _next_run_kwargs(run_on_start: bool) -> dict:
     """Return ``next_run_time`` kwarg dict when *run_on_start* is True, else empty dict."""
     if run_on_start:
-        return {"next_run_time": datetime.datetime.now()}
+        return {"next_run_time": datetime.datetime.now(tz=datetime.UTC)}
     return {}
 
 
@@ -110,67 +116,35 @@ def _run_daemon(config: Config) -> None:
     qm_mins = config.schedule.queue_management.schedule_time_mins
     pp_mins = config.schedule.post_processing.schedule_time_mins
 
-    def _search_job() -> None:
-        _task_search(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "search")
-        except Exception:
-            logger.exception("Failed to log next search run time.")
-
-    def _queue_management_job() -> None:
-        _task_queue_management(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "queue_management")
-        except Exception:
-            logger.exception("Failed to log next queue_management run time.")
-
-    def _post_processing_job() -> None:
-        _task_post_processing(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "post_processing")
-        except Exception:
-            logger.exception("Failed to log next post_processing run time.")
-
-    if config.schedule.acquisition.enabled:
-        scheduler.add_job(
-            _search_job,
-            trigger="interval",
-            minutes=search_mins,
-            id="search",
-            name="Jackett search + filter + add",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.acquisition.run_on_start),
-        )
-    else:
-        logger.info("Search task disabled; not scheduling.")
-
-    if config.schedule.queue_management.enabled:
-        scheduler.add_job(
-            _queue_management_job,
-            trigger="interval",
-            minutes=qm_mins,
-            id="queue_management",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.queue_management.run_on_start),
-        )
-    else:
-        logger.info("Queue management task disabled; not scheduling.")
-
-    if config.schedule.post_processing.enabled:
-        scheduler.add_job(
-            _post_processing_job,
-            trigger="interval",
-            minutes=pp_mins,
-            id="post_processing",
-            name="Post-processing (copy to library)",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.post_processing.run_on_start),
-        )
-    else:
-        logger.info("Post-processing task disabled; not scheduling.")
+    _add_job_if_enabled(
+        scheduler,
+        _task_search,
+        "search",
+        config.schedule.acquisition,
+        config,
+        qbt,
+        db,
+        name="Jackett search + filter + add",
+    )
+    _add_job_if_enabled(
+        scheduler,
+        _task_queue_management,
+        "queue_management",
+        config.schedule.queue_management,
+        config,
+        qbt,
+        db,
+    )
+    _add_job_if_enabled(
+        scheduler,
+        _task_post_processing,
+        "post_processing",
+        config.schedule.post_processing,
+        config,
+        qbt,
+        db,
+        name="Post-processing (copy to library)",
+    )
 
     scheduler.start()
     logger.info(
@@ -199,40 +173,80 @@ def _run_daemon(config: Config) -> None:
 # Task wrappers — catch all exceptions so one bad run doesn't kill the scheduler
 
 
-def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+def _run_guarded(
+    label: str,
+    fn: Callable[[Config, QBittorrentClient, Database], None],
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+) -> None:
+    """Call *fn(config, qbt, db)*, logging any exception at ERROR level."""
     try:
-        if n := db.expire_stalled(config.database.stalled_expiry_days):
-            logger.info(
-                "Expired {} stalled history record(s) older than {} days.", n, config.database.stalled_expiry_days
-            )
-        if n := db.expire_failed(config.database.failed_expiry_days):
-            logger.info(
-                "Expired {} failed history record(s) older than {} days.", n, config.database.failed_expiry_days
-            )
-        if n := db.expire_passed(config.database.passed_expiry_days):
-            logger.info(
-                "Expired {} passed history record(s) older than {} days.", n, config.database.passed_expiry_days
-            )
-        run_search(config, qbt, db)
-    except Exception:
-        logger.exception("Search task failed.")
+        fn(config, qbt, db)
+    except Exception:  # noqa: BLE001
+        logger.exception("{} task failed.", label)
+
+
+def _search_with_expiry(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+    """Expire history records then run search — inner callable for _task_search."""
+    if n := db.expire_stalled(config.database.stalled_expiry_days):
+        logger.info("Expired {} stalled history record(s) older than {} days.", n, config.database.stalled_expiry_days)
+    if n := db.expire_failed(config.database.failed_expiry_days):
+        logger.info("Expired {} failed history record(s) older than {} days.", n, config.database.failed_expiry_days)
+    if n := db.expire_passed(config.database.passed_expiry_days):
+        logger.info("Expired {} passed history record(s) older than {} days.", n, config.database.passed_expiry_days)
+    run_search(config, qbt, db)
+
+
+def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+    _run_guarded("Search", _search_with_expiry, config, qbt, db)
 
 
 def _task_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
-    try:
-        run_queue_management(config, qbt, db)
-    except Exception:
-        logger.exception("Queue management task failed.")
+    _run_guarded("Queue management", run_queue_management, config, qbt, db)
 
 
 def _task_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
-    try:
-        run_post_processing(config, qbt, db)
-    except Exception:
-        logger.exception("Post-processing task failed.")
+    _run_guarded("Post-processing", run_post_processing, config, qbt, db)
 
 
 # Helpers
+
+
+def _add_job_if_enabled(
+    scheduler: BackgroundScheduler,
+    task_fn: Callable[..., None],
+    job_id: str,
+    schedule_cfg: ScheduleTaskConfig,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+    *,
+    name: str | None = None,
+) -> None:
+    """Register *task_fn* as a recurring interval job unless *schedule_cfg.enabled* is False."""
+    if not schedule_cfg.enabled:
+        logger.info("Scheduled {} is disabled — skipping.", job_id)
+        return
+
+    def _job() -> None:
+        task_fn(config, qbt, db)
+        try:
+            _log_next_run(scheduler, job_id)
+        except Exception:
+            logger.exception("Failed to log next {} run time.", job_id)
+
+    extra: dict = {"name": name} if name is not None else {}
+    scheduler.add_job(
+        _job,
+        trigger="interval",
+        minutes=schedule_cfg.schedule_time_mins,
+        id=job_id,
+        max_instances=1,
+        coalesce=True,
+        **_next_run_kwargs(schedule_cfg.run_on_start),
+        **extra,
+    )
 
 
 def _connect_qbt(config: Config) -> QBittorrentClient:
