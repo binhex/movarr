@@ -286,6 +286,7 @@ Each entry in `path_remapping`:
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
+| `pre_copy` | Shell command to run before each copy. Failure aborts the copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
 | `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
 | `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` substituted. | `""` (disabled) |
 | `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` substituted. | `""` (disabled) |

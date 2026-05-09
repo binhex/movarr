@@ -138,10 +138,10 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
         _kill_process(proc, pgid, label)
         return False
     _log_hook_output(stdout, stderr, label)
-    logger.info("{} hook completed with exit code {}.", label, proc.returncode)
     if proc.returncode != 0:
-        logger.warning("{} hook exited with code {}.", label, proc.returncode)
+        logger.warning("{} hook failed (exit {}).", label, proc.returncode)
         return False
+    logger.debug("{} hook completed (exit 0).", label)
     return True
 
 
@@ -330,6 +330,9 @@ def _process_one(
         return
     src_files, dst_base, dst_dir = target
     resolved_dst_dir = str(pathlib.Path(dst_dir).resolve())
+
+    if not _run_pre_copy_hook(config, resolved_dst_dir, dst_dir):
+        return
 
     # Determine canonical filename for the largest file (rename to parent-dir style).
     largest_fname, largest_rel_path = _largest_file(torrent)
@@ -851,6 +854,20 @@ def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
     new_after = extract_after_year(new_san) or ""
     new_bracket = " ".join(_BRACKET_RE.findall(new_primary_fname))
     return bool(_EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())))
+
+
+def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> bool:
+    """Run the pre_copy hook if configured.  Return False to abort the copy."""
+    if not config.post_process.hooks.pre_copy:
+        return True
+    try:
+        if not _run_hook(config.post_process.hooks.pre_copy, resolved_dst_dir, "pre_copy"):
+            logger.error("pre_copy hook failed for '{}'; aborting copy.", dst_dir)
+            return False
+    except Exception as exc:  # noqa: BLE001
+        logger.error("pre_copy hook raised an exception for '{}': {}; aborting copy.", dst_dir, exc)
+        return False
+    return True
 
 
 def _run_pre_delete_hook_and_verify(

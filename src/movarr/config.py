@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.14.0"
+_CONFIG_VERSION = "2.15.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 
@@ -95,7 +96,14 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.13.0",
         "2.14.0",
         [
-            (("post_process", "hooks"), {}),
+            (("post_process", "hooks"), {"post_copy": "", "pre_delete": "", "post_delete": ""}),
+        ],
+    ),
+    (
+        "2.14.0",
+        "2.15.0",
+        [
+            (("post_process", "hooks", "pre_copy"), ""),
         ],
     ),
 ]
@@ -113,7 +121,7 @@ def _make_migration(
             node = raw
             for k in keypath[:-1]:
                 node = node.setdefault(k, {})
-            node.setdefault(keypath[-1], default)
+            node.setdefault(keypath[-1], copy.deepcopy(default))
         raw.setdefault("general", {})["config_version"] = to_v
         return raw
 
@@ -204,6 +212,7 @@ _migrate_v29_to_v210 = _table_fns["2.9.0"]
 _migrate_v210_to_v211 = _table_fns["2.10.0"]
 _migrate_v212_to_v213 = _table_fns["2.12.0"]
 _migrate_v213_to_v214 = _table_fns["2.13.0"]
+_migrate_v214_to_v215 = _table_fns["2.14.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -222,6 +231,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.11.0": _migrate_v211_to_v212,
     "2.12.0": _migrate_v212_to_v213,
     "2.13.0": _migrate_v213_to_v214,
+    "2.14.0": _migrate_v214_to_v215,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -512,7 +522,7 @@ class PostProcessHooksConfig(BaseModel):
     The placeholder ``{dir}`` is substituted with the resolved absolute path of
     the destination directory before the command is executed.
 
-    ``shell=True`` is used so that glob patterns such as ``chattr -i {dir}/*``
+    ``shell=True`` is used so that glob patterns such as ``chattr -R -i {dir}``
     are expanded by the shell. Commands come from the user's own config file,
     so the trust boundary is identical to the rest of the configuration.
 
@@ -526,6 +536,7 @@ class PostProcessHooksConfig(BaseModel):
         -i``, ``trimarr``).
     """
 
+    pre_copy: str = ""
     post_copy: str = ""
     pre_delete: str = ""
     post_delete: str = ""
