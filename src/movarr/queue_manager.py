@@ -97,6 +97,17 @@ def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> No
         logger.debug("No {} torrents to delete.", cfg.label)
         return
 
+    # Filter: only delete torrents that carry a movarr- tag.  Non-movarr torrents
+    # in the same qBittorrent category must not be touched.
+    to_delete = {
+        h: info
+        for h, info in to_delete.items()
+        if any(t.strip().startswith(_TAG_PREFIX) for t in (torrent_map.get(h, {}).get("tags", "") or "").split(","))
+    }
+    if not to_delete:
+        logger.debug("No {} torrents with movarr tag to delete.", cfg.label)
+        return
+
     logger.info("Deleting {} {} torrent(s) in state '{}'.", len(to_delete), cfg.label, cfg.state)
     deleted_hashes = qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
 

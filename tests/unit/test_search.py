@@ -1165,3 +1165,32 @@ class TestProcessCriteriaIgnoreList:
 
         # Result must NOT be silently dropped — ignore_list is Jackett-only
         db.write.assert_called_once()
+
+    def test_all_ignored_returns_zero(self, mocker: MockerFixture) -> None:
+        """When every result is from an ignored tracker, _process_criteria returns 0."""
+        jackett = mocker.MagicMock()
+        raw1 = {**_base_result(), "index_tracker": "ignored-tracker"}
+        raw2 = {**_base_result("Other Movie 2021 1080p"), "index_tracker": "ignored-tracker"}
+        jackett.search.return_value = iter([raw1, raw2])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_site.ignore_list = ["ignored-tracker"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=jackett,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        count = _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        assert count == 0

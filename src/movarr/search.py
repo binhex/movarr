@@ -138,12 +138,11 @@ def _process_criteria(  # noqa: PLR0912
     session: _SearchSession,
 ) -> int:
     """Fetch and process all indexer results for one criteria tier.
-
     Returns:
-        The number of raw results yielded by the indexer (before any filtering).
+        The number of usable (non-ignored) results yielded by the indexer.
     """
     site_dict = criteria_cfg.model_dump()
-    raw_count = 0
+    used_count = 0
     ignore_set = (
         frozenset(t.lower() for t in session.config.index_site.ignore_list)
         if indexer == "all" and session.config.index_proxy.selected == "jackett"
@@ -151,7 +150,6 @@ def _process_criteria(  # noqa: PLR0912
     )
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
-        raw_count += 1
         result = _enrich_index_metadata(raw_result)
         result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
 
@@ -161,6 +159,7 @@ def _process_criteria(  # noqa: PLR0912
             if ignore_set and tracker.lower() in ignore_set:
                 logger.debug("Skipping result from ignored indexer '{}'.", tracker)
                 continue
+            used_count += 1
             if session.db.is_duplicate_exact(index_title):
                 logger.debug("'{}' already in DB; skipping.", index_title)
                 continue
@@ -220,7 +219,7 @@ def _process_criteria(  # noqa: PLR0912
             send_queued_notification(result, session.config)
             session.db.write(result)
 
-    return raw_count
+    return used_count
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:
