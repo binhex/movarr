@@ -1041,7 +1041,7 @@ class TestProcessCriteriaIgnoreList:
     """_process_criteria must skip results from indexers in ignore_list."""
 
     def test_ignored_tracker_skips_result(self, mocker: MockerFixture) -> None:
-        """Result from a tracker in ignore_list must not be written to DB or added to qbt."""
+        """Result from a tracker in jackett ignore_list must not be written to DB or added to qbt."""
         jackett = mocker.MagicMock()
         raw = {**_base_result(), "index_tracker": "some-tracker"}
         jackett.search.return_value = iter([raw])
@@ -1050,7 +1050,7 @@ class TestProcessCriteriaIgnoreList:
         db.is_duplicate_exact.return_value = False
 
         cfg = Config()
-        cfg.index_site.ignore_list = ["some-tracker"]
+        cfg.index_proxy.jackett.ignore_list = ["some-tracker"]
 
         session = _SearchSession(
             config=cfg,
@@ -1079,7 +1079,7 @@ class TestProcessCriteriaIgnoreList:
         db.is_duplicate_exact.return_value = False
 
         cfg = Config()
-        cfg.index_site.ignore_list = ["BitMagnet"]
+        cfg.index_proxy.jackett.ignore_list = ["BitMagnet"]
 
         session = _SearchSession(
             config=cfg,
@@ -1113,7 +1113,7 @@ class TestProcessCriteriaIgnoreList:
         db.is_duplicate_exact.return_value = False
 
         cfg = Config()
-        cfg.index_site.ignore_list = ["my-indexer"]
+        cfg.index_proxy.jackett.ignore_list = ["my-indexer"]
 
         session = _SearchSession(
             config=cfg,
@@ -1132,12 +1132,8 @@ class TestProcessCriteriaIgnoreList:
         # The result must reach the DB write path (not silently skipped)
         db.write.assert_called_once()
 
-    def test_ignore_list_does_not_apply_to_prowlarr_all(self, mocker: MockerFixture) -> None:
-        """ignore_list must NOT filter results when proxy is prowlarr, even with indexer='all'.
-
-        ignore_list is documented as Jackett-only.  A Prowlarr all-indexer search
-        must pass results through regardless of ignore_list contents.
-        """
+    def test_prowlarr_ignore_list_filters_results(self, mocker: MockerFixture) -> None:
+        """prowlarr.ignore_list must filter results when proxy is prowlarr and indexer is 'all'."""
         prowlarr = mocker.MagicMock()
         raw = {**_base_result(), "index_tracker": "some-tracker"}
         prowlarr.search.return_value = iter([raw])
@@ -1147,7 +1143,7 @@ class TestProcessCriteriaIgnoreList:
 
         cfg = Config()
         cfg.index_proxy.selected = "prowlarr"
-        cfg.index_site.ignore_list = ["some-tracker"]
+        cfg.index_proxy.prowlarr.ignore_list = ["some-tracker"]
 
         session = _SearchSession(
             config=cfg,
@@ -1163,7 +1159,37 @@ class TestProcessCriteriaIgnoreList:
             session=session,
         )
 
-        # Result must NOT be silently dropped — ignore_list is Jackett-only
+        db.write.assert_not_called()
+        qbt.add_torrent.assert_not_called()
+
+    def test_jackett_ignore_list_does_not_affect_prowlarr(self, mocker: MockerFixture) -> None:
+        """jackett.ignore_list must NOT filter results when proxy is prowlarr."""
+        prowlarr = mocker.MagicMock()
+        raw = {**_base_result(), "index_tracker": "some-tracker"}
+        prowlarr.search.return_value = iter([raw])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_proxy.selected = "prowlarr"
+        cfg.index_proxy.jackett.ignore_list = ["some-tracker"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=prowlarr,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        # jackett ignore_list must not bleed into prowlarr
         db.write.assert_called_once()
 
     def test_all_ignored_returns_zero(self, mocker: MockerFixture) -> None:
@@ -1177,7 +1203,7 @@ class TestProcessCriteriaIgnoreList:
         db.is_duplicate_exact.return_value = False
 
         cfg = Config()
-        cfg.index_site.ignore_list = ["ignored-tracker"]
+        cfg.index_proxy.jackett.ignore_list = ["ignored-tracker"]
 
         session = _SearchSession(
             config=cfg,
@@ -1194,26 +1220,3 @@ class TestProcessCriteriaIgnoreList:
         )
 
         assert count == 0
-
-
-class TestIgnoreListWarning:
-    """Warning is emitted when ignore_list is set but won't be applied (line 103)."""
-
-    def test_warns_when_ignore_list_set_and_proxy_is_prowlarr(self, mocker: MockerFixture) -> None:
-        """ignore_list warning fires when proxy is prowlarr (not jackett/all)."""
-        cfg = Config()
-        cfg.index_site.ignore_list = ["some-indexer"]
-        cfg.index_proxy.selected = "jackett"
-        cfg.index_site.jackett_indexer = "specific-indexer"  # not "all"
-
-        mock_factory = mocker.patch("movarr.search.get_indexer_client")
-        mock_factory.return_value.is_reachable.return_value = True
-        mocker.patch("movarr.search._process_criteria", return_value=0)
-        mocker.patch("movarr.search.check_and_notify")
-        mock_warning = mocker.patch("movarr.search.logger.warning")
-        qbt = mocker.MagicMock()
-        db = mocker.MagicMock()
-
-        run_search(cfg, qbt, db)
-
-        assert any("ignore_list" in str(call) for call in mock_warning.call_args_list)

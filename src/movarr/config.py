@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.15.0"
+_CONFIG_VERSION = "2.16.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 
@@ -195,6 +195,20 @@ def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.15.0 -> v2.16.0: move index_site.ignore_list to index_proxy.jackett.ignore_list.
+
+    The ignore_list was previously on IndexSiteConfig but only ever applied to
+    Jackett all-indexer searches.  It now lives on JackettConfig so that each
+    proxy owns its own ignore list.
+    """
+    existing = raw.get("index_site", {}).pop("ignore_list", [])
+    if existing:
+        raw.setdefault("index_proxy", {}).setdefault("jackett", {}).setdefault("ignore_list", existing)
+    raw.setdefault("general", {})["config_version"] = "2.16.0"
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Bind table-generated functions to module-level names (import compatibility)
 # ---------------------------------------------------------------------------
@@ -232,6 +246,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.12.0": _migrate_v212_to_v213,
     "2.13.0": _migrate_v213_to_v214,
     "2.14.0": _migrate_v214_to_v215,
+    "2.15.0": _migrate_v215_to_v216,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -390,6 +405,7 @@ class JackettConfig(BaseModel):
     read_timeout: float = 60.0
     limit: int = 500
     offset: int = 0
+    ignore_list: list[str] = Field(default_factory=list)
 
 
 class ProwlarrConfig(BaseModel):
@@ -399,6 +415,7 @@ class ProwlarrConfig(BaseModel):
     port: int = 9696
     api_key: str = ""
     read_timeout: float = 60.0
+    ignore_list: list[str] = Field(default_factory=list)
 
 
 class IndexProxyConfig(BaseModel):
@@ -446,7 +463,6 @@ class IndexSiteConfig(BaseModel):
 
     jackett_indexer: str = "all"
     prowlarr_indexer: str = "all"
-    ignore_list: list[str] = Field(default_factory=list)
     search: list[SearchCriteriaConfig] = Field(
         default_factory=lambda: [
             SearchCriteriaConfig(

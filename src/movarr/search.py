@@ -174,11 +174,12 @@ def _process_criteria(
     """
     site_dict = criteria_cfg.model_dump()
     used_count = 0
-    ignore_set = (
-        frozenset(t.lower() for t in session.config.index_site.ignore_list)
-        if indexer == "all" and session.config.index_proxy.selected == "jackett"
-        else frozenset()
-    )
+    proxy = session.config.index_proxy
+    if indexer == "all":
+        proxy_ignore = proxy.jackett.ignore_list if proxy.selected == "jackett" else proxy.prowlarr.ignore_list
+        ignore_set = frozenset(t.lower() for t in proxy_ignore)
+    else:
+        ignore_set = frozenset()
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(raw_result)
@@ -211,17 +212,6 @@ def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> 
     index_site = (
         site_cfg.jackett_indexer if session.config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
     )
-    # Warn if ignore_list is configured but won't be applied.
-    if site_cfg.ignore_list and not (
-        session.config.index_proxy.selected == "jackett" and site_cfg.jackett_indexer == "all"
-    ):
-        logger.warning(
-            "index_site.ignore_list is configured ({} entries) but only applies to "
-            "Jackett all-indexer searches; ignored for current proxy '{}' / indexer '{}'.",
-            len(site_cfg.ignore_list),
-            session.config.index_proxy.selected,
-            index_site,
-        )
 
     total_raw = 0
     for criteria_cfg in site_cfg.search:
