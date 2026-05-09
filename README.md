@@ -202,10 +202,12 @@ Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services.
 | `jackett.read_timeout` | HTTP read timeout in seconds. | `60.0` |
 | `jackett.limit` | Maximum number of results to request per search query. | `500` |
 | `jackett.offset` | Result offset for pagination. | `0` |
+| `jackett.ignore_list` | Jackett indexer names to skip when querying with `jackett_indexer: all`. Case-insensitive. | `[]` |
 | `prowlarr.host` | Prowlarr hostname or IP address. | `localhost` |
 | `prowlarr.port` | Prowlarr port. | `9696` |
 | `prowlarr.api_key` | Prowlarr API key (found in *Settings → General*). | `""` |
 | `prowlarr.read_timeout` | HTTP read timeout in seconds. | `60.0` |
+| `prowlarr.ignore_list` | Prowlarr indexer names to skip when querying with `prowlarr_indexer: all`. Case-insensitive. | `[]` |
 
 ### `credentials`
 
@@ -222,7 +224,6 @@ Controls what is searched and which indexers are used.
 | --- | ----------- | ------- |
 | `jackett_indexer` | Jackett indexer to query. Use `all` to query every configured indexer simultaneously. | `all` |
 | `prowlarr_indexer` | Prowlarr indexer ID to query. Use `all` (maps to `-1`) or a numeric indexer ID from Prowlarr. | `all` |
-| `ignore_list` | Jackett indexer names to skip even when `jackett_indexer` is `all`. | `[]` |
 | `search` | List of search criteria blocks (see below). | *(1080p only)* |
 | `override_search` | Per-indexer overrides for search parameters, keyed by indexer name. | `{}` |
 
@@ -286,6 +287,7 @@ Each entry in `path_remapping`:
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
+| `pre_copy` | Shell command to run before each copy. Failure aborts the copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
 | `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
 | `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` substituted. | `""` (disabled) |
 | `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` substituted. | `""` (disabled) |
