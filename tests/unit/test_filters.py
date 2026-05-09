@@ -1192,6 +1192,22 @@ class TestGroupAndEditionBonus:
             "theatrical vs base should have no special-edition bonus in either direction"
         )
 
+    def test_theatrical_extended_earns_bonus_over_base(self) -> None:
+        from movarr.config import Config
+        from movarr.filters import composite_quality_score
+
+        cfg = Config()
+        score_compound = composite_quality_score(
+            "Movie 2019 Theatrical Extended 2160p BluRay", "Movie 2019 2160p BluRay", cfg
+        )
+        score_base = composite_quality_score(
+            "Movie 2019 2160p BluRay", "Movie 2019 Theatrical Extended 2160p BluRay", cfg
+        )
+        assert score_compound > score_base, (
+            "Theatrical Extended should earn +10 bonus over a base release"
+        )
+
+
 
 # Log-level behaviour
 

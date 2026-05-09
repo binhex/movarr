@@ -46,7 +46,7 @@ _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 # segment are not quality variants of the main feature and must never be deleted.
 _EXTRAS_RE = re.compile(
     r"\b(?:behind[\s_.\-]+the[\s_.\-]+scenes|making[\s_.\-]+of|featurettes?"
-    r"|deleted[\s_.\-]+scene|interview|short[\s_.\-]+film"
+    r"|deleted[\s_.\-]+scenes?|interviews?|short[\s_.\-]+films?"
     r"|theatrical[\s_.\-]+trailer|trailer|sample"
     r"|bonus|extras|special[\s_.\-]+features?|specials)\b",
     re.IGNORECASE,

@@ -672,23 +672,22 @@ def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
     return 0
 
 
-def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
-    """Return +10 if *candidate* has a non-base special edition token and *other* does not.
+def _has_non_theatrical_edition(san: str) -> bool:
+    """Return True if *san* contains any special-edition token that is not ``theatrical``."""
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
+    return any(m.group(0).lower() != "theatrical" for m in _RE_SPECIAL.finditer(norm))
 
-    ``theatrical`` is treated as the base edition and does not earn a bonus.
+
+def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
+    """Return +10 if *candidate* has a non-theatrical special edition and *other* does not.
+
+    ``theatrical`` is treated as the base edition. When the candidate carries multiple
+    edition tokens (e.g. ``Theatrical Extended``), any non-theatrical token triggers
+    the bonus.
     """
-    candidate_norm = _UNICODE_APOSTROPHES.sub("'", candidate_san)
-    other_norm = _UNICODE_APOSTROPHES.sub("'", other_san)
-    candidate_match = _RE_SPECIAL.search(candidate_norm)
-    if not candidate_match:
+    if not _has_non_theatrical_edition(candidate_san):
         return 0
-    # theatrical is the base edition — no special-edition bonus
-    if candidate_match.group(0).lower() == "theatrical":
-        return 0
-    other_match = _RE_SPECIAL.search(other_norm)
-    # Treat theatrical on the other side as "no special edition" too
-    other_has_non_theatrical = other_match is not None and other_match.group(0).lower() != "theatrical"
-    if not other_has_non_theatrical:
+    if not _has_non_theatrical_edition(other_san):
         return 10
     return 0
 

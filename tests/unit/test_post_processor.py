@@ -780,6 +780,21 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
+    def test_plural_extras_protected(self, tmp_path: Path) -> None:
+        """Plural extras keywords (deleted scenes, interviews, short films) must prevent deletion."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Deleted.Scenes.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0, "plural 'Deleted Scenes' must be treated as extras"
+        assert (movie_dir / lib_fname).exists()
+
+
     def test_extra_singular_not_treated_as_extras(self, tmp_path: Path) -> None:
         """'EXTRA' (singular) in the post-year segment must NOT be treated as extras content.
 
