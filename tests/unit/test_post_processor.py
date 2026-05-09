@@ -301,6 +301,36 @@ class TestDeleteSupersededFiles:
         for name in lower_quality_files:
             assert (movie_dir / name).exists(), f"{name} should not have been deleted"
 
+
+    def test_safety_guard_rejects_too_many_video_files_emits_warning(self, tmp_path: Path) -> None:
+        """Guard 2: warning log includes the actual video file count."""
+        from loguru import logger as _loguru_logger
+
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        for name in [
+            "The Matrix 1999 1080p BluRay.mkv",
+            "The Matrix 1999 1080p HDTV.mkv",
+            "The Matrix 1999 720p BluRay.mkv",
+            "The Matrix 1999 720p HDTV.mkv",
+        ]:
+            (movie_dir / name).write_bytes(b"old")
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        finally:
+            _loguru_logger.remove(sink_id)
+
+        assert count == 0
+        warning_messages = [r["message"] for r in records if r["level"].name == "WARNING"]
+        assert any("5" in msg for msg in warning_messages), (
+            f"Expected file count '5' in warning log; got: {warning_messages}"
+        )
+
     def test_safety_guard_allows_exactly_four_video_files(self, tmp_path: Path) -> None:
         """Guard 2: exactly _MAX_VIDEO_FILES_IN_MOVIE_DIR video files -> proceeds normally."""
         movie_dir = tmp_path / "The Matrix (1999)"

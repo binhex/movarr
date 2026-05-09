@@ -582,7 +582,7 @@ def _delete_superseded_files(
     video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
     if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
         logger.warning(
-            "Auto-delete skipped: %d video files in '%s' exceeds max %d; no files deleted.",
+            "Auto-delete skipped: {} video files in '{}' exceeds max {}; no files deleted.",
             len(video_files),
             dst_dir,
             _MAX_VIDEO_FILES_IN_MOVIE_DIR,

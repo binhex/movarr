@@ -97,6 +97,17 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         library_walk=library_walk,
     )
 
+    index_site = site_cfg.jackett_indexer if config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
+    # Warn if ignore_list is configured but won't be applied.
+    if site_cfg.ignore_list and not (config.index_proxy.selected == "jackett" and site_cfg.jackett_indexer == "all"):
+        logger.warning(
+            "index_site.ignore_list is configured ({} entries) but only applies to "
+            "Jackett all-indexer searches; ignored for current proxy '{}' / indexer '{}'.",
+            len(site_cfg.ignore_list),
+            config.index_proxy.selected,
+            index_site,
+        )
+
     total_raw = 0
     for criteria_cfg in site_cfg.search:
         # Select the indexer slug/id based on the configured proxy.
