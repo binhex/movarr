@@ -2567,3 +2567,183 @@ class TestDeleteSupersededFilesPostDeleteHook:
         assert count == 1
         warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
         assert any("exception" in c.lower() or "hook exploded" in c for c in warning_calls)
+
+
+# ===========================================================================
+# !! WARNING — REAL FILESYSTEM + REAL SUBPROCESS TESTS !!
+#
+# These tests do NOT mock subprocess.Popen or delete_file.  They spawn actual
+# shell commands and physically unlink files from disk.
+#
+# SAFETY CONTRACT — enforced by assertion inside every test:
+#   All file operations are confined to pytest's tmp_path fixture, which
+#   resolves to a subdirectory of /tmp on this host.  The tests assert
+#   that the working directory starts with /tmp before touching anything.
+#   They will HARD FAIL if tmp_path ever resolves outside /tmp (e.g. if
+#   TMPDIR is redirected to /media or another production path).
+#
+# Never add paths like /media, /data, /mnt, or any real library location
+# to these tests.  tmp_path only.
+# ===========================================================================
+
+
+def _assert_safe_tmpdir(path: Path) -> None:
+    """Abort immediately if path is not under /tmp.
+
+    This guard exists because the tests below perform real filesystem
+    deletions.  If pytest's tmp_path ever resolved outside /tmp (e.g.
+    due to an environment variable change) we must fail loudly rather
+    than risk touching production media.
+    """
+    import os
+
+    resolved = os.path.realpath(str(path))
+    assert resolved.startswith("/tmp"), (
+        f"SAFETY VIOLATION: test directory '{resolved}' is outside /tmp. "
+        "Refusing to run destructive tests against a non-temporary path. "
+        "Check TMPDIR / PYTEST_TMPDIR environment variables."
+    )
+
+
+class TestRunHookRealSubprocess:
+    """_run_hook with a real subprocess — no Popen mock.
+
+    WARNING: spawns actual shell commands.  Confined to /tmp via
+    _assert_safe_tmpdir().  Do not add real media paths here.
+    """
+
+    def test_echo_command_returns_true(self, tmp_path: Path) -> None:
+        """A successful command (exit 0) returns True."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("echo movarr_test_ok", str(tmp_path), "post_copy") is True
+
+    def test_false_command_returns_false(self, tmp_path: Path) -> None:
+        """A failing command (exit 1) returns False."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("false", str(tmp_path), "pre_delete") is False
+
+    def test_dir_placeholder_substituted_and_available(self, tmp_path: Path) -> None:
+        """{dir} is replaced with the real path and the shell can access it."""
+        _assert_safe_tmpdir(tmp_path)
+        sentinel = tmp_path / "sentinel.txt"
+        sentinel.write_text("ok")
+        # 'test -f <file>' exits 0 when the file exists
+        result = _run_hook(
+            "test -f {dir}/sentinel.txt",
+            str(tmp_path),
+            "post_copy",
+        )
+        assert result is True
+
+    def test_dir_placeholder_missing_file_exits_nonzero(self, tmp_path: Path) -> None:
+        """{dir} substitution points at the real dir; absent file makes test exit 1."""
+        _assert_safe_tmpdir(tmp_path)
+        result = _run_hook(
+            "test -f {dir}/does_not_exist.txt",
+            str(tmp_path),
+            "pre_delete",
+        )
+        assert result is False
+
+    def test_stdout_captured_does_not_raise(self, tmp_path: Path) -> None:
+        """Commands that produce stdout output complete without error."""
+        _assert_safe_tmpdir(tmp_path)
+        assert _run_hook("echo line1 && echo line2", str(tmp_path), "post_copy") is True
+
+
+class TestDeleteSupersededFilesEndToEnd:
+    """End-to-end: real files created, real deletion, real hook subprocess.
+
+    WARNING: physically unlinks files from disk and spawns shell commands.
+    Every test calls _assert_safe_tmpdir() first to ensure operations are
+    confined to /tmp.  Do NOT introduce /media, /data, /mnt, or any real
+    library path here.
+    """
+
+    def test_lower_quality_file_physically_deleted_with_post_delete_hook(self, tmp_path: Path) -> None:
+        """Old file is gone from disk; post_delete hook runs after deletion."""
+        _assert_safe_tmpdir(tmp_path)
+
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new-high-quality")
+        (movie_dir / old_fname).write_bytes(b"old-low-quality")
+
+        # Hook writes a witness file so we can verify it actually ran.
+        witness = tmp_path / "hook_ran.txt"
+        config = Config()
+        config.post_process.hooks.post_delete = f"touch {witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1, "expected exactly one file deleted"
+        assert not (movie_dir / old_fname).exists(), "old lower-quality file must be gone"
+        assert (movie_dir / new_fname).exists(), "new file must be preserved"
+        assert witness.exists(), "post_delete hook must have run (witness file missing)"
+
+    def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
+        """pre_delete hook runs and exits 0; deletion proceeds; old file is gone."""
+        _assert_safe_tmpdir(tmp_path)
+
+        movie_dir = tmp_path / "Inception (2010)"
+        movie_dir.mkdir()
+        new_fname = "Inception 2010 2160p Remux.mkv"
+        old_fname = "Inception 2010 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        # pre_delete writes a witness so we can confirm ordering.
+        witness = tmp_path / "pre_ran.txt"
+        config = Config()
+        config.post_process.hooks.pre_delete = f"touch {witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists()
+        assert witness.exists(), "pre_delete hook must have run (witness file missing)"
+
+    def test_failing_pre_delete_hook_leaves_old_file_intact(self, tmp_path: Path) -> None:
+        """pre_delete exits non-zero → deletion is aborted → old file survives."""
+        _assert_safe_tmpdir(tmp_path)
+
+        movie_dir = tmp_path / "Interstellar (2014)"
+        movie_dir.mkdir()
+        new_fname = "Interstellar 2014 2160p Remux.mkv"
+        old_fname = "Interstellar 2014 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "false"  # always exits 1
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0, "deletion must be aborted when pre_delete fails"
+        assert (movie_dir / old_fname).exists(), "old file must survive a failed pre_delete"
+
+    def test_both_hooks_run_in_correct_order(self, tmp_path: Path) -> None:
+        """pre_delete runs before deletion, post_delete runs after; both leave witness."""
+        _assert_safe_tmpdir(tmp_path)
+
+        movie_dir = tmp_path / "Dune (2021)"
+        movie_dir.mkdir()
+        new_fname = "Dune 2021 2160p Remux.mkv"
+        old_fname = "Dune 2021 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / old_fname).write_bytes(b"old")
+
+        pre_witness = tmp_path / "pre_ran.txt"
+        post_witness = tmp_path / "post_ran.txt"
+        config = Config()
+        config.post_process.hooks.pre_delete = f"touch {pre_witness}"
+        config.post_process.hooks.post_delete = f"touch {post_witness}"
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        assert not (movie_dir / old_fname).exists()
+        assert pre_witness.exists(), "pre_delete hook must have run"
+        assert post_witness.exists(), "post_delete hook must have run"
