@@ -685,7 +685,10 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     # theatrical is the base edition — no special-edition bonus
     if candidate_match.group(0).lower() == "theatrical":
         return 0
-    if not _RE_SPECIAL.search(other_norm):
+    other_match = _RE_SPECIAL.search(other_norm)
+    # Treat theatrical on the other side as "no special edition" too
+    other_has_non_theatrical = other_match is not None and other_match.group(0).lower() != "theatrical"
+    if not other_has_non_theatrical:
         return 10
     return 0
 
