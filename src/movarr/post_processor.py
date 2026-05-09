@@ -45,10 +45,10 @@ _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 # Known extras/bonus-content markers — files containing these in the post-year
 # segment are not quality variants of the main feature and must never be deleted.
 _EXTRAS_RE = re.compile(
-    r"\b(?:behind[\s_.]+the[\s_.]+scenes|making[\s_.]+of|featurettes?"
-    r"|deleted[\s_.]+scene|interview|short[\s_.]+film"
-    r"|theatrical[\s_.]+trailer|trailer|sample"
-    r"|bonus|extras|special[\s_.]+features?|specials)\b",
+    r"\b(?:behind[\s_.\-]+the[\s_.\-]+scenes|making[\s_.\-]+of|featurettes?"
+    r"|deleted[\s_.\-]+scene|interview|short[\s_.\-]+film"
+    r"|theatrical[\s_.\-]+trailer|trailer|sample"
+    r"|bonus|extras|special[\s_.\-]+features?|specials)\b",
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
