@@ -263,6 +263,7 @@ Each entry in `search`:
 | `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches. | `""` |
 | `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches. | `""` |
 | `path_remapping` | List of path prefix substitutions for Docker deployments (see below). | `[]` |
+| `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Defaults to `false`. Permanent deletion — use with care. | `false` |
 
 Each entry in `copy_library_rules`:
 
@@ -280,6 +281,16 @@ Each entry in `path_remapping`:
 | --- | ----------- |
 | `from_path` | Path prefix as reported by qBittorrent (e.g. inside a Docker container). |
 | `to_path` | Equivalent path as visible to movarr on the host. |
+
+### `post_process.hooks`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
+| `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` substituted. | `""` (disabled) |
+| `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` substituted. | `""` (disabled) |
+
+Hooks must not rename or move the target files. Use only in-place operations (e.g. `chattr -i`, `trimarr`).
 
 ### `database`
 

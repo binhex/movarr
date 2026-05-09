@@ -179,7 +179,7 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     "--daemon",
     is_flag=True,
     default=False,
-    help="Run in daemon (background) mode; otherwise single-pass foreground.",
+    help="Run in continuous scheduling mode (long-running foreground process; use systemd or Docker for daemonization).",
 )
 @click.option(
     "--test",
