@@ -47,7 +47,7 @@ _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 _EXTRAS_RE = re.compile(
     r"\b(?:behind[\s_]the[\s_]scenes|making[\s_]of|featurettes?|deleted[\s_]scene"
     r"|interview|short[\s_]film|theatrical[\s_]trailer|trailer|sample"
-    r"|bonus|extras?|special[\s_]features?|specials)\b",
+    r"|bonus|extras|special[\s_]features?|specials)\b",
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")

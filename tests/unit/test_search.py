@@ -1132,3 +1132,37 @@ class TestProcessCriteriaIgnoreList:
 
         # The result must reach the DB write path (not silently skipped)
         db.write.assert_called_once()
+
+    def test_ignore_list_does_not_apply_to_prowlarr_all(self, mocker: MockerFixture) -> None:
+        """ignore_list must NOT filter results when proxy is prowlarr, even with indexer='all'.
+
+        ignore_list is documented as Jackett-only.  A Prowlarr all-indexer search
+        must pass results through regardless of ignore_list contents.
+        """
+        prowlarr = mocker.MagicMock()
+        raw = {**_base_result(), "index_tracker": "some-tracker"}
+        prowlarr.search.return_value = iter([raw])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_proxy.selected = "prowlarr"
+        cfg.index_site.ignore_list = ["some-tracker"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=prowlarr,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        # Result must NOT be silently dropped — ignore_list is Jackett-only
+        db.write.assert_called_once()

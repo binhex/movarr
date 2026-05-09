@@ -720,6 +720,24 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_extra_singular_not_treated_as_extras(self, tmp_path: Path) -> None:
+        """'EXTRA' (singular) in the post-year segment must NOT be treated as extras content.
+
+        A release tagged 'Movie.2019.2160p.BluRay-EXTRA.mkv' is the main feature;
+        only the plural form 'extras' is a known extras keyword.
+        """
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.2160p.BluRay-EXTRA.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
 # _safe_path_component
 
 
