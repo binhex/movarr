@@ -475,3 +475,49 @@ class TestDeleteStalledWarning:
         # Confirm torrents_info was NOT called with status_filter='stopped'.
         call_kwargs = mock_api.torrents_info.call_args
         assert call_kwargs.kwargs.get("status_filter") != "stopped"
+
+
+# add_torrent — empty torrents_info (line 118) and APIError on reannounce (lines 119-120)
+
+
+class TestAddTorrentReannounce:
+    """Tests for the reannounce branch in add_torrent."""
+
+    def test_skips_reannounce_when_torrents_info_empty(self, mocker: MockerFixture) -> None:
+        """When torrents_info returns [], no hash is found and reannounce is skipped."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_info.return_value = []
+        mock_debug = mocker.patch("movarr.qbittorrent._logger.debug")
+        result: ResultDict = {
+            "index_title": "Test Movie",
+            "magnet_url": "magnet:?xt=urn:btih:abc123",
+            "torrent_url": "",
+        }
+
+        updated = client.add_torrent(result)
+
+        assert updated is not None
+        assert "torrent_tag" in updated
+        mock_api.torrents_reannounce.assert_not_called()
+        # Debug log for the "no hash" branch must have been called.
+        assert any("reannounce" in str(call) for call in mock_debug.call_args_list)
+
+    def test_warns_and_continues_when_reannounce_raises_api_error(self, mocker: MockerFixture) -> None:
+        """When torrents_reannounce raises APIError a warning is logged and result is returned."""
+        client, mock_api = _make_client(mocker)
+        torrent = mocker.MagicMock()
+        torrent.hash = "deadbeef"
+        mock_api.torrents_info.return_value = [torrent]
+        mock_api.torrents_reannounce.side_effect = qbittorrentapi.APIError("tracker error")
+        mock_warning = mocker.patch("movarr.qbittorrent._logger.warning")
+        result: ResultDict = {
+            "index_title": "Test Movie",
+            "magnet_url": "magnet:?xt=urn:btih:abc123",
+            "torrent_url": "",
+        }
+
+        updated = client.add_torrent(result)
+
+        assert updated is not None
+        mock_warning.assert_called()
+        assert any("Reannounce" in str(call) for call in mock_warning.call_args_list)

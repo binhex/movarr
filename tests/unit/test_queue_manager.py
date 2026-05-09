@@ -337,3 +337,34 @@ class TestNonMovarrTorrentNotDeleted:
         )
 
         qbt.delete_stalled.assert_not_called()
+
+
+class TestDeleteStuckNoTagOnDeletedHash:
+    """Deleted hash not present in torrent_map triggers the else branch (line 125)."""
+
+    def test_debug_logged_when_deleted_hash_missing_from_torrent_map(self, mocker: MockerFixture) -> None:
+        """When delete_stalled returns a hash absent from torrent_map, mark_stalled is skipped."""
+        qbt = mocker.MagicMock(spec=QBittorrentClient)
+        db = mocker.MagicMock()
+        # torrent_map has a movarr-tagged entry so the pre-filter passes.
+        torrent_map = {"known-hash": {"state": "stalledDL", "name": "Known Movie", "tags": "movarr-uuid-known"}}
+        to_delete = {"known-hash": {"name": "Known Movie", "age_mins": 999, "state": "stalledDL"}}
+        qbt.list_by_category.return_value = torrent_map
+        qbt.identify_for_deletion.return_value = to_delete
+        # delete_stalled returns a hash that isn't in torrent_map — simulates a
+        # race condition where the torrent was already gone before lookup.
+        qbt.delete_stalled.return_value = {"ghost-hash"}
+
+        _delete_stuck(
+            qbt,
+            db,
+            _StuckConfig(
+                state="stalledDL",
+                filter_type="last_activity",
+                max_mins=120,
+                label="stalled",
+                delete_data=False,
+            ),
+        )
+
+        db.mark_stalled.assert_not_called()

@@ -1408,3 +1408,20 @@ class TestCheckBitrateZeroThreshold:
         cfg = Config()
         out = filter_by_imdb(result, cfg)
         assert out["result"] == "Passed"
+
+
+# _check_reject_movie_titles — empty-normalised reject entry is skipped
+
+
+class TestRejectMovieTitleEmptyNorm:
+    """A reject entry that normalises to an empty string must be skipped."""
+
+    def test_all_punctuation_reject_entry_does_not_reject(self) -> None:
+        """'---' normalises to '' and must NOT reject a valid title."""
+        cfg = _make_config(reject_movie_title_list=["---"])
+        result = _index_result(
+            movie_title_compare="thedarkknight",
+            movie_title_and_year_compare="thedarkknight2008",
+        )
+        out = filter_by_index(result, _default_site_dict(), cfg)
+        assert out["result"] == "Passed"

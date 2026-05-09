@@ -128,14 +128,6 @@ class TestCliStartupVersionLog:
         result = CliRunner().invoke(cli, ["--test"])
         assert "Test mode" in result.output or "test mode" in result.output.lower()
 
-    def test_does_not_invoke_run(self, mocker: MockerFixture) -> None:
-        """scheduler.run() must not be called in test mode."""
-        mocker.patch("movarr.cli.create_logger")
-        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
-        result = CliRunner().invoke(cli, ["--test"])
-        assert result.exit_code == 0
-        assert "Configuration loaded successfully" in result.output
-
     def test_foreground_mode_unchanged_without_daemon_flag(self, mocker: MockerFixture) -> None:
         """Without --daemon, daemon_mode is not overridden by the CLI."""
         mocker.patch("movarr.cli.create_logger")

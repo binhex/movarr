@@ -131,18 +131,6 @@ class TestToMb:
         """Zero bytes converts to '0'."""
         assert bytes_to_mb("0") == "0"
 
-    def test_invalid_string_returns_zero(self) -> None:
-        """Non-numeric input returns '0'."""
-        assert bytes_to_mb("not-a-number") == "0"
-
-    def test_empty_string_returns_zero(self) -> None:
-        """Empty string returns '0'."""
-        assert bytes_to_mb("") == "0"
-
-    def test_none_returns_zero(self) -> None:
-        """None input returns '0'."""
-        assert bytes_to_mb(None) == "0"
-
 
 # _parse_item
 

@@ -2265,3 +2265,310 @@ class TestDeleteSupersededFilesHooks:
         _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
         mock_hook.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunHookStdoutDebug:
+    """Covers the stdout debug-log path (line 128) in _run_hook."""
+
+    def test_stdout_triggers_debug_log(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("some hook output", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        result = _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+
+        assert result is True
+        debug_calls = [str(c) for c in mock_logger.debug.call_args_list]
+        assert any("some hook output" in c for c in debug_calls)
+
+
+class TestRunHookInnerTimeout:
+    """Covers lines 116-117: inner TimeoutExpired during SIGTERM communicate call."""
+
+    def test_sigterm_communicate_also_times_out(self, mocker: MockerFixture) -> None:
+        import subprocess as _subprocess
+
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mocker.patch("movarr.post_processor.os.killpg")
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        # First call: main 300s timeout; second call: SIGTERM inner 5s timeout;
+        # third call: SIGKILL inner 5s communicate succeeds.
+        mock_proc.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd="echo", timeout=300),
+            _subprocess.TimeoutExpired(cmd="echo", timeout=5),
+            ("", ""),
+        ]
+        mock_popen.return_value = mock_proc
+
+        result = _run_hook("echo {dir}", "/tmp/movie", "post_copy")
+
+        assert result is False
+        # communicate was called three times total
+        assert mock_proc.communicate.call_count == 3
+
+
+class TestBuildCopyListEmptySavePath:
+    """Covers lines 293-295: _build_copy_list returns [] when torrent_save_path is empty."""
+
+    def test_empty_save_path_returns_empty_list(self) -> None:
+        torrent = {
+            "torrent_tag": "tag_empty",
+            "torrent_save_path": "",
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, Config())
+        assert result == []
+
+    def test_none_save_path_returns_empty_list(self) -> None:
+        torrent = {
+            "torrent_tag": "tag_none",
+            "torrent_save_path": None,
+            "torrent_file_list": [
+                {"file_name": "movie/movie.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+        result = _build_copy_list(torrent, Config())
+        assert result == []
+
+
+class TestProcessOnePostCopyHookException:
+    """Covers lines 268-269: post_copy hook raises an unexpected exception."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
+        cfg.post_process.hooks.post_copy = "raise_hook"
+        return cfg
+
+    def _torrent(self) -> dict[str, Any]:
+        return {
+            "torrent_tag": "tag1",
+            "torrent_hash": "abc123",
+            "torrent_save_path": "/downloads",
+            "torrent_file_list": [
+                {"file_name": "movie/The Matrix 1999 1080p.mkv", "file_size": 4_000_000_000},
+            ],
+        }
+
+    def _db_record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_title = "The Matrix"
+        rec.imdb_year = "1999"
+        rec.imdb_genres_list = "[]"
+        rec.imdb_certification = ""
+        rec.imdb_cert_source = "imdbpie"
+        rec.index_title = "The Matrix 1999 1080p BluRay"
+        return rec
+
+    def test_post_copy_hook_exception_does_not_abort(self, mocker: MockerFixture) -> None:
+        config = self._config()
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/The Matrix 1999 1080p.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("boom"))
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        # Should not raise
+        _process_one(self._torrent(), config, qbt, db)
+
+        # mark_completed still called (processing did not abort)
+        db.mark_completed.assert_called_once()
+        # Warning was logged
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("boom" in c or "exception" in c.lower() for c in warning_calls)
+
+
+class TestDeleteSupersededFilesListdirOSError:
+    """Covers lines 586-588: os.listdir raises OSError in _delete_superseded_files."""
+
+    def test_listdir_oserror_returns_zero(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+
+        mocker.patch("movarr.post_processor.os.listdir", side_effect=OSError("cannot read"))
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+
+
+class TestDeleteSupersededFilesPreDeleteHookException:
+    """Covers lines 636-638: pre_delete hook raises exception."""
+
+    def test_pre_delete_exception_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("hook crash"))
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesPreDeleteHookListdirOSError:
+    """Covers lines 645-650: os.listdir raises OSError after pre_delete hook succeeds."""
+
+    def test_listdir_oserror_after_hook_returns_zero(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        # First listdir call (line 585) returns real listing; second call (line 644) raises OSError.
+        real_entries = [new_fname, "The Matrix 1999 1080p BluRay.mkv"]
+        mocker.patch(
+            "movarr.post_processor.os.listdir",
+            side_effect=[real_entries, OSError("gone")],
+        )
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesPreDeleteRenamedPrimary:
+    """Covers lines 652-656: pre_delete hook renames the primary file."""
+
+    def test_primary_renamed_by_hook_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"old")
+
+        config = Config()
+        config.post_process.hooks.pre_delete = "chattr -i {dir}/*"
+
+        mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        # First listdir returns normal listing; second (post-hook check) is missing the primary.
+        real_entries = [new_fname, "The Matrix 1999 1080p BluRay.mkv"]
+        remaining_without_primary = ["The Matrix 1999 1080p BluRay.mkv"]
+        mocker.patch(
+            "movarr.post_processor.os.listdir",
+            side_effect=[real_entries, remaining_without_primary],
+        )
+        mock_delete = mocker.patch("movarr.post_processor.delete_file")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0
+        mock_delete.assert_not_called()
+
+
+class TestDeleteSupersededFilesNonNumericResolution:
+    """Covers lines 717-718: extract_resolution returns non-numeric string."""
+
+    def test_non_numeric_resolution_skips_file(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p HDTV.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        # Return a truthy non-numeric string so int() raises ValueError.
+        mocker.patch("movarr.post_processor.extract_resolution", return_value="unknown")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+
+class TestDeleteSupersededFilesDeleteFileFails:
+    """Covers line 751: delete_file returns False — error is logged, count stays 0."""
+
+    def test_delete_file_failure_logged(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"lib")
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=False)
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        error_calls = [str(c) for c in mock_logger.error.call_args_list]
+        assert any("Failed to auto-delete" in c for c in error_calls)
+
+
+class TestDeleteSupersededFilesPostDeleteHook:
+    """Covers lines 756-758: post_delete hook returns False or raises."""
+
+    def _setup(self, tmp_path: Path) -> tuple[Path, str, Config]:
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / "The Matrix 1999 1080p BluRay.mkv").write_bytes(b"lib")
+        config = Config()
+        config.post_process.hooks.post_delete = "chattr +i {dir}/*"
+        return movie_dir, new_fname, config
+
+    def test_post_delete_returns_false_logs_warning(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir, new_fname, config = self._setup(tmp_path)
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", return_value=False)
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        # Deletion happened (delete_file returned True) so count > 0
+        assert count == 1
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("post_delete hook failed" in c for c in warning_calls)
+
+    def test_post_delete_raises_logs_warning(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        movie_dir, new_fname, config = self._setup(tmp_path)
+
+        mocker.patch("movarr.post_processor.delete_file", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", side_effect=Exception("hook exploded"))
+        mock_logger = mocker.patch("movarr.post_processor.logger")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 1
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("exception" in c.lower() or "hook exploded" in c for c in warning_calls)

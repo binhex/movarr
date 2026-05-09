@@ -815,3 +815,88 @@ class TestLoadConfigUnknownKeys:
         call_args = mock_warning.call_args
         # First positional arg is the format string; second is the key list string.
         assert "gneral" in call_args.args[1]
+
+
+# ---------------------------------------------------------------------------
+# New coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLogLevelNonString:
+    """validate_log_level raises when a non-string value is passed."""
+
+    def test_log_level_non_string_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            Config.model_validate({"general": {"log_level_console": 42}})
+
+
+class TestNormaliseGenreKeysNonDict:
+    """_normalise_genre_keys early-returns when override_genre is not a dict."""
+
+    def test_override_genre_none_raises_after_validator_returns(self) -> None:
+        """Validator early-returns None; Pydantic then rejects it as non-dict."""
+        from movarr.config import FiltersConfig
+
+        with pytest.raises(ValidationError):
+            FiltersConfig.model_validate({"override_genre": None})
+
+    def test_override_genre_list_raises_after_validator_returns(self) -> None:
+        """Validator early-returns a list; Pydantic then rejects it as non-dict."""
+        from movarr.config import FiltersConfig
+
+        with pytest.raises(ValidationError):
+            FiltersConfig.model_validate({"override_genre": ["action"]})
+
+
+class TestTorrentClientUnsupported:
+    """TorrentClientConfig._validate_selected raises for unsupported clients."""
+
+    def test_unsupported_torrent_client_raises(self) -> None:
+        from movarr.config import TorrentClientConfig
+
+        with pytest.raises(ValidationError):
+            TorrentClientConfig(selected="transmission")
+
+
+class TestMigrationInfiniteLoopGuard:
+    """_run_migrations breaks out when a migration does not increment config_version."""
+
+    def test_no_op_migration_does_not_loop_forever(self, tmp_path: "Path", mocker: "MockerFixture") -> None:
+        from movarr.config import MIGRATIONS, _run_migrations
+
+        sentinel_version = "__test_loop_guard__"
+
+        def _no_op(raw: dict) -> dict:
+            # Deliberately does NOT increment config_version.
+            return raw
+
+        patched: dict = {sentinel_version: _no_op}
+        mocker.patch("movarr.config.MIGRATIONS", patched)
+
+        config_path = tmp_path / "config.yml"
+        raw: dict = {"general": {"config_version": sentinel_version}}
+        import yaml as _yaml
+
+        config_path.write_text(_yaml.dump(raw))
+
+        mock_error = mocker.patch("movarr.config.logger.error")
+        result = _run_migrations(raw, config_path)
+        # Must return (not hang) and must have logged the loop-detection error.
+        assert result is not None
+        mock_error.assert_called_once()
+
+
+class TestLoadConfigEdgeCases:
+    """Edge cases for load_config: empty file and non-dict YAML."""
+
+    def test_load_config_empty_file_returns_defaults(self, tmp_path: "Path") -> None:
+        p = tmp_path / "config.yml"
+        p.write_text("")
+        config = load_config(p)
+        assert isinstance(config, Config)
+
+    def test_load_config_scalar_yaml_raises(self, tmp_path: "Path") -> None:
+        p = tmp_path / "config.yml"
+        p.write_text("42")
+        with pytest.raises(ValueError, match="YAML mapping"):
+            load_config(p)

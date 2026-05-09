@@ -570,3 +570,131 @@ class TestExtractCertImdbpieException:
         aux = {"certificates": [{"country": "United Kingdom"}]}
         result = _extract_cert_imdbpie(aux)
         assert result is None
+
+
+# _fetch_omdb — empty-dict / no-title+imdb_id branch (lines 274-280)
+
+
+class TestFetchOmdbEmptyResponse:
+    """_fetch_omdb must set result='Failed' when OMDb returns empty/useless data."""
+
+    def _setup_omdb_mock(self, mocker: MockerFixture, return_value: dict) -> None:
+        mock_omdb = mocker.MagicMock()
+        mock_client = mocker.MagicMock()
+        mock_omdb.OMDBClient.return_value = mock_client
+        mock_client.imdbid.return_value = return_value
+        mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
+
+    def test_empty_dict_sets_failed(self, mocker: MockerFixture) -> None:
+        self._setup_omdb_mock(mocker, {})
+        result = _make_result()
+        cfg = Config()
+        out = _fetch_omdb(result, cfg)
+        assert out["result"] == "Failed"
+
+    def test_dict_without_title_or_imdb_id_sets_failed(self, mocker: MockerFixture) -> None:
+        self._setup_omdb_mock(mocker, {"year": "1999"})
+        result = _make_result()
+        cfg = Config()
+        out = _fetch_omdb(result, cfg)
+        assert out["result"] == "Failed"
+
+
+# _extract_list_or_none — non-list and empty-list branches (line 388)
+
+
+class TestExtractListOrNoneNonList:
+    """_extract_list_or_none must return None for non-list or empty-list values."""
+
+    def test_returns_none_for_string_value(self) -> None:
+        from movarr.imdb_metadata import _extract_list_or_none
+
+        assert _extract_list_or_none({"genres": "Drama"}, "genres") is None
+
+    def test_returns_none_for_empty_list(self) -> None:
+        from movarr.imdb_metadata import _extract_list_or_none
+
+        assert _extract_list_or_none({"genres": []}, "genres") is None
+
+
+# _extract_cert_imdbpie — certificate key present but value is None (line 416)
+
+
+class TestExtractCertImdbpieNullCertificate:
+    """_extract_cert_imdbpie must return None when certificate value is None."""
+
+    def test_returns_none_when_certificate_value_is_null(self) -> None:
+        from movarr.imdb_metadata import _extract_cert_imdbpie
+
+        aux = {"certificate": {"certificate": None}}
+        assert _extract_cert_imdbpie(aux) is None
+
+
+# _convert_countries — alpha_3, common_name, and alias fallback branches (lines 480-492)
+
+
+class TestConvertCountriesFallbacks:
+    """_convert_countries fallback lookup chain (alpha_3, common_name, alias)."""
+
+    def test_alpha_3_usa_resolves_to_us(self) -> None:
+        from movarr.imdb_metadata import _convert_countries
+
+        # "USA" is an ISO 3166-1 alpha-3 code; pycountry must resolve it to "us".
+        result = _convert_countries("USA")
+        assert result == ["us"]
+
+    def test_common_name_iran_resolves_to_ir(self) -> None:
+        from movarr.imdb_metadata import _convert_countries
+
+        # "Iran" is pycountry's common_name for Iran (Islamic Republic of).
+        result = _convert_countries("Iran")
+        assert result == ["ir"]
+
+    def test_alias_kosovo_resolves_to_xk(self) -> None:
+        from movarr.imdb_metadata import _convert_countries
+
+        # "Kosovo" is in _COUNTRY_ALIASES (not recognised by pycountry).
+        result = _convert_countries("Kosovo")
+        assert result == ["xk"]
+
+
+# _convert_languages — empty token, alpha_2, alpha_3, bibliographic, title() paths
+
+
+class TestConvertLanguages:
+    """_convert_languages handles all lookup strategies and edge cases."""
+
+    def test_empty_token_skipped(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # Double comma produces an empty token which must be skipped (line 510-511).
+        result = _convert_languages("English,,French")
+        assert result == ["en", "fr"]
+
+    def test_alpha_2_code_recognized(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # "en" and "de" are ISO 639-1 alpha-2 codes (lines 516-519).
+        result = _convert_languages("en,de")
+        assert result == ["en", "de"]
+
+    def test_alpha_3_code_eng_resolves_to_en(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # "eng" is ISO 639-2/3 alpha-3 for English (lines 522-526).
+        result = _convert_languages("eng")
+        assert result == ["en"]
+
+    def test_bibliographic_alpha_3_ger_resolves_to_de(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # "ger" is the ISO 639-2/B bibliographic code for German (lines 529-533).
+        result = _convert_languages("ger")
+        assert result == ["de"]
+
+    def test_lowercased_name_resolved_via_title(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # "english" (all-lowercase) must match after .title() normalization (lines 544-548).
+        result = _convert_languages("english")
+        assert result == ["en"]

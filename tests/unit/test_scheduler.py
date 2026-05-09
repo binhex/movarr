@@ -52,6 +52,7 @@ class TestWritePid:
         pid_path = str(tmp_path / "run" / "movarr.pid")
         # Must not raise
         _write_pid(pid_path)
+        assert not Path(pid_path).exists()
 
 
 # run_once
@@ -371,6 +372,54 @@ class TestRunDaemon:
         kwarg_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
         assert kwarg_ids == {"search", "queue_management", "post_processing"}
 
+
+    def test_acquisition_disabled_skips_search_job(self, mocker: MockerFixture) -> None:
+        """schedule.acquisition.enabled=False: search job is not registered."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+
+        config = Config()
+        config.schedule.acquisition.enabled = False
+
+        _run_daemon(config)
+
+        registered_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
+        assert "search" not in registered_ids
+
+    def test_queue_management_disabled_skips_qm_job(self, mocker: MockerFixture) -> None:
+        """schedule.queue_management.enabled=False: queue_management job is not registered."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+
+        config = Config()
+        config.schedule.queue_management.enabled = False
+
+        _run_daemon(config)
+
+        registered_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
+        assert "queue_management" not in registered_ids
+
+    def test_post_processing_disabled_skips_pp_job(self, mocker: MockerFixture) -> None:
+        """schedule.post_processing.enabled=False: post_processing job is not registered."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched_cls = mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mock_sched = mock_sched_cls.return_value
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+
+        config = Config()
+        config.schedule.post_processing.enabled = False
+
+        _run_daemon(config)
+
+        registered_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
+        assert "post_processing" not in registered_ids
 
 class TestRunDaemonSignalHandler:
     """Tests that _shutdown signal handler is properly invoked."""

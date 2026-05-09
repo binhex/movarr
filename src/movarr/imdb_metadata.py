@@ -540,11 +540,5 @@ def _convert_languages(raw: str | None) -> list[str] | None:
                 result.append(code.lower())
             continue
 
-        # 4. Try case-insensitive name match (OMDb/IMDbPie sometimes lowercases).
-        lang = pycountry.languages.get(name=name.title())
-        if lang:
-            code = getattr(lang, "alpha_2", None) or getattr(lang, "alpha_3", None)
-            if code:
-                result.append(code.lower())
 
     return result or None

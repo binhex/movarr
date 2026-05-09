@@ -403,3 +403,33 @@ class TestSendIndexProxyAlertDelegates:
             result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
         mock_generic.assert_called_once_with(service_name="Prowlarr", hours_elapsed=3.0, config=config)
         assert result is True
+
+
+# _safe_url via _build_body — edge cases
+
+
+class TestSafeUrlEdgeCases:
+    """_safe_url edge-cases exercised through _build_body."""
+
+    def test_missing_index_details_uses_hash_href(self) -> None:
+        """When index_details is absent the rendered HTML uses href='#'."""
+        cfg = Config()
+        result = _make_full_result()
+        result.pop("index_details", None)
+        body = _build_body(result, cfg)
+        assert 'href="#"' in body
+
+    def test_non_http_scheme_uses_hash_href(self) -> None:
+        """A non-http/https scheme like ftp:// must produce href='#'."""
+        cfg = Config()
+        result = _make_full_result(index_details="ftp://tracker.example.com/")
+        body = _build_body(result, cfg)
+        assert 'href="#"' in body
+
+    def test_urlparse_exception_falls_back_to_hash(self, mocker: "MockerFixture") -> None:
+        """When urlparse raises, _safe_url returns '#'."""
+        mocker.patch("movarr.notifications.urllib.parse.urlparse", side_effect=Exception("parse error"))
+        cfg = Config()
+        result = _make_full_result(index_details="http://example.com/details")
+        body = _build_body(result, cfg)
+        assert 'href="#"' in body

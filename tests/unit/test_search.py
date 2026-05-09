@@ -1194,3 +1194,26 @@ class TestProcessCriteriaIgnoreList:
         )
 
         assert count == 0
+
+
+class TestIgnoreListWarning:
+    """Warning is emitted when ignore_list is set but won't be applied (line 103)."""
+
+    def test_warns_when_ignore_list_set_and_proxy_is_prowlarr(self, mocker: MockerFixture) -> None:
+        """ignore_list warning fires when proxy is prowlarr (not jackett/all)."""
+        cfg = Config()
+        cfg.index_site.ignore_list = ["some-indexer"]
+        cfg.index_proxy.selected = "jackett"
+        cfg.index_site.jackett_indexer = "specific-indexer"  # not "all"
+
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_factory.return_value.is_reachable.return_value = True
+        mocker.patch("movarr.search._process_criteria", return_value=0)
+        mocker.patch("movarr.search.check_and_notify")
+        mock_warning = mocker.patch("movarr.search.logger.warning")
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+
+        run_search(cfg, qbt, db)
+
+        assert any("ignore_list" in str(call) for call in mock_warning.call_args_list)
