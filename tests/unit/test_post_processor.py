@@ -2658,65 +2658,137 @@ class TestDeleteSupersededFilesEndToEnd:
     Every test calls _assert_safe_tmpdir() first to ensure operations are
     confined to /tmp.  Do NOT introduce /media, /data, /mnt, or any real
     library path here.
+
+    Each test explicitly asserts the quality scores before checking the
+    filesystem so that it is obvious WHY a file is (or is not) deleted.
+    A test that only checks "one file is gone" without proving *which*
+    score won is not meaningfully different from a random deletion.
     """
 
     def test_lower_quality_file_physically_deleted_with_post_delete_hook(self, tmp_path: Path) -> None:
-        """Old file is gone from disk; post_delete hook runs after deletion."""
+        """Score-driven deletion: 2160p Remux (120) beats 1080p BluRay (70).
+
+        The lower-scored file must be physically gone; the post_delete hook
+        must have run (witness file); the higher-scored file must survive.
+        """
         _assert_safe_tmpdir(tmp_path)
+
+        new_san = "The Matrix 1999 2160p Remux"
+        old_san = "The Matrix 1999 1080p BluRay"
+        config = Config()
+
+        # Prove the score drives the decision before touching the filesystem.
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, (
+            f"Precondition failed: new score ({new_score}) must exceed "
+            f"old score ({old_score}) for this test to be meaningful"
+        )
 
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
-        new_fname = "The Matrix 1999 2160p Remux.mkv"
-        old_fname = "The Matrix 1999 1080p BluRay.mkv"
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
         (movie_dir / new_fname).write_bytes(b"new-high-quality")
         (movie_dir / old_fname).write_bytes(b"old-low-quality")
 
-        # Hook writes a witness file so we can verify it actually ran.
         witness = tmp_path / "hook_ran.txt"
-        config = Config()
         config.post_process.hooks.post_delete = f"touch {witness}"
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
         assert count == 1, "expected exactly one file deleted"
-        assert not (movie_dir / old_fname).exists(), "old lower-quality file must be gone"
-        assert (movie_dir / new_fname).exists(), "new file must be preserved"
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be physically gone"
+        assert (movie_dir / new_fname).exists(), f"higher-scored file ({new_score}) must survive"
         assert witness.exists(), "post_delete hook must have run (witness file missing)"
 
-    def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
-        """pre_delete hook runs and exits 0; deletion proceeds; old file is gone."""
+    def test_higher_quality_library_file_never_deleted(self, tmp_path: Path) -> None:
+        """Reverse-score guard: when the library file outscores the new file, nothing is deleted.
+
+        This is the critical counterpart to the deletion test.  Without it, a
+        bug that blindly deleted the first non-primary file would pass all other
+        tests in this class.
+        """
         _assert_safe_tmpdir(tmp_path)
+
+        # new file is 1080p BluRay; library file is 2160p Remux — library wins.
+        new_san = "Inception 2010 1080p BluRay"
+        lib_san = "Inception 2010 2160p Remux"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, lib_san, config)
+        lib_score = supersession_quality_score(lib_san, new_san, config)
+        assert new_score < lib_score, (
+            f"Precondition failed: new score ({new_score}) must be less than "
+            f"lib score ({lib_score}) for this test to be meaningful"
+        )
 
         movie_dir = tmp_path / "Inception (2010)"
         movie_dir.mkdir()
-        new_fname = "Inception 2010 2160p Remux.mkv"
-        old_fname = "Inception 2010 1080p BluRay.mkv"
+        new_fname = f"{new_san}.mkv"
+        lib_fname = f"{lib_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new-lower-quality")
+        (movie_dir / lib_fname).write_bytes(b"lib-higher-quality")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
+
+        assert count == 0, f"library file scored higher ({lib_score} > {new_score}); nothing should be deleted"
+        assert (movie_dir / lib_fname).exists(), "higher-scored library file must survive"
+
+    def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
+        """Score-driven deletion with pre_delete hook: 2160p Remux beats 1080p BluRay.
+
+        pre_delete hook must run (witness created) and old file must be gone.
+        """
+        _assert_safe_tmpdir(tmp_path)
+
+        new_san = "Interstellar 2014 2160p Remux"
+        old_san = "Interstellar 2014 1080p BluRay"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, f"Precondition: new ({new_score}) must beat old ({old_score})"
+
+        movie_dir = tmp_path / "Interstellar (2014)"
+        movie_dir.mkdir()
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
         (movie_dir / new_fname).write_bytes(b"new")
         (movie_dir / old_fname).write_bytes(b"old")
 
-        # pre_delete writes a witness so we can confirm ordering.
         witness = tmp_path / "pre_ran.txt"
-        config = Config()
         config.post_process.hooks.pre_delete = f"touch {witness}"
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
         assert count == 1
-        assert not (movie_dir / old_fname).exists()
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be gone"
         assert witness.exists(), "pre_delete hook must have run (witness file missing)"
 
     def test_failing_pre_delete_hook_leaves_old_file_intact(self, tmp_path: Path) -> None:
-        """pre_delete exits non-zero → deletion is aborted → old file survives."""
+        """pre_delete exits non-zero → deletion aborted → old file survives regardless of scores."""
         _assert_safe_tmpdir(tmp_path)
 
-        movie_dir = tmp_path / "Interstellar (2014)"
+        new_san = "Dune 2021 2160p Remux"
+        old_san = "Dune 2021 1080p BluRay"
+        config = Config()
+
+        # Confirm the old file WOULD be deleted if the hook didn't abort.
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, (
+            f"Precondition: new ({new_score}) must beat old ({old_score}) "
+            "so that the hook is the only reason deletion is skipped"
+        )
+
+        movie_dir = tmp_path / "Dune (2021)"
         movie_dir.mkdir()
-        new_fname = "Interstellar 2014 2160p Remux.mkv"
-        old_fname = "Interstellar 2014 1080p BluRay.mkv"
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
         (movie_dir / new_fname).write_bytes(b"new")
         (movie_dir / old_fname).write_bytes(b"old")
 
-        config = Config()
         config.post_process.hooks.pre_delete = "false"  # always exits 1
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
@@ -2725,25 +2797,32 @@ class TestDeleteSupersededFilesEndToEnd:
         assert (movie_dir / old_fname).exists(), "old file must survive a failed pre_delete"
 
     def test_both_hooks_run_in_correct_order(self, tmp_path: Path) -> None:
-        """pre_delete runs before deletion, post_delete runs after; both leave witness."""
+        """pre_delete runs before deletion, post_delete after; both leave witnesses; old file gone."""
         _assert_safe_tmpdir(tmp_path)
 
-        movie_dir = tmp_path / "Dune (2021)"
+        new_san = "Blade Runner 2049 2049 2160p Remux"
+        old_san = "Blade Runner 2049 2049 1080p BluRay"
+        config = Config()
+
+        new_score = supersession_quality_score(new_san, old_san, config)
+        old_score = supersession_quality_score(old_san, new_san, config)
+        assert new_score > old_score, f"Precondition: new ({new_score}) must beat old ({old_score})"
+
+        movie_dir = tmp_path / "Blade Runner 2049 (2049)"
         movie_dir.mkdir()
-        new_fname = "Dune 2021 2160p Remux.mkv"
-        old_fname = "Dune 2021 1080p BluRay.mkv"
+        new_fname = f"{new_san}.mkv"
+        old_fname = f"{old_san}.mkv"
         (movie_dir / new_fname).write_bytes(b"new")
         (movie_dir / old_fname).write_bytes(b"old")
 
         pre_witness = tmp_path / "pre_ran.txt"
         post_witness = tmp_path / "post_ran.txt"
-        config = Config()
         config.post_process.hooks.pre_delete = f"touch {pre_witness}"
         config.post_process.hooks.post_delete = f"touch {post_witness}"
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
         assert count == 1
-        assert not (movie_dir / old_fname).exists()
+        assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be physically gone"
         assert pre_witness.exists(), "pre_delete hook must have run"
         assert post_witness.exists(), "post_delete hook must have run"
