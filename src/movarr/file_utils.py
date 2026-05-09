@@ -107,7 +107,11 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:  # noqa: PLR0911
 
     if dst_path.is_file():
         _logger.info("Verifying existing destination '{}' checksum.", dst_path)
-        src_hash = _sha256(src_path)
+        try:
+            src_hash = _sha256(src_path)
+        except OSError:
+            _logger.error("Source file disappeared during verification: '{}'", src_path)
+            return False
         dst_hash = _sha256(dst_path)
         if src_hash == dst_hash:
             _logger.info(
@@ -139,7 +143,11 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:  # noqa: PLR0911
         return False
 
     _logger.info("Verifying copy integrity for '{}'.", dst_path)
-    src_hash = _sha256(src_path)
+    try:
+        src_hash = _sha256(src_path)
+    except OSError:
+        _logger.error("Source file disappeared during post-copy verification: '{}'", src_path)
+        return False
     dst_hash = _sha256(dst_path)
     if src_hash != dst_hash:
         _logger.warning(

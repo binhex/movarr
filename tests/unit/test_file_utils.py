@@ -252,6 +252,18 @@ class TestCopyWithVerify:
             _loguru_logger.remove(sink_id)
         assert any("erifying" in r["message"] for r in records)
 
+    def test_returns_false_when_src_sha256_raises_during_dst_verification(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """Source disappears between listing and verification; must return False not raise."""
+        content = b"same content"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content)
+        dst.write_bytes(content)
+        mocker.patch("movarr.file_utils._sha256", side_effect=FileNotFoundError("gone"))
+        result = copy_with_verify(src, dst)
+        assert result is False
 
 class TestResolutionLabelFromHeight:
     """Tests for resolution_label_from_height()."""

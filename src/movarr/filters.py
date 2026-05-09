@@ -373,7 +373,7 @@ def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
 def _check_bitrate(result: ResultDict) -> ResultDict:
     # Use the index_site dict attached to the result during Jackett search.
     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
-    if min_bitrate_mb is None:
+    if min_bitrate_mb is None or min_bitrate_mb == 0:
         return _pass(result, "No minimum bitrate defined.")
 
     raw_size = result.get("index_size")

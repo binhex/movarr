@@ -1383,3 +1383,28 @@ class TestEditionTokenSet:
         from movarr.filters import edition_token_set
 
         assert edition_token_set("Extended Unrated") == edition_token_set("Unrated Extended")
+
+
+# _check_bitrate — zero threshold treated as disabled
+
+
+class TestCheckBitrateZeroThreshold:
+    """minimum_bitrate_mb=0 must disable the bitrate check (README-documented)."""
+
+    def test_zero_bitrate_passes_without_index_size(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result = _imdb_result()
+        result["_filter_minimum_bitrate_mb"] = 0
+        result.pop("index_size", None)
+        result.pop("imdb_running_time_in_minutes", None)
+        out = _check_bitrate(result)
+        assert out["result"] == "Passed"
+
+    def test_zero_bitrate_passes_via_filter_by_imdb(self) -> None:
+        result = _imdb_result()
+        result["_filter_minimum_bitrate_mb"] = 0
+        result.pop("index_size", None)
+        cfg = Config()
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
