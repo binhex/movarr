@@ -93,7 +93,7 @@ def run_once(config: Config) -> None:
 def _next_run_kwargs(run_on_start: bool) -> dict:
     """Return ``next_run_time`` kwarg dict when *run_on_start* is True, else empty dict."""
     if run_on_start:
-        return {"next_run_time": datetime.datetime.now()}
+        return {"next_run_time": datetime.datetime.now(tz=datetime.UTC)}
     return {}
 
 

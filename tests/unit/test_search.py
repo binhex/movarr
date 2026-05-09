@@ -4,8 +4,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
     from pytest_mock import MockerFixture
@@ -1070,6 +1068,7 @@ class TestProcessCriteriaIgnoreList:
 
         db.write.assert_not_called()
         qbt.add_torrent.assert_not_called()
+
     def test_ignored_tracker_case_insensitive(self, mocker: MockerFixture) -> None:
         """ignore_list matching must be case-insensitive."""
         jackett = mocker.MagicMock()
