@@ -36,7 +36,7 @@ from movarr.parsing import (
 )
 
 if TYPE_CHECKING:
-    from movarr.config import Config, SearchCriteriaConfig
+    from movarr.config import Config, IndexSiteConfig, SearchCriteriaConfig
     from movarr.database import Database
     from movarr.models import ResultDict
     from movarr.qbittorrent import QBittorrentClient
@@ -97,41 +97,11 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         library_walk=library_walk,
     )
 
-    index_site = site_cfg.jackett_indexer if config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
-    # Warn if ignore_list is configured but won't be applied.
-    if site_cfg.ignore_list and not (config.index_proxy.selected == "jackett" and site_cfg.jackett_indexer == "all"):
-        logger.warning(
-            "index_site.ignore_list is configured ({} entries) but only applies to "
-            "Jackett all-indexer searches; ignored for current proxy '{}' / indexer '{}'.",
-            len(site_cfg.ignore_list),
-            config.index_proxy.selected,
-            index_site,
-        )
-
-    total_raw = 0
-    for criteria_cfg in site_cfg.search:
-        # Select the indexer slug/id based on the configured proxy.
-        index_site = site_cfg.jackett_indexer if config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
-        category = criteria_cfg.category
-        if index_site in site_cfg.override_search:
-            overrides = site_cfg.override_search[index_site]
-            if "category" in overrides:
-                category = overrides["category"]
-
-        logger.info(
-            "Searching indexer '{}' for '{}' (category '{}').",
-            index_site,
-            criteria_cfg.criteria,
-            category,
-        )
-        total_raw += _process_criteria(
-            criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session
-        )
-
+    total_raw = _run_search_for_site(session, site_cfg)
     check_and_notify(has_results=total_raw > 0, proxy_name=proxy_name, db=db, config=config)
 
 
-def _process_criteria(  # noqa: PLR0912
+def _process_criteria(
     criteria_cfg: SearchCriteriaConfig,
     category: str,
     indexer: str,
@@ -179,30 +149,7 @@ def _process_criteria(  # noqa: PLR0912
                 session.db.write(result)
                 continue
 
-            # Resolve IMDb ID if not supplied by the index.
-            if not result.get("imdb_id"):
-                result = search_for_imdb_id(result, session.config)
-            if result.get("result") != "Passed" or not result.get("imdb_id"):
-                session.db.write(result)
-                continue
-
-            # Try cached IMDb metadata before hitting the API.
-            cached = session.db.find_imdb_metadata(result["imdb_id"])
-            if cached:
-                logger.info("IMDb metadata cache hit for '{}' — skipping API call.", result["imdb_id"])
-                for key, value in cached.items():
-                    result[key] = value  # type: ignore[literal-required]
-                result["result"] = "Passed"
-                result.setdefault("result_details", [])
-            else:
-                result = fetch_metadata(result, session.config)
-                if result.get("result") != "Passed":
-                    session.db.write(result)
-                    continue
-
-            result = filter_by_imdb(result, session.config, session.library_walk)
-            if result.get("result") != "Passed":
-                session.db.write(result)
+            if not _enrich_result(result, session):
                 continue
 
             logger.success("'{}' passed all filters.", result.get("index_title"))
@@ -220,6 +167,88 @@ def _process_criteria(  # noqa: PLR0912
             session.db.write(result)
 
     return used_count
+
+
+def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> int:
+    """Run all search criteria for the configured indexer site.
+
+    Returns:
+        Total number of usable (non-ignored) indexer results across all criteria.
+    """
+    index_site = (
+        site_cfg.jackett_indexer if session.config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
+    )
+    # Warn if ignore_list is configured but won't be applied.
+    if site_cfg.ignore_list and not (
+        session.config.index_proxy.selected == "jackett" and site_cfg.jackett_indexer == "all"
+    ):
+        logger.warning(
+            "index_site.ignore_list is configured ({} entries) but only applies to "
+            "Jackett all-indexer searches; ignored for current proxy '{}' / indexer '{}'.",
+            len(site_cfg.ignore_list),
+            session.config.index_proxy.selected,
+            index_site,
+        )
+
+    total_raw = 0
+    for criteria_cfg in site_cfg.search:
+        index_site = (
+            site_cfg.jackett_indexer if session.config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
+        )
+        category = criteria_cfg.category
+        if index_site in site_cfg.override_search:
+            overrides = site_cfg.override_search[index_site]
+            if "category" in overrides:
+                category = overrides["category"]
+
+        logger.info(
+            "Searching indexer '{}' for '{}' (category '{}').",
+            index_site,
+            criteria_cfg.criteria,
+            category,
+        )
+        total_raw += _process_criteria(
+            criteria_cfg=criteria_cfg, category=category, indexer=index_site, session=session
+        )
+
+    return total_raw
+
+
+def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
+    """Resolve IMDb ID, fetch IMDb metadata, and run IMDb filters.
+
+    Mutates *result* in place. Writes the result to the database on any failure.
+
+    Returns:
+        True when the result passes all enrichment steps; False otherwise.
+    """
+    # Resolve IMDb ID if not supplied by the index.
+    if not result.get("imdb_id"):
+        result.update(search_for_imdb_id(result, session.config))
+    if result.get("result") != "Passed" or not result.get("imdb_id"):
+        session.db.write(result)
+        return False
+
+    # Try cached IMDb metadata before hitting the API.
+    cached = session.db.find_imdb_metadata(result["imdb_id"])
+    if cached:
+        logger.info("IMDb metadata cache hit for '{}' — skipping API call.", result["imdb_id"])
+        for key, value in cached.items():
+            result[key] = value  # type: ignore[literal-required]
+        result["result"] = "Passed"
+        result.setdefault("result_details", [])
+    else:
+        result.update(fetch_metadata(result, session.config))
+        if result.get("result") != "Passed":
+            session.db.write(result)
+            return False
+
+    result.update(filter_by_imdb(result, session.config, session.library_walk))
+    if result.get("result") != "Passed":
+        session.db.write(result)
+        return False
+
+    return True
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:

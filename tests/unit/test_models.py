@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import movarr.models  # noqa: F401 — ensures coverage of the models module
-from movarr.models import ResultDict  # noqa: TCH001 — runtime import needed
+from movarr.models import ResultDict, build_result_dict  # noqa: TCH001 — runtime import needed
 
 
 class TestResultDictConstruction:
@@ -243,3 +243,55 @@ class TestResultDictFullPayload:
         assert len(result["imdb_genres_list"]) == 3  # type: ignore[arg-type]
         assert result["result"] == "Passed"
         assert result["verified"] == "true"
+
+
+class TestBuildResultDict:
+    """build_result_dict() constructs a base ResultDict from shared index fields."""
+
+    _DEFAULTS = {
+        "index_title": "Some Title",
+        "index_tracker": "tracker-x",
+        "index_pubdate": "2024-01-01",
+        "index_details": "https://example.com/info",
+        "index_seeders": "42",
+        "index_peers": "10",
+        "index_size": "1073741824",
+        "index_size_mb": "1024.00",
+        "torrent_url": "https://example.com/file.torrent",
+        "magnet_url": "magnet:?xt=urn:btih:abc",
+        "category": "2000",
+    }
+
+    def test_returns_result_dict_type(self) -> None:
+        """Return value is a dict (TypedDict is a dict at runtime)."""
+        result = build_result_dict(**self._DEFAULTS)
+        assert isinstance(result, dict)
+
+    def test_all_supplied_fields_present(self) -> None:
+        """Every keyword argument is stored under the matching key."""
+        result = build_result_dict(**self._DEFAULTS)
+        for key, value in self._DEFAULTS.items():
+            assert result[key] == value, f"Mismatch on key '{key}'"
+
+    def test_result_preset_to_passed(self) -> None:
+        """The 'result' field is always initialised to 'Passed'."""
+        result = build_result_dict(**self._DEFAULTS)
+        assert result["result"] == "Passed"
+
+    def test_result_details_preset_to_empty_list(self) -> None:
+        """The 'result_details' field is always initialised to an empty list."""
+        result = build_result_dict(**self._DEFAULTS)
+        assert result["result_details"] == []
+
+    def test_result_details_is_independent_per_call(self) -> None:
+        """Each call returns a fresh list so mutations don't bleed between results."""
+        r1 = build_result_dict(**self._DEFAULTS)
+        r2 = build_result_dict(**self._DEFAULTS)
+        r1["result_details"].append("x")
+        assert r2["result_details"] == []
+
+    def test_empty_strings_allowed(self) -> None:
+        """Fields like magnet_url and category may be empty strings."""
+        result = build_result_dict(**{**self._DEFAULTS, "magnet_url": "", "category": ""})
+        assert result["magnet_url"] == ""
+        assert result["category"] == ""

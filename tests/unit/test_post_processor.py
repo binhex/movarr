@@ -301,7 +301,6 @@ class TestDeleteSupersededFiles:
         for name in lower_quality_files:
             assert (movie_dir / name).exists(), f"{name} should not have been deleted"
 
-
     def test_safety_guard_rejects_too_many_video_files_emits_warning(self, tmp_path: Path) -> None:
         """Guard 2: warning log includes the actual video file count."""
         from loguru import logger as _loguru_logger
@@ -618,7 +617,6 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-
     def test_skips_deletion_same_res_edition_mismatch(self, tmp_path: Path) -> None:
         """Different editions at same resolution must NOT be deleted."""
         movie_dir = tmp_path / "The Matrix (1999)"
@@ -675,7 +673,6 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
-
     def test_dotted_bracket_extras_detected(self, tmp_path: Path) -> None:
         """Bracket extras with dot-separated words (e.g. [Behind.the.Scenes]) must be detected."""
         movie_dir = tmp_path / "The Matrix (1999)"
@@ -689,7 +686,6 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
-
 
     def test_hyphenated_bracket_extras_detected(self, tmp_path: Path) -> None:
         """Hyphen-separated bracket extras still prevent deletion."""
@@ -766,7 +762,7 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_special_features_IS_treated_as_extras(self, tmp_path: Path) -> None:
+    def test_special_features_is_treated_as_extras(self, tmp_path: Path) -> None:
         """'Special Features' in the post-year segment IS extras content and must be skipped."""
         movie_dir = tmp_path / "Movie (2019)"
         movie_dir.mkdir()
@@ -793,7 +789,6 @@ class TestDeleteSupersededFiles:
 
         assert count == 0, "plural 'Deleted Scenes' must be treated as extras"
         assert (movie_dir / lib_fname).exists()
-
 
     def test_extra_singular_not_treated_as_extras(self, tmp_path: Path) -> None:
         """'EXTRA' (singular) in the post-year segment must NOT be treated as extras content.
@@ -841,7 +836,6 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
-
     def test_theatrical_extended_supersedes_lower_quality_extended(self, tmp_path: Path) -> None:
         """Theatrical Extended 2160p Remux should delete Extended 1080p BluRay — both Extended."""
         movie_dir = tmp_path / "Movie (2019)"
@@ -855,7 +849,6 @@ class TestDeleteSupersededFiles:
 
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
-
 
     def test_compound_edition_same_tags_different_order(self, tmp_path: Path) -> None:
         """Unrated Extended 2160p Remux should delete Extended Unrated 1080p BluRay — same compound edition, higher res."""
@@ -884,6 +877,7 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
 
 # _safe_path_component
 
@@ -2159,6 +2153,7 @@ class TestProcessOneHooks:
         db.mark_completed.assert_called_once()
         mock_delete.assert_called_once()
         qbt.delete_torrent.assert_called_once()
+
 
 class TestDeleteSupersededFilesHooks:
     """Tests for pre_delete / post_delete hook wiring."""

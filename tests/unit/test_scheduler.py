@@ -372,7 +372,6 @@ class TestRunDaemon:
         kwarg_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
         assert kwarg_ids == {"search", "queue_management", "post_processing"}
 
-
     def test_acquisition_disabled_skips_search_job(self, mocker: MockerFixture) -> None:
         """schedule.acquisition.enabled=False: search job is not registered."""
         mocker.patch("movarr.scheduler.Database")
@@ -420,6 +419,7 @@ class TestRunDaemon:
 
         registered_ids = {c.kwargs.get("id") for c in mock_sched.add_job.call_args_list}
         assert "post_processing" not in registered_ids
+
 
 class TestRunDaemonSignalHandler:
     """Tests that _shutdown signal handler is properly invoked."""

@@ -582,7 +582,7 @@ def _check_library_canonical(
     canonical_compare = normalise_for_compare(imdb_title)
     if not canonical_compare:
         return _pass(result, "Cannot normalise IMDb title for canonical library check.")
-    matches = _find_library_files_by_compare(canonical_compare, imdb_year, library_walk)
+    matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
 
@@ -619,28 +619,23 @@ def _match_library_file(
     return fname
 
 
+def _walk_library_files(
+    title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
+) -> list[str]:
+    """Walk *library_walk* and return video-file paths matching *title_compare* and *year*."""
+    found: list[str] = []
+    for root, _dirs, files in library_walk:
+        for fname in files:
+            if _match_library_file(fname, title_compare, year):
+                found.append(os.path.join(root, fname))
+    return found
+
+
 def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
     """Return absolute paths to library video files matching the index title+year."""
     title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
-    found: list[str] = []
-    for root, _dirs, files in library_walk:
-        for fname in files:
-            if _match_library_file(fname, title_compare, year):
-                found.append(os.path.join(root, fname))
-    return found
-
-
-def _find_library_files_by_compare(
-    title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
-) -> list[str]:
-    """Walk the library and return video files matching *title_compare* and *year*."""
-    found: list[str] = []
-    for root, _dirs, files in library_walk:
-        for fname in files:
-            if _match_library_file(fname, title_compare, year):
-                found.append(os.path.join(root, fname))
-    return found
+    return _walk_library_files(title_compare, year, library_walk)
 
 
 def _evaluate_library_files(

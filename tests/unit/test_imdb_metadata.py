@@ -430,10 +430,14 @@ class TestResolveImdbpieRedirect:
         mock_client = mocker.MagicMock()
         mock_client._get.side_effect = RuntimeError("network error")
         mocker.patch.dict("sys.modules", {"imdbpie.constants": None})
+        mock_debug = mocker.patch("movarr.imdb_metadata._logger.debug")
 
         result = _resolve_imdbpie_redirect(mock_client, "tt0133093")
 
         assert result == "tt0133093"
+        mock_debug.assert_called_once()
+        call_args = mock_debug.call_args[0]
+        assert "tt0133093" in call_args[1]
 
 
 # _patch_imdbpie_redirect_check — nm-id branch and except path

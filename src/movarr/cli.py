@@ -52,6 +52,8 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
         config.index_proxy.prowlarr.port = cast("int", overrides["prowlarr_port"])
     if overrides.get("prowlarr_api_key") is not None:
         config.index_proxy.prowlarr.api_key = str(overrides["prowlarr_api_key"])
+    if overrides.get("daemon"):
+        config.general.daemon_mode = "background"
 
 
 @click.command()
@@ -222,10 +224,6 @@ def cli(
 
     config = load_config(config_path)
 
-    # --daemon flag overrides general.daemon_mode in config.
-    if daemon:
-        config.general.daemon_mode = "background"
-
     _apply_cli_overrides(
         config,
         db_path=db_path,
@@ -241,6 +239,7 @@ def cli(
         prowlarr_host=prowlarr_host,
         prowlarr_port=prowlarr_port,
         prowlarr_api_key=prowlarr_api_key,
+        daemon=daemon,
     )
 
     def _log_format(record: dict) -> str:

@@ -31,8 +31,9 @@ from movarr.search import run_search
 
 if TYPE_CHECKING:
     import types
+    from collections.abc import Callable
 
-    from movarr.config import Config
+    from movarr.config import Config, ScheduleTaskConfig
 
 __all__ = ["run", "run_once"]
 
@@ -110,67 +111,35 @@ def _run_daemon(config: Config) -> None:
     qm_mins = config.schedule.queue_management.schedule_time_mins
     pp_mins = config.schedule.post_processing.schedule_time_mins
 
-    def _search_job() -> None:
-        _task_search(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "search")
-        except Exception:
-            logger.exception("Failed to log next search run time.")
-
-    def _queue_management_job() -> None:
-        _task_queue_management(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "queue_management")
-        except Exception:
-            logger.exception("Failed to log next queue_management run time.")
-
-    def _post_processing_job() -> None:
-        _task_post_processing(config, qbt, db)
-        try:
-            _log_next_run(scheduler, "post_processing")
-        except Exception:
-            logger.exception("Failed to log next post_processing run time.")
-
-    if config.schedule.acquisition.enabled:
-        scheduler.add_job(
-            _search_job,
-            trigger="interval",
-            minutes=search_mins,
-            id="search",
-            name="Jackett search + filter + add",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.acquisition.run_on_start),
-        )
-    else:
-        logger.info("Search task disabled; not scheduling.")
-
-    if config.schedule.queue_management.enabled:
-        scheduler.add_job(
-            _queue_management_job,
-            trigger="interval",
-            minutes=qm_mins,
-            id="queue_management",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.queue_management.run_on_start),
-        )
-    else:
-        logger.info("Queue management task disabled; not scheduling.")
-
-    if config.schedule.post_processing.enabled:
-        scheduler.add_job(
-            _post_processing_job,
-            trigger="interval",
-            minutes=pp_mins,
-            id="post_processing",
-            name="Post-processing (copy to library)",
-            max_instances=1,
-            coalesce=True,
-            **_next_run_kwargs(config.schedule.post_processing.run_on_start),
-        )
-    else:
-        logger.info("Post-processing task disabled; not scheduling.")
+    _add_job_if_enabled(
+        scheduler,
+        _task_search,
+        "search",
+        config.schedule.acquisition,
+        config,
+        qbt,
+        db,
+        name="Jackett search + filter + add",
+    )
+    _add_job_if_enabled(
+        scheduler,
+        _task_queue_management,
+        "queue_management",
+        config.schedule.queue_management,
+        config,
+        qbt,
+        db,
+    )
+    _add_job_if_enabled(
+        scheduler,
+        _task_post_processing,
+        "post_processing",
+        config.schedule.post_processing,
+        config,
+        qbt,
+        db,
+        name="Post-processing (copy to library)",
+    )
 
     scheduler.start()
     logger.info(
@@ -233,6 +202,42 @@ def _task_post_processing(config: Config, qbt: QBittorrentClient, db: Database) 
 
 
 # Helpers
+
+
+def _add_job_if_enabled(
+    scheduler: BackgroundScheduler,
+    task_fn: Callable[..., None],
+    job_id: str,
+    schedule_cfg: ScheduleTaskConfig,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+    *,
+    name: str | None = None,
+) -> None:
+    """Register *task_fn* as a recurring interval job unless *schedule_cfg.enabled* is False."""
+    if not schedule_cfg.enabled:
+        logger.info("Scheduled {} is disabled — skipping.", job_id)
+        return
+
+    def _job() -> None:
+        task_fn(config, qbt, db)
+        try:
+            _log_next_run(scheduler, job_id)
+        except Exception:
+            logger.exception("Failed to log next {} run time.", job_id)
+
+    extra: dict = {"name": name} if name is not None else {}
+    scheduler.add_job(
+        _job,
+        trigger="interval",
+        minutes=schedule_cfg.schedule_time_mins,
+        id=job_id,
+        max_instances=1,
+        coalesce=True,
+        **_next_run_kwargs(schedule_cfg.run_on_start),
+        **extra,
+    )
 
 
 def _connect_qbt(config: Config) -> QBittorrentClient:

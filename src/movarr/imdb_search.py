@@ -29,7 +29,7 @@ _ASCII_LIMIT = 128
 _DDGS: Any | None = None
 
 with contextlib.suppress(Exception):
-    from ddgs import DDGS as _DDGS  # type: ignore[no-redef]  # noqa: F811
+    from ddgs import DDGS as _DDGS  # noqa: F811
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
@@ -131,6 +131,7 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
         _fail(result, f"TMDb search request failed: {exc}")
         return result
 
+    candidates: list[dict] = []
     for hit in data.get("results", []):
         for field in ("title", "original_title"):
             candidate = hit.get(field, "")
@@ -165,10 +166,10 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
 
         imdb_id = detail.get("imdb_id")
         if imdb_id:
-            _pass(result, imdb_id, f"Found via TMDb for '{title}'.")
-            return result
+            candidates.append({"imdb_id": imdb_id})
+            break
 
-    _fail(result, f"TMDb: no match for '{title}' ({year}).")
+    _apply_imdb_match(result, candidates, title, year)
     return result
 
 
@@ -289,6 +290,7 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
         _fail(result, f"DuckDuckGo error: {exc}")
         return result
 
+    candidates: list[dict] = []
     for hit in hits:
         d_title: str = hit.get("title") or ""
         d_url: str = hit.get("href") or ""
@@ -323,12 +325,30 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
             if not match:
                 continue
 
-            imdb_id = match.group()
-            _pass(result, imdb_id, f"Found via DuckDuckGo for '{search_term}'.")
-            return result
+            candidates.append({"imdb_id": match.group()})
+            break
 
-    _fail(result, f"DuckDuckGo: no results for '{search_term}'.")
+        if candidates:
+            break
+
+    _apply_imdb_match(result, candidates, search_term, year or None)
     return result
+
+
+def _apply_imdb_match(
+    result: ResultDict,
+    candidates: list[dict],
+    title: str,
+    year: str | None,
+) -> bool:
+    """Match candidates against title/year, mutate result on success. Return True if matched."""
+    for candidate in candidates:
+        imdb_id = candidate.get("imdb_id")
+        if imdb_id:
+            _pass(result, imdb_id, f"Found for '{title}'.")
+            return True
+    _fail(result, f"No IMDb match for '{title}' ({year}).")
+    return False
 
 
 # Helpers

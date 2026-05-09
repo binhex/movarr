@@ -10,6 +10,7 @@ import requests
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
+from movarr.models import build_result_dict
 from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
@@ -160,21 +161,19 @@ class ProwlarrClient:
             return None
 
         size_bytes = item.get("size", 0) or 0
-        result: ResultDict = {
-            "index_title": index_title,
-            "index_tracker": item.get("indexer", ""),
-            "index_pubdate": item.get("publishDate", ""),
-            "index_details": item.get("infoUrl", ""),
-            "index_seeders": str(item.get("seeders", "")),
-            "index_peers": str(item.get("leechers", "")),
-            "index_size": str(size_bytes),
-            "index_size_mb": bytes_to_mb(size_bytes),
-            "torrent_url": item.get("downloadUrl", "") or "",
-            "magnet_url": item.get("magnetUrl", "") or "",
-            "category": "",
-            "result": "Passed",
-            "result_details": [],
-        }
+        result: ResultDict = build_result_dict(
+            index_title=index_title,
+            index_tracker=item.get("indexer", ""),
+            index_pubdate=item.get("publishDate", ""),
+            index_details=item.get("infoUrl", ""),
+            index_seeders=str(item.get("seeders", "")),
+            index_peers=str(item.get("leechers", "")),
+            index_size=str(size_bytes),
+            index_size_mb=bytes_to_mb(size_bytes),
+            torrent_url=item.get("downloadUrl", "") or "",
+            magnet_url=item.get("magnetUrl", "") or "",
+            category="",
+        )
 
         imdb_id_raw = item.get("imdbId")
         if imdb_id_raw:

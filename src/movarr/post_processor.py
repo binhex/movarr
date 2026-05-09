@@ -54,6 +54,27 @@ _EXTRAS_RE = re.compile(
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 
 
+def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str) -> None:
+    """Escalate signals (SIGTERM → SIGKILL) to terminate the process group, then reap."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(OSError, ProcessLookupError):
+            if pgid is not None:
+                os.killpg(pgid, sig)
+        try:
+            proc.communicate(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    # Unconditional SIGKILL to catch TERM-ignoring children that closed their pipes
+    with contextlib.suppress(OSError, ProcessLookupError):
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGKILL)
+    # Final reap
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=5)
+    logger.error("{} hook timed out after 300 s.", label)
+
+
 def _run_hook(command: str, dir_path: str, label: str) -> bool:
     """Run a post-process hook command, substituting ``{dir}`` with *dir_path*.
 
@@ -105,24 +126,7 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
     try:
         stdout, stderr = proc.communicate(timeout=300)
     except subprocess.TimeoutExpired:
-        # Signal escalation: SIGTERM then SIGKILL
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            with contextlib.suppress(OSError, ProcessLookupError):
-                if pgid is not None:
-                    os.killpg(pgid, sig)
-            try:
-                proc.communicate(timeout=5)
-                break
-            except subprocess.TimeoutExpired:
-                continue
-        # Unconditional SIGKILL to catch TERM-ignoring children that closed their pipes
-        with contextlib.suppress(OSError, ProcessLookupError):
-            if pgid is not None:
-                os.killpg(pgid, signal.SIGKILL)
-        # Final reap
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=5)
-        logger.error("{} hook timed out after 300 s.", label)
+        _kill_process(proc, pgid, label)
         return False
     if stdout:
         logger.debug("{} hook stdout: {}", label, stdout.rstrip())
@@ -186,6 +190,32 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
         _process_one(torrent, config, qbt, db)
 
 
+# Copy helper
+
+
+def _copy_files(
+    src_files: list[str],
+    dst_dir: str,
+    largest_fname: str,
+    canonical_fname: str,
+) -> tuple[bool, set[str]]:
+    """Copy *src_files* to *dst_dir*, renaming the largest file to *canonical_fname*.
+
+    Returns ``(all_ok, copied_fnames)``.  Aborts and returns ``False`` on first failure.
+    """
+    copied_fnames: set[str] = set()
+    for src_path in src_files:
+        src_fname = os.path.basename(src_path)
+        dst_fname = canonical_fname if src_fname == largest_fname else src_fname
+        dst_path = os.path.join(dst_dir, dst_fname)
+        logger.info("Copying '{}' → '{}'.", src_path, dst_path)
+        if not copy_with_verify(src_path, dst_path):
+            logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
+            return False, copied_fnames
+        copied_fnames.add(dst_fname)
+    return True, copied_fnames
+
+
 # Per-torrent processing
 
 
@@ -244,19 +274,7 @@ def _process_one(
     largest_fname, largest_rel_path = _largest_file(torrent)
     canonical_fname = _canonical_filename(largest_fname, largest_rel_path)
 
-    all_ok = True
-    copied_fnames: set[str] = set()
-    for src_path in src_files:
-        src_fname = os.path.basename(src_path)
-        dst_fname = canonical_fname if src_fname == largest_fname else src_fname
-
-        dst_path = os.path.join(dst_dir, dst_fname)
-        logger.info("Copying '{}' → '{}'.", src_path, dst_path)
-        if not copy_with_verify(src_path, dst_path):
-            logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
-            all_ok = False
-            break
-        copied_fnames.add(dst_fname)
+    all_ok, copied_fnames = _copy_files(src_files, dst_dir, largest_fname, canonical_fname)
 
     if all_ok:
         db.mark_completed(tag)
@@ -281,6 +299,17 @@ def _process_one(
 # File-list helpers
 
 
+def _compile_exclusion_regexes(patterns: list[str] | None, label: str) -> list[re.Pattern[str]]:
+    """Compile *patterns* into case-insensitive regexes, logging a warning on error."""
+    result: list[re.Pattern[str]] = []
+    for r in patterns or []:
+        try:
+            result.append(re.compile(r, re.IGNORECASE))
+        except re.error:
+            logger.warning("Invalid {} regex '{}'; skipping.", label, r)
+    return result
+
+
 def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     """Return absolute paths for files that should be copied to the library."""
     pp = config.post_process
@@ -297,18 +326,8 @@ def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     file_list = torrent.get("torrent_file_list") or []
 
     exclude_min_kb = pp.exclude_file_min_kb or 0
-    exclude_file_regexes: list[re.Pattern[str]] = []
-    for r in pp.exclude_file_regex_list or []:
-        try:
-            exclude_file_regexes.append(re.compile(r, re.IGNORECASE))
-        except re.error:
-            logger.warning("Invalid file-exclude regex '{}'; skipping.", r)
-    exclude_folder_regexes: list[re.Pattern[str]] = []
-    for r in pp.exclude_folder_regex_list or []:
-        try:
-            exclude_folder_regexes.append(re.compile(r, re.IGNORECASE))
-        except re.error:
-            logger.warning("Invalid folder-exclude regex '{}'; skipping.", r)
+    exclude_file_regexes = _compile_exclusion_regexes(pp.exclude_file_regex_list, "file-exclude")
+    exclude_folder_regexes = _compile_exclusion_regexes(pp.exclude_folder_regex_list, "folder-exclude")
 
     result: list[str] = []
     save_root = pathlib.Path(save_path).resolve()
@@ -513,6 +532,121 @@ def _edition_token(san: str) -> str:
     return primary_edition_token(san)
 
 
+def _check_directory_safety(resolved_dst: pathlib.Path, resolved_base: pathlib.Path) -> bool:
+    """Return True iff *resolved_dst* is a direct child of *resolved_base*.
+
+    A failed check means the directory depth guard has triggered and the caller
+    should abort deletion immediately.
+    """
+    return resolved_dst.parent == resolved_base
+
+
+def _collect_superseded_files(
+    video_files: list[str],
+    protected: frozenset[str],
+    new_san: str,
+    new_res_str: str | None,
+    config: Config,
+) -> list[str]:
+    """Examine *video_files* and return the filenames that should be deleted.
+
+    A file is a deletion candidate when:
+    - It is not in *protected*.
+    - Its title, year, and extras-status match the new file's.
+    - Both resolutions are parseable integers.
+    - Either the new resolution is strictly higher (and editions match), or the
+      resolutions are equal, editions match, and the new supersession score wins.
+    """
+    new_title = extract_movie_title(new_san)
+    to_delete: list[str] = []
+
+    for fname in video_files:
+        if fname in protected:
+            continue
+
+        lib_san = sanitise(fname) or ""
+
+        # 1. Title match (fail-closed)
+        lib_title = extract_movie_title(lib_san)
+        if not (new_title and lib_title and new_title == lib_title):
+            logger.debug(
+                "Skipping auto-delete for '{}': title mismatch or unparseable (new='{}', lib='{}').",
+                fname,
+                new_title,
+                lib_title,
+            )
+            continue
+
+        # 2. Year match (fail-closed)
+        lib_year = extract_year(lib_san)
+        new_year = extract_year(new_san)
+        if not lib_year or lib_year != new_year:
+            logger.debug(
+                "Skipping auto-delete for '{}': year mismatch or unparseable (new='{}', lib='{}').",
+                fname,
+                new_year,
+                lib_year,
+            )
+            continue
+
+        # 3. Extras keyword guard
+        lib_after = extract_after_year(lib_san) or ""
+        lib_bracket = " ".join(_BRACKET_RE.findall(fname))
+        if _EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())):
+            logger.debug(
+                "Skipping auto-delete for '{}': looks like extra/bonus content.",
+                fname,
+            )
+            continue
+
+        lib_res_str = extract_resolution(lib_san)
+
+        if not new_res_str or not lib_res_str:
+            logger.debug(
+                "Skipping auto-delete for '{}': resolution unparseable (new='{}', lib='{}').",
+                fname,
+                new_res_str,
+                lib_res_str,
+            )
+            continue
+
+        try:
+            new_res_int = int(new_res_str)
+            lib_res_int = int(lib_res_str)
+        except (ValueError, TypeError):
+            continue
+
+        should_delete = False
+        if new_res_int > lib_res_int:
+            if edition_token_set(new_san) != edition_token_set(lib_san):
+                logger.debug(
+                    "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
+                    fname,
+                    _edition_token(new_san) or "base",
+                    _edition_token(lib_san) or "base",
+                )
+                continue
+            should_delete = True
+        elif new_res_int == lib_res_int:
+            if edition_token_set(new_san) != edition_token_set(lib_san):
+                logger.debug(
+                    "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
+                    fname,
+                    _edition_token(new_san) or "base",
+                    _edition_token(lib_san) or "base",
+                )
+                continue
+            new_score = supersession_quality_score(new_san, lib_san, config)
+            lib_score = supersession_quality_score(lib_san, new_san, config)
+            should_delete = new_score > lib_score
+        # else: new_res_int < lib_res_int -> library has higher res, keep it
+
+        if should_delete:
+            to_delete.append(fname)
+
+    return to_delete
+
+
 def _delete_superseded_files(
     dst_dir: str,
     dst_base: str,
@@ -573,14 +707,13 @@ def _delete_superseded_files(
     # Use resolved paths for ALL subsequent I/O to prevent TOCTOU symlink bypass.
     resolved_dst = pathlib.Path(dst_dir).resolve()
     resolved_base = pathlib.Path(dst_base).resolve()
-    if resolved_dst.parent != resolved_base:
+    if not _check_directory_safety(resolved_dst, resolved_base):
         logger.error(
             "Auto-delete safety check failed: '{}' is not a direct child of '{}'; skipping.",
             dst_dir,
             dst_base,
         )
         return 0
-
     try:
         entries = os.listdir(resolved_dst)
     except OSError:
@@ -614,7 +747,6 @@ def _delete_superseded_files(
     protected = frozenset(copied_fnames) | {new_primary_fname}
 
     new_san = sanitise(new_primary_fname) or ""
-    new_title = extract_movie_title(new_san)
     new_res_str = extract_resolution(new_san)
 
     new_after = extract_after_year(new_san) or ""
@@ -655,100 +787,13 @@ def _delete_superseded_files(
             )
             return 0
 
-    for fname in video_files:
-        if fname in protected:
-            continue
-
-        lib_san = sanitise(fname) or ""
-
-        # Three-layer content identity check — all must pass to consider deletion.
-        # Conservative: skip the file if ANY check cannot positively confirm
-        # the candidate is a quality variant of the same content.
-
-        # 1. Title match (fail-closed): both titles must be parseable and identical.
-        lib_title = extract_movie_title(lib_san)
-        if not (new_title and lib_title and new_title == lib_title):
-            logger.debug(
-                "Skipping auto-delete for '{}': title mismatch or unparseable (new='{}', lib='{}').",
-                fname,
-                new_title,
-                lib_title,
-            )
-            continue
-
-        # 2. Year match (fail-closed): both years must be parseable and identical.
-        lib_year = extract_year(lib_san)
-        if not lib_year or lib_year != extract_year(new_san):
-            logger.debug(
-                "Skipping auto-delete for '{}': year mismatch or unparseable (new='{}', lib='{}').",
-                fname,
-                extract_year(new_san),
-                lib_year,
-            )
-            continue
-
-        # 3. Extras keyword guard: skip files whose post-year segment contains
-        #    known bonus/extras content labels (e.g. "Behind the Scenes",
-        #    "Making Of", "Featurette"). These are different content, not quality
-        #    variants, even when sharing the same title and year.
-        lib_after = extract_after_year(lib_san) or ""
-        lib_bracket = " ".join(_BRACKET_RE.findall(fname))
-        if _EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())):
-            logger.debug(
-                "Skipping auto-delete for '{}': looks like extra/bonus content.",
-                fname,
-            )
-            continue
-
-        lib_res_str = extract_resolution(lib_san)
-
-        if not new_res_str or not lib_res_str:
-            logger.debug(
-                "Skipping auto-delete for '{}': resolution unparseable (new='{}', lib='{}').",
-                fname,
-                new_res_str,
-                lib_res_str,
-            )
-            continue
-
-        try:
-            new_res_int = int(new_res_str)
-            lib_res_int = int(lib_res_str)
-        except (ValueError, TypeError):
-            continue
-
-        should_delete = False
-        if new_res_int > lib_res_int:
-            if edition_token_set(new_san) != edition_token_set(lib_san):
-                logger.debug(
-                    "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
-                    fname,
-                    _edition_token(new_san) or "base",
-                    _edition_token(lib_san) or "base",
-                )
-                continue
-            should_delete = True
-        elif new_res_int == lib_res_int:
-            if edition_token_set(new_san) != edition_token_set(lib_san):
-                logger.debug(
-                    "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
-                    fname,
-                    _edition_token(new_san) or "base",
-                    _edition_token(lib_san) or "base",
-                )
-                continue
-            new_score = supersession_quality_score(new_san, lib_san, config)
-            lib_score = supersession_quality_score(lib_san, new_san, config)
-            should_delete = new_score > lib_score
-        # else: new_res_int < lib_res_int -> library has higher res, keep it
-
-        if should_delete:
-            lib_path = str(resolved_dst / fname)
-            if delete_file(lib_path):
-                logger.info("Auto-deleted superseded library file '{}'.", lib_path)
-                deleted += 1
-            else:
-                logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
+    for fname in _collect_superseded_files(video_files, protected, new_san, new_res_str, config):
+        lib_path = str(resolved_dst / fname)
+        if delete_file(lib_path):
+            logger.info("Auto-deleted superseded library file '{}'.", lib_path)
+            deleted += 1
+        else:
+            logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
 
     if config.post_process.hooks.post_delete:
         try:

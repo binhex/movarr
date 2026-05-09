@@ -861,8 +861,8 @@ class TestTorrentClientUnsupported:
 class TestMigrationInfiniteLoopGuard:
     """_run_migrations breaks out when a migration does not increment config_version."""
 
-    def test_no_op_migration_does_not_loop_forever(self, tmp_path: "Path", mocker: "MockerFixture") -> None:
-        from movarr.config import MIGRATIONS, _run_migrations
+    def test_no_op_migration_does_not_loop_forever(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        from movarr.config import _run_migrations
 
         sentinel_version = "__test_loop_guard__"
 
@@ -889,13 +889,13 @@ class TestMigrationInfiniteLoopGuard:
 class TestLoadConfigEdgeCases:
     """Edge cases for load_config: empty file and non-dict YAML."""
 
-    def test_load_config_empty_file_returns_defaults(self, tmp_path: "Path") -> None:
+    def test_load_config_empty_file_returns_defaults(self, tmp_path: Path) -> None:
         p = tmp_path / "config.yml"
         p.write_text("")
         config = load_config(p)
         assert isinstance(config, Config)
 
-    def test_load_config_scalar_yaml_raises(self, tmp_path: "Path") -> None:
+    def test_load_config_scalar_yaml_raises(self, tmp_path: Path) -> None:
         p = tmp_path / "config.yml"
         p.write_text("42")
         with pytest.raises(ValueError, match="YAML mapping"):

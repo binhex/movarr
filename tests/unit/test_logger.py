@@ -161,7 +161,9 @@ class TestCreateLoggerWithFile:
         mocker.patch("movarr.logger._logger.remove")
         mock_add = mocker.patch("movarr.logger._logger.add")
 
-        create_logger(log_format="{message}", log_level="debug", log_level_file="debug", log_path=str(tmp_path / "app.log"))
+        create_logger(
+            log_format="{message}", log_level="debug", log_level_file="debug", log_path=str(tmp_path / "app.log")
+        )
 
         file_kwargs = mock_add.call_args_list[1].kwargs
         assert file_kwargs.get("level") == "DEBUG"

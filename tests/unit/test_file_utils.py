@@ -265,7 +265,7 @@ class TestCopyWithVerify:
         result = copy_with_verify(src, dst)
         assert result is False
 
-    def test_returns_false_when_src_disappears_after_copy(self, tmp_path: Path, mocker: "MockerFixture") -> None:
+    def test_returns_false_when_src_disappears_after_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """Source disappears between copy and post-copy sha256; must return False."""
         src = tmp_path / "src.mkv"
         src.write_bytes(b"data")

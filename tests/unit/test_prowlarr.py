@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from movarr.config import Config
 from movarr.downloader import HttpError
 from movarr.prowlarr import ProwlarrClient
-from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -19,7 +18,6 @@ def _make_client(mocker: MockerFixture) -> tuple[ProwlarrClient, Any]:
     cfg = Config()
     client = ProwlarrClient(cfg)
     return client, mock_http_cls.return_value
-
 
 
 class TestResolveIndexerId:

@@ -426,7 +426,7 @@ class TestSafeUrlEdgeCases:
         body = _build_body(result, cfg)
         assert 'href="#"' in body
 
-    def test_urlparse_exception_falls_back_to_hash(self, mocker: "MockerFixture") -> None:
+    def test_urlparse_exception_falls_back_to_hash(self, mocker: MockerFixture) -> None:
         """When urlparse raises, _safe_url returns '#'."""
         mocker.patch("movarr.notifications.urllib.parse.urlparse", side_effect=Exception("parse error"))
         cfg = Config()

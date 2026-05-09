@@ -27,25 +27,102 @@ def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
-def _migrate_v2_to_v21(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.0.0 → v2.1.0: add database.stalled_expiry_days."""
-    raw.setdefault("database", {}).setdefault("stalled_expiry_days", 7)
-    raw.setdefault("general", {})["config_version"] = "2.1.0"
-    return raw
+# ---------------------------------------------------------------------------
+# Data-driven simple migrations (pure setdefault + version bump)
+# ---------------------------------------------------------------------------
+
+_MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
+    (
+        "2.0.0",
+        "2.1.0",
+        [
+            (("database", "stalled_expiry_days"), 7),
+        ],
+    ),
+    (
+        "2.1.0",
+        "2.2.0",
+        [
+            (("database", "failed_expiry_days"), 7),
+        ],
+    ),
+    (
+        "2.2.0",
+        "2.3.0",
+        [
+            (("database", "passed_expiry_days"), 30),
+        ],
+    ),
+    (
+        "2.4.0",
+        "2.5.0",
+        [
+            (("index_proxy", "prowlarr"), {"host": "localhost", "port": 9696, "api_key": "", "read_timeout": 60.0}),
+            (("index_site", "prowlarr_indexer"), "all"),
+        ],
+    ),
+    (
+        "2.8.0",
+        "2.9.0",
+        [
+            (("notification", "index_proxy_alert_hours"), 0),
+        ],
+    ),
+    (
+        "2.9.0",
+        "2.10.0",
+        [
+            (("notification", "torrent_client_alert_hours"), 0),
+        ],
+    ),
+    (
+        "2.10.0",
+        "2.11.0",
+        [
+            (("general", "log_path"), ""),
+            (("general", "pid_path"), ""),
+        ],
+    ),
+    (
+        "2.12.0",
+        "2.13.0",
+        [
+            (("post_process", "delete_lower_quality"), False),
+        ],
+    ),
+    (
+        "2.13.0",
+        "2.14.0",
+        [
+            (("post_process", "hooks"), {}),
+        ],
+    ),
+]
 
 
-def _migrate_v21_to_v22(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.1.0 → v2.2.0: add database.failed_expiry_days."""
-    raw.setdefault("database", {}).setdefault("failed_expiry_days", 7)
-    raw.setdefault("general", {})["config_version"] = "2.2.0"
-    return raw
+def _make_migration(
+    from_v: str,
+    to_v: str,
+    additions: list[tuple[tuple[str, ...], Any]],
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return a migration that applies *additions* as setdefault entries and bumps config_version."""
+
+    def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
+        for keypath, default in additions:
+            node = raw
+            for k in keypath[:-1]:
+                node = node.setdefault(k, {})
+            node.setdefault(keypath[-1], default)
+        raw.setdefault("general", {})["config_version"] = to_v
+        return raw
+
+    _migrate.__name__ = f"_migrate_v{from_v.replace('.', '')}_to_v{to_v.replace('.', '')}"
+    return _migrate
 
 
-def _migrate_v22_to_v23(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.2.0 → v2.3.0: add database.passed_expiry_days."""
-    raw.setdefault("database", {}).setdefault("passed_expiry_days", 30)
-    raw.setdefault("general", {})["config_version"] = "2.3.0"
-    return raw
+# ---------------------------------------------------------------------------
+# Custom migrations with logic beyond simple setdefault
+# ---------------------------------------------------------------------------
 
 
 def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
@@ -54,17 +131,6 @@ def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
     for task in ("acquisition", "queue_management", "post_processing"):
         schedule.setdefault(task, {}).setdefault("run_on_start", True)
     raw.setdefault("general", {})["config_version"] = "2.4.0"
-    return raw
-
-
-def _migrate_v24_to_v25(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.4.0 → v2.5.0: add Prowlarr config block and prowlarr_indexer."""
-    raw.setdefault("index_proxy", {}).setdefault(
-        "prowlarr",
-        {"host": "localhost", "port": 9696, "api_key": "", "read_timeout": 60.0},
-    )
-    raw.setdefault("index_site", {}).setdefault("prowlarr_indexer", "all")
-    raw.setdefault("general", {})["config_version"] = "2.5.0"
     return raw
 
 
@@ -103,33 +169,6 @@ def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
-def _migrate_v28_to_v29(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.8.0 -> v2.9.0: add notification.index_proxy_alert_hours (default 0 = disabled)."""
-    notification = raw.setdefault("notification", {})
-    notification.setdefault("index_proxy_alert_hours", 0)
-    raw.setdefault("general", {})["config_version"] = "2.9.0"
-    return raw
-
-
-def _migrate_v29_to_v210(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.9.0 -> v2.10.0: add notification.torrent_client_alert_hours (default 0)."""
-    raw.setdefault("notification", {}).setdefault("torrent_client_alert_hours", 0)
-    raw.setdefault("general", {})["config_version"] = "2.10.0"
-    return raw
-
-
-def _migrate_v210_to_v211(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.10.0 -> v2.11.0: add general.log_path and general.pid_path.
-
-    These settings previously only existed as CLI flags.  They are now part of
-    the YAML config so the daemon can be configured entirely from movarr.yml.
-    """
-    raw.setdefault("general", {}).setdefault("log_path", "")
-    raw.setdefault("general", {}).setdefault("pid_path", "")
-    raw["general"]["config_version"] = "2.11.0"
-    return raw
-
-
 def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.11.0 -> v2.12.0: fix stalled/metadata delete_data defaults.
 
@@ -147,22 +186,23 @@ def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
-def _migrate_v212_to_v213(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.12.0 -> v2.13.0: add post_process.delete_lower_quality (default False).
+# ---------------------------------------------------------------------------
+# Bind table-generated functions to module-level names (import compatibility)
+# ---------------------------------------------------------------------------
 
-    Defaults to False (disabled) because this option permanently deletes library
-    files and must be explicitly opted in to by the user.
-    """
-    raw.setdefault("post_process", {}).setdefault("delete_lower_quality", False)
-    raw.setdefault("general", {})["config_version"] = "2.13.0"
-    return raw
+_table_fns: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    from_v: _make_migration(from_v, to_v, additions) for from_v, to_v, additions in _MIGRATION_TABLE
+}
 
-
-def _migrate_v213_to_v214(raw: dict[str, Any]) -> dict[str, Any]:
-    """Migrate v2.13.0 -> v2.14.0: add post_process.hooks (all hooks disabled by default)."""
-    raw.setdefault("post_process", {}).setdefault("hooks", {})
-    raw.setdefault("general", {})["config_version"] = "2.14.0"
-    return raw
+_migrate_v2_to_v21 = _table_fns["2.0.0"]
+_migrate_v21_to_v22 = _table_fns["2.1.0"]
+_migrate_v22_to_v23 = _table_fns["2.2.0"]
+_migrate_v24_to_v25 = _table_fns["2.4.0"]
+_migrate_v28_to_v29 = _table_fns["2.8.0"]
+_migrate_v29_to_v210 = _table_fns["2.9.0"]
+_migrate_v210_to_v211 = _table_fns["2.10.0"]
+_migrate_v212_to_v213 = _table_fns["2.12.0"]
+_migrate_v213_to_v214 = _table_fns["2.13.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {

@@ -255,6 +255,7 @@ class TestHttpClientRequest:
 
         _, call_kwargs = mock_session.request.call_args
         assert call_kwargs.get("verify") is False
+
     def test_ssl_verify_true_forwarded(self, mocker: MockerFixture) -> None:
         """verify_ssl=True (default) must be passed through to session.request()."""
         mock_session = mocker.MagicMock()

@@ -88,8 +88,8 @@ def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
                 match = _re_imdb_id.search(returned_id)
                 if match:
                     return match.group()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        _logger.debug("IMDb redirect lookup failed for %s: %s", imdb_id, e, exc_info=True)
     return imdb_id
 
 
@@ -211,29 +211,11 @@ def _fetch_imdbpie(result: ResultDict) -> ResultDict:
             client.session.close()
         return result
 
-    result.update(
-        {
-            "imdb_title": payload["title"],
-            "imdb_year": payload["year"],
-            "imdb_poster_url": payload["poster"],
-            "imdb_trailer_url": payload["trailer_url"],
-            "imdb_plot_summary": payload["plot_summary"],
-            "imdb_plot_outline": payload["plot_outline"],
-            "imdb_rating": payload["rating"],
-            "imdb_votes": payload["votes"],
-            "imdb_title_type": payload["title_type"],
-            "imdb_running_time_in_minutes": payload["runtime"],
-            "imdb_genres_list": payload["genres"],
-            "imdb_certification": payload["cert"],
-            "imdb_cert_source": "imdbpie" if payload["cert"] else None,
-            "imdb_credits_character_list": payload["characters"],
-            "imdb_credits_director_list": payload["directors"],
-            "imdb_credits_writer_list": payload["writers"],
-            "imdb_credits_cast_list": payload["cast"],
-            "imdb_language_list": payload["languages"],
-            "imdb_country_list": payload["countries"],
-        }
-    )
+    canonical: dict[str, Any] = {
+        **payload,
+        "cert_source": "imdbpie" if payload["cert"] else None,
+    }
+    _apply_metadata(result, canonical)
 
     msg = f"Identified IMDb metadata for '{imdb_id}' using IMDbPie."
     _logger.info(msg)
@@ -318,29 +300,28 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     raw_rating = _omit_na("imdb_rating")
     rating: float | None = float(raw_rating) if raw_rating else None
 
-    result.update(
-        {
-            "imdb_title": _omit_na("title"),
-            "imdb_year": year,
-            "imdb_poster_url": _omit_na("poster"),
-            "imdb_trailer_url": None,
-            "imdb_plot_summary": _omit_na("plot"),
-            "imdb_plot_outline": None,
-            "imdb_rating": rating,
-            "imdb_votes": votes,
-            "imdb_title_type": _omit_na("type"),
-            "imdb_running_time_in_minutes": runtime,
-            "imdb_genres_list": genres,
-            "imdb_certification": rated,
-            "imdb_cert_source": "omdb" if rated else None,
-            "imdb_credits_character_list": None,
-            "imdb_credits_director_list": directors,
-            "imdb_credits_writer_list": writers,
-            "imdb_credits_cast_list": cast,
-            "imdb_language_list": languages,
-            "imdb_country_list": countries,
-        }
-    )
+    canonical: dict[str, Any] = {
+        "title": _omit_na("title"),
+        "year": year,
+        "poster": _omit_na("poster"),
+        "trailer_url": None,
+        "plot_summary": _omit_na("plot"),
+        "plot_outline": None,
+        "rating": rating,
+        "votes": votes,
+        "title_type": _omit_na("type"),
+        "runtime": runtime,
+        "genres": genres,
+        "cert": rated,
+        "cert_source": "omdb" if rated else None,
+        "characters": None,
+        "directors": directors,
+        "writers": writers,
+        "cast": cast,
+        "languages": languages,
+        "countries": countries,
+    }
+    _apply_metadata(result, canonical)
 
     msg = f"Identified IMDb metadata for '{imdb_id}' using OMDb."
     _logger.info(msg)
@@ -351,6 +332,33 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
 
 
 # Private helpers
+
+
+def _apply_metadata(result: ResultDict, data: dict[str, Any]) -> None:
+    """Apply a canonically-shaped metadata dict to *result* in-place."""
+    result.update(
+        {
+            "imdb_title": data.get("title"),
+            "imdb_year": data.get("year"),
+            "imdb_poster_url": data.get("poster"),
+            "imdb_trailer_url": data.get("trailer_url"),
+            "imdb_plot_summary": data.get("plot_summary"),
+            "imdb_plot_outline": data.get("plot_outline"),
+            "imdb_rating": data.get("rating"),
+            "imdb_votes": data.get("votes"),
+            "imdb_title_type": data.get("title_type"),
+            "imdb_running_time_in_minutes": data.get("runtime"),
+            "imdb_genres_list": data.get("genres"),
+            "imdb_certification": data.get("cert"),
+            "imdb_cert_source": data.get("cert_source"),
+            "imdb_credits_character_list": data.get("characters"),
+            "imdb_credits_director_list": data.get("directors"),
+            "imdb_credits_writer_list": data.get("writers"),
+            "imdb_credits_cast_list": data.get("cast"),
+            "imdb_language_list": data.get("languages"),
+            "imdb_country_list": data.get("countries"),
+        }
+    )
 
 
 def _credits_names(credits: dict, role: str) -> list[str] | None:
@@ -539,6 +547,5 @@ def _convert_languages(raw: str | None) -> list[str] | None:
             if code:
                 result.append(code.lower())
             continue
-
 
     return result or None
