@@ -646,6 +646,20 @@ class TestDeleteSupersededFiles:
         assert (movie_dir / lib_fname).exists()
 
 
+    def test_dotted_bracket_extras_detected(self, tmp_path: Path) -> None:
+        """Bracket extras with dot-separated words (e.g. [Behind.the.Scenes]) must be detected."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The.Matrix.1999.2160p.[Behind.the.Scenes].mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
     def test_no_false_positive_for_extra_in_title(self, tmp_path: Path) -> None:
         """Movie titled 'Extra Ordinary' must NOT be treated as extras content."""
         movie_dir = tmp_path / "Extra Ordinary (2019)"

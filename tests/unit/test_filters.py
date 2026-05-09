@@ -1294,3 +1294,8 @@ class TestSpecialEditionToken:
         from movarr.filters import special_edition_token
 
         assert special_edition_token("Director's Cut") == special_edition_token("Directors Cut") == "directors cut"
+
+    def test_handles_unicode_curly_apostrophe(self) -> None:
+        from movarr.filters import special_edition_token
+
+        assert special_edition_token("Alien 1979 Director\u2019s Cut 2160p Remux") == "directors cut"

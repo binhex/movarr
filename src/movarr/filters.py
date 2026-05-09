@@ -48,6 +48,7 @@ __all__ = [
 
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _RE_SPECIAL = re.compile(r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
+_UNICODE_APOSTROPHES = re.compile(r"[\u2018\u2019\u02bc\u02bb]")
 
 
 # Public entry points
@@ -57,8 +58,10 @@ def special_edition_token(san: str) -> str:
     """Return the special-edition token found in *san* (lowercase), or empty string.
 
     All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+    Typographic apostrophes are normalized to ASCII before matching.
     """
-    m = _RE_SPECIAL.search(san)
+    normalized = _UNICODE_APOSTROPHES.sub("'", san)
+    m = _RE_SPECIAL.search(normalized)
     if not m:
         return ""
     token = m.group(0).lower()
@@ -671,7 +674,9 @@ def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
 
 def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     """Return +10 if *candidate* has a special edition token and *other* does not."""
-    if _RE_SPECIAL.search(candidate_san) and not _RE_SPECIAL.search(other_san):
+    candidate_norm = _UNICODE_APOSTROPHES.sub("'", candidate_san)
+    other_norm = _UNICODE_APOSTROPHES.sub("'", other_san)
+    if _RE_SPECIAL.search(candidate_norm) and not _RE_SPECIAL.search(other_norm):
         return 10
     return 0
 
