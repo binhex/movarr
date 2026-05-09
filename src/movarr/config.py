@@ -475,6 +475,15 @@ class PostProcessHooksConfig(BaseModel):
     ``shell=True`` is used so that glob patterns such as ``chattr -i {dir}/*``
     are expanded by the shell. Commands come from the user's own config file,
     so the trust boundary is identical to the rest of the configuration.
+
+    Important:
+        Hooks **must not rename or move** the target files. The ``post_copy``
+        hook fires before library supersession; if it renames the newly copied
+        primary file, supersession will skip deletion (the primary is no longer
+        found). The ``pre_delete`` hook fires before the deletion loop; if it
+        renames a library candidate, the loop will report a false-positive
+        deletion count. Use hooks only for in-place operations (e.g. ``chattr
+        -i``, ``trimarr``).
     """
 
     post_copy: str = ""

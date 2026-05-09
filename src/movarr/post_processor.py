@@ -77,6 +77,15 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
 
     Returns:
         True if the command exits with code 0, False otherwise.
+
+    Important:
+        Hooks **must not rename or move** the target files. The ``post_copy``
+        hook fires before library supersession; if it renames the newly copied
+        primary file, supersession will skip deletion (the primary is no longer
+        found). The ``pre_delete`` hook fires before the deletion loop; if it
+        renames a library candidate, the loop will report a false-positive
+        deletion count. Use hooks only for in-place operations (e.g. ``chattr
+        -i``, ``trimarr``).
     """
     cmd = command.replace("{dir}", shlex.quote(dir_path))
     logger.info("Running {} hook: {}", label, cmd)

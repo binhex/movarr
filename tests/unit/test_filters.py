@@ -1177,6 +1177,21 @@ class TestGroupAndEditionBonus:
         )
         assert bonus == 0
 
+    def test_theatrical_candidate_earns_no_bonus_over_base(self) -> None:
+        from movarr.config import Config
+        from movarr.filters import composite_quality_score
+
+        cfg = Config()
+        score_theatrical_vs_base = composite_quality_score(
+            "Movie 2019 Theatrical 2160p", "Movie 2019 2160p", cfg
+        )
+        score_base_vs_theatrical = composite_quality_score(
+            "Movie 2019 2160p", "Movie 2019 Theatrical 2160p", cfg
+        )
+        assert score_theatrical_vs_base == score_base_vs_theatrical, (
+            "theatrical vs base should have no special-edition bonus in either direction"
+        )
+
 
 # Log-level behaviour
 

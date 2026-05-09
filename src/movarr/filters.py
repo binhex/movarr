@@ -673,10 +673,19 @@ def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
 
 
 def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
-    """Return +10 if *candidate* has a special edition token and *other* does not."""
+    """Return +10 if *candidate* has a non-base special edition token and *other* does not.
+
+    ``theatrical`` is treated as the base edition and does not earn a bonus.
+    """
     candidate_norm = _UNICODE_APOSTROPHES.sub("'", candidate_san)
     other_norm = _UNICODE_APOSTROPHES.sub("'", other_san)
-    if _RE_SPECIAL.search(candidate_norm) and not _RE_SPECIAL.search(other_norm):
+    candidate_match = _RE_SPECIAL.search(candidate_norm)
+    if not candidate_match:
+        return 0
+    # theatrical is the base edition — no special-edition bonus
+    if candidate_match.group(0).lower() == "theatrical":
+        return 0
+    if not _RE_SPECIAL.search(other_norm):
         return 10
     return 0
 
