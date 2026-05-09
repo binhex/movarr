@@ -151,6 +151,33 @@ def filter_by_index(
     return result
 
 
+def _apply_override_gate(result: ResultDict, config: Config) -> tuple[bool, ResultDict]:
+    """Check all override conditions; return (override_matched, updated_result).
+
+    A matched person/title override hard-passes the result (skipping rating/votes).
+    Genre overrides are not hard-passes — they only relax thresholds.
+    """
+    for person_type in ("character", "director", "writer", "cast"):
+        if _override_person(result, config, person_type):
+            _pass(result, f"Override {person_type} match; skipping rating/votes gates.")
+            return True, result
+    if _override_movie_title(result, config):
+        return True, result
+    return False, result
+
+
+def _apply_rating_votes_gate(result: ResultDict, config: Config) -> ResultDict:
+    """Apply genre-override-relaxed rating and votes gates.
+
+    Short-circuits after the first failure: if rating fails, votes check is skipped.
+    """
+    override_thresholds = _override_genre(result, config)
+    if not _check_rating(result, config, override_thresholds):
+        return result
+    _check_votes(result, config, override_thresholds)
+    return result
+
+
 def filter_by_imdb(
     result: ResultDict,
     config: Config,
@@ -181,23 +208,11 @@ def filter_by_imdb(
         if result.get("result") != "Passed":
             return result
 
-    # Override chain: hard-pass any of these → skip rating/votes (but still dedup).
-    override_matched = False
-    for person_type in ("character", "director", "writer", "cast"):
-        if _override_person(result, config, person_type):
-            _pass(result, f"Override {person_type} match; skipping rating/votes gates.")
-            override_matched = True
-            break
-    if not override_matched and _override_movie_title(result, config):
-        override_matched = True
+    override_matched, result = _apply_override_gate(result, config)
 
     if not override_matched:
-        # Genre override can relax rating/votes thresholds.
-        override_thresholds = _override_genre(result, config)
-
-        if not (
-            _check_rating(result, config, override_thresholds) and _check_votes(result, config, override_thresholds)
-        ):
+        _apply_rating_votes_gate(result, config)
+        if result.get("result") != "Passed":
             return result
 
     # Library dedup post-IMDb using canonical title (runs even on override hard-passes).
@@ -208,6 +223,12 @@ def filter_by_imdb(
 
 
 # Stage 1 helpers
+
+
+def _group_is_rejected(group: str, reject_list: list[str]) -> bool:
+    """Return True if *group* (case-insensitive) is in *reject_list*."""
+    reject_lower = [g.lower() for g in reject_list]
+    return group.lower() in reject_lower
 
 
 def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
@@ -223,14 +244,11 @@ def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
     reject_list = config.filters.reject_index_group_list
     if not reject_list:
         return _pass(result, "No reject_index_group_list defined.")
-
     index_title = result.get("index_title") or ""
     group = extract_group(sanitise(index_title) or "")
     if not group:
         return _pass(result, "No release group detected; skipping group check.")
-
-    reject_lower = [g.lower() for g in reject_list]
-    if group.lower() in reject_lower:
+    if _group_is_rejected(group, reject_list):
         return _fail(result, f"Release group '{group}' is in reject_index_group_list.")
     return _pass(result, f"Release group '{group}' is not in reject_index_group_list.")
 
@@ -441,13 +459,11 @@ def _check_language_country(result: ResultDict, config: Config, kind: str) -> Re
     allow_list = getattr(config.filters, f"allow_{kind}_list", []) or []
     if not allow_list:
         return _pass(result, f"No allow {kind} list defined.")
-
     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
         # Fail closed: allow-list is configured but metadata is missing or
         # unmappable. Passing silently would defeat the allow-list on bad data.
         return _fail(result, f"No IMDb {kind} data available; failing closed (allow_{kind}_list is configured).")
-
     imdb_lower = [x.lower() for x in imdb_list]
     allow_lower = [x.lower() for x in allow_list]
 
@@ -485,7 +501,6 @@ def _override_movie_title(result: ResultDict, config: Config) -> bool:
     override_list = config.filters.override_movie_title_list or []
     if not override_list:
         return False
-
     compare_title = result.get("movie_title_compare") or ""
     compare_title_year = result.get("movie_title_and_year_compare") or ""
     for title in override_list:
@@ -493,7 +508,6 @@ def _override_movie_title(result: ResultDict, config: Config) -> bool:
         if norm and norm in (compare_title, compare_title_year):
             _pass(result, f"Override movie title '{title}' matched.")
             return True
-
     return False
 
 
@@ -638,6 +652,57 @@ def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, l
     return _walk_library_files(title_compare, year, library_walk)
 
 
+def _evaluate_single_library_file(
+    lib_path: str,
+    index_resolution: str,
+    index_san: str,
+    config: Config,
+) -> tuple[str, str] | None:
+    """Evaluate one library file against the index entry.
+
+    Returns:
+        ("fail", reason) — library is at least as good; caller should fail the result.
+        ("better", reason) — index is better; continue checking other files.
+        None — resolution unparseable; skip this file.
+    """
+    lib_fname = os.path.basename(lib_path)
+    lib_san = sanitise(lib_fname) or ""
+    lib_res = extract_resolution(lib_san)
+
+    if not lib_res:
+        return (
+            "fail",
+            f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present.",
+        )
+
+    try:
+        idx_res_int = int(index_resolution)
+        lib_res_int = int(lib_res)
+    except (ValueError, TypeError):
+        return None
+
+    if idx_res_int < lib_res_int:
+        return "fail", f"Library has higher resolution ({lib_res}p > {index_resolution}p)."
+
+    if idx_res_int > lib_res_int:
+        reason = f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
+        return "better", reason
+
+    # Same resolution — compare quality scores.
+    idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
+    lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
+    idx_score += _special_edition_bonus(index_san, lib_san)
+    lib_score += _special_edition_bonus(lib_san, index_san)
+
+    if lib_score >= idx_score:
+        return "fail", f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
+
+    reason = (
+        f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+    )
+    return "better", reason
+
+
 def _evaluate_library_files(
     result: ResultDict,
     library_files: list[str],
@@ -657,44 +722,13 @@ def _evaluate_library_files(
     best_reason = ""
 
     for lib_path in library_files:
-        lib_fname = os.path.basename(lib_path)
-        lib_san = sanitise(lib_fname) or ""
-        lib_res = extract_resolution(lib_san)
-
-        if not lib_res:
-            # Conservative: library file matched by title/year but resolution is unknown.
-            # Treat as present and skip re-download to avoid duplicates.
-            return _fail(
-                result, f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present."
-            )
-
-        try:
-            idx_res_int = int(index_resolution)
-            lib_res_int = int(lib_res)
-        except (ValueError, TypeError):
+        outcome = _evaluate_single_library_file(lib_path, index_resolution, index_san, config)
+        if outcome is None:
             continue
-
-        if idx_res_int < lib_res_int:
-            return _fail(result, f"Library has higher resolution ({lib_res}p > {index_resolution}p).")
-
-        if idx_res_int > lib_res_int:
-            best_reason = (
-                f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
-            )
-            continue
-
-        # Same resolution — compare quality scores.
-        idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
-        lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
-        idx_score += _special_edition_bonus(index_san, lib_san)
-        lib_score += _special_edition_bonus(lib_san, index_san)
-
-        if lib_score >= idx_score:
-            return _fail(
-                result, f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
-            )
-
-        best_reason = f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+        outcome_type, reason = outcome
+        if outcome_type == "fail":
+            return _fail(result, reason)
+        best_reason = reason  # outcome_type == "better"
 
     if best_reason:
         return _pass(result, f"Index title '{index_title}' passes library check — {best_reason}.")

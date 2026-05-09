@@ -47,6 +47,14 @@ def _decode_field(value: object) -> Any:
     return value
 
 
+def _add_column_if_absent(conn: Any, column: str, col_type: str = "TEXT") -> None:
+    """Add *column* of *col_type* to the history table if it does not already exist."""
+    cursor = conn.execute(text("PRAGMA table_info(history)"))
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if column not in existing_cols:
+        conn.execute(text(f"ALTER TABLE history ADD COLUMN {column} {col_type}"))
+
+
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base."""
 
@@ -169,42 +177,53 @@ class Database:
         """Apply incremental schema migrations."""
         with self._engine.connect() as conn:
             if from_version < _SCHEMA_V7_CERT_FIELDS:
-                cursor = conn.execute(text("PRAGMA table_info(history)"))
-                existing_cols = {row[1] for row in cursor.fetchall()}
-                if "imdb_certification" not in existing_cols:
-                    conn.execute(text("ALTER TABLE history ADD COLUMN imdb_certification TEXT"))
-                if "imdb_cert_source" not in existing_cols:
-                    conn.execute(text("ALTER TABLE history ADD COLUMN imdb_cert_source TEXT"))
-                conn.commit()
+                self._upgrade_v7_cert_fields(conn)
             if from_version < _SCHEMA_V8_INDEX_TITLE_IDX:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_history_index_title ON history (index_title)"))
-                conn.commit()
+                self._upgrade_v8_index_title_idx(conn)
             if from_version < _SCHEMA_V9_STALLED_AT:
-                cursor = conn.execute(text("PRAGMA table_info(history)"))
-                existing_cols = {row[1] for row in cursor.fetchall()}
-                if "stalled_at" not in existing_cols:
-                    conn.execute(text("ALTER TABLE history ADD COLUMN stalled_at TEXT"))
-                conn.commit()
+                self._upgrade_v9_stalled_at(conn)
             if from_version < _SCHEMA_V10_CREATED_AT:
-                cursor = conn.execute(text("PRAGMA table_info(history)"))
-                existing_cols = {row[1] for row in cursor.fetchall()}
-                if "created_at" not in existing_cols:
-                    conn.execute(text("ALTER TABLE history ADD COLUMN created_at TEXT"))
-                conn.commit()
+                self._upgrade_v10_created_at(conn)
             if from_version < _SCHEMA_V11_KV_STORE:
-                conn.execute(
-                    text("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
-                )
-                conn.commit()
+                self._upgrade_v11_kv_store(conn)
             if from_version < _SCHEMA_V12_KV_KEY_RENAME:
-                conn.execute(
-                    text(
-                        "UPDATE kv_store SET key = 'index_proxy.unavailable_since' "
-                        "WHERE key = 'index_proxy.zero_results_since'"
-                    )
-                )
-                conn.commit()
+                self._upgrade_v12_kv_key_rename(conn)
         self._set_user_version(_DB_VERSION)
+
+    def _upgrade_v7_cert_fields(self, conn: Any) -> None:
+        """Add imdb_certification and imdb_cert_source columns to history."""
+        _add_column_if_absent(conn, "imdb_certification")
+        _add_column_if_absent(conn, "imdb_cert_source")
+        conn.commit()
+
+    def _upgrade_v8_index_title_idx(self, conn: Any) -> None:
+        """Create index on history.index_title."""
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_history_index_title ON history (index_title)"))
+        conn.commit()
+
+    def _upgrade_v9_stalled_at(self, conn: Any) -> None:
+        """Add stalled_at column to history."""
+        _add_column_if_absent(conn, "stalled_at")
+        conn.commit()
+
+    def _upgrade_v10_created_at(self, conn: Any) -> None:
+        """Add created_at column to history."""
+        _add_column_if_absent(conn, "created_at")
+        conn.commit()
+
+    def _upgrade_v11_kv_store(self, conn: Any) -> None:
+        """Create kv_store table."""
+        conn.execute(text("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)"))
+        conn.commit()
+
+    def _upgrade_v12_kv_key_rename(self, conn: Any) -> None:
+        """Rename index_proxy.zero_results_since key to index_proxy.unavailable_since."""
+        conn.execute(
+            text(
+                "UPDATE kv_store SET key = 'index_proxy.unavailable_since' WHERE key = 'index_proxy.zero_results_since'"
+            )
+        )
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Write
@@ -303,6 +322,29 @@ class Database:
             )
             session.commit()
 
+    def _expire_by_result(self, result_value: str, timestamp_column: str, days: int) -> int:
+        """Delete history rows with *result_value* older than *days* days.
+
+        Uses *timestamp_column* as the age criterion.
+        Returns the number of deleted rows.
+        """
+        if days <= 0:
+            return 0
+        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
+        col_attr = getattr(HistoryRecord, timestamp_column)
+        with Session(self._engine) as session:
+            deleted = (
+                session.query(HistoryRecord)
+                .filter(
+                    HistoryRecord.result == result_value,
+                    col_attr.isnot(None),
+                    col_attr < cutoff,
+                )
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+        return int(deleted)
+
     def expire_stalled(self, days: int) -> int:
         """Delete stalled history records older than *days* days.
 
@@ -316,21 +358,7 @@ class Database:
         Returns:
             Number of records deleted.
         """
-        if days <= 0:
-            return 0
-        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
-        with Session(self._engine) as session:
-            deleted = (
-                session.query(HistoryRecord)
-                .filter(
-                    HistoryRecord.result == "Stalled",
-                    HistoryRecord.stalled_at.isnot(None),
-                    HistoryRecord.stalled_at < cutoff,
-                )
-                .delete(synchronize_session=False)
-            )
-            session.commit()
-        return int(deleted)
+        return self._expire_by_result("Stalled", "stalled_at", days)
 
     def expire_failed(self, days: int) -> int:
         """Delete failed history records older than *days* days.
@@ -345,21 +373,7 @@ class Database:
         Returns:
             Number of records deleted.
         """
-        if days <= 0:
-            return 0
-        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
-        with Session(self._engine) as session:
-            deleted = (
-                session.query(HistoryRecord)
-                .filter(
-                    HistoryRecord.result == "Failed",
-                    HistoryRecord.created_at.isnot(None),
-                    HistoryRecord.created_at < cutoff,
-                )
-                .delete(synchronize_session=False)
-            )
-            session.commit()
-        return int(deleted)
+        return self._expire_by_result("Failed", "created_at", days)
 
     def expire_passed(self, days: int) -> int:
         """Delete passed history records older than *days* days.
@@ -381,21 +395,7 @@ class Database:
         Returns:
             Number of records deleted.
         """
-        if days <= 0:
-            return 0
-        cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
-        with Session(self._engine) as session:
-            deleted = (
-                session.query(HistoryRecord)
-                .filter(
-                    HistoryRecord.result == "Passed",
-                    HistoryRecord.created_at.isnot(None),
-                    HistoryRecord.created_at < cutoff,
-                )
-                .delete(synchronize_session=False)
-            )
-            session.commit()
-        return int(deleted)
+        return self._expire_by_result("Passed", "created_at", days)
 
     # ------------------------------------------------------------------
     # Read / deduplication

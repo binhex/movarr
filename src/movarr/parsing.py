@@ -22,15 +22,23 @@ __all__ = [
     "quality_score",
 ]
 
-# Compiled patterns
+# Compiled patterns — each strips or captures a specific noise artifact from raw index titles.
 
-_RE_FILE_EXTENSION = re.compile(r"\.[a-z0-9]{3}$")
-_RE_NON_ASCII = re.compile(r"[\.\s\-\_]?(\s?\[?[^\x00-\x7F]{2,}).*([^\x00-\x7F]{2,}\]?\s?)[\.\s\-\_]?")
-_RE_BRACKETS_START = re.compile(r"^([\s\.\-\_]+)?\[.+?\]")
+_RE_FILE_EXTENSION = re.compile(r"\.[a-z0-9]{3}$")  # Strips trailing file extension (e.g. ".mkv").
+_RE_NON_ASCII = re.compile(
+    r"[\.\s\-\_]?(\s?\[?[^\x00-\x7F]{2,}).*([^\x00-\x7F]{2,}\]?\s?)[\.\s\-\_]?"
+)  # Strips non-ASCII language cluster annotations (e.g. Chinese/Arabic character groups).
+_RE_BRACKETS_START = re.compile(
+    r"^([\s\.\-\_]+)?\[.+?\]"
+)  # Strips leading bracketed tag (e.g. "[YTS]" at start of title).
 _RE_BRACKETS_END = re.compile(r"\[[^\[]+\]([\s\.\-\_]+)?$")
-_RE_BRACES_START = re.compile(r"^([\s\.\-\_]+)?\{.+?\}")
+_RE_BRACES_START = re.compile(
+    r"^([\s\.\-\_]+)?\{.+?\}"
+)  # Strips leading brace-enclosed tag (e.g. "{group}" at start of title).
 _RE_BRACES_END = re.compile(r"\{[^\{]+\}([\s\.\-\_]+)?$")
-_RE_END_TAGS = re.compile(r"[\s\.\-\_]\[[a-zA-Z]+\]$|@[a-zA-Z0-9]+$")
+_RE_END_TAGS = re.compile(
+    r"[\s\.\-\_]\[[a-zA-Z]+\]$|@[a-zA-Z0-9]+$"
+)  # Strips trailing bracket tags (e.g. "[GROUP]") or @handle suffixes.
 _RE_ROUND_SQUARE_BRACKETS = re.compile(r"[\[\]\(\)]+")
 _RE_INVALID_WIN_CHARS = re.compile(r'[<>:"/\\|?*]+')
 _RE_WEBSITE = re.compile(r"(?i)www[\s\.\-\_][a-zA-Z0-9]+[\s\.\-\_][a-zA-Z0-9]{3,}")
@@ -46,7 +54,9 @@ _RE_TV_EPISODE = re.compile(r"(?i)s[\d]{2,3}(e[\d]{2,3})|s[\d]{2,3}|ep[\d]{2,3}"
 _RE_MOVIE_TITLE = re.compile(r"^(.*?)(?=[\s\.\-\_]\d{4})")
 _RE_YEAR = re.compile(r"(?<=[\(\s\.\-\_])\d{4}(?=[\s\.\-\_\)]|$)")
 _RE_GROUP = re.compile(r"[a-zA-Z0-9]+$")
-_RE_TITLE_YEAR_SPLIT = re.compile(r"^(.+?\d{4}[\s\.\-\+,]?)(.*)")
+_RE_TITLE_YEAR_SPLIT = re.compile(
+    r"^(.+?\d{4}[\s\.\-\+,]?)(.*)"
+)  # Splits a sanitised title into (title+year, remainder) for post-year extraction.
 
 _WORD_TO_INT: dict[str, str] = {
     "one": "1",
@@ -268,7 +278,9 @@ def is_tv_content(sanitised: str) -> bool:
     return bool(_RE_TV_EPISODE.search(after))
 
 
-# Quality scoring tables (resolution → source → audio, higher = better)
+# Quality scoring weights: higher value = better quality.
+# Scale is relative; resolution differences dominate source differences,
+# which dominate audio differences, which dominate HDR differences.
 _RESOLUTION_SCORES: dict[str, int] = {
     r"(480p?|540p?)": 10,
     r"(720p?)": 20,

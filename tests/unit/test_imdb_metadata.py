@@ -702,3 +702,10 @@ class TestConvertLanguages:
         # "english" (all-lowercase) must match after .title() normalization (lines 544-548).
         result = _convert_languages("english")
         assert result == ["en"]
+
+    def test_unrecognized_token_silently_dropped(self) -> None:
+        from movarr.imdb_metadata import _convert_languages
+
+        # A token that matches no lookup strategy must be silently dropped.
+        result = _convert_languages("XXXXXXXXXNOTAREALLANGUAGE,en")
+        assert result == ["en"]

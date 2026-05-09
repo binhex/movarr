@@ -129,6 +129,18 @@ ignore_missing_imports = true
 module = "apscheduler.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["requests", "requests.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "xmltodict"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 minversion = "7.0"
@@ -175,4 +187,5 @@ dev = [
     "types-requests>=2.31.0",
     "types-pyyaml>=6.0.0",
     "types-xmltodict>=0.13.0",
+    "pytest-crap"
 ]

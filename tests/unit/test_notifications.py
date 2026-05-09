@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
 
-from movarr.config import Config
+from movarr.config import Config, NotificationConfig
 from movarr.notifications import (
     _build_body,
     _build_subject,
+    _dispatch_apprise,
     _format_result_details,
+    send_index_proxy_alert,
     send_queued_notification,
+    send_service_alert,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +43,11 @@ def _make_full_result(**overrides: object) -> ResultDict:
     }
     base.update(overrides)  # type: ignore[typeddict-item]
     return base
+
+
+def _make_config(urls: list[str]) -> Config:
+    """Return a Config with apprise_urls set to *urls*."""
+    return Config().model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
 
 
 # _build_subject
@@ -241,8 +250,6 @@ class TestNotificationConfigDefaults:
 
     def test_apprise_urls_accepts_list_of_strings(self) -> None:
         """apprise_urls accepts a list of service URL strings."""
-        from movarr.config import NotificationConfig
-
         nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
         assert len(nc.apprise_urls) == 2
 
@@ -250,27 +257,15 @@ class TestNotificationConfigDefaults:
 class TestSendIndexProxyAlert:
     """Tests for send_index_proxy_alert()."""
 
-    def _make_config(self, urls: list[str]) -> Config:
-        from movarr.config import NotificationConfig
-
-        config = Config()
-        return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
-
     def test_returns_false_when_no_urls_configured(self) -> None:
         """Returns False immediately when apprise_urls is empty."""
-        from movarr.notifications import send_index_proxy_alert
-
-        config = self._make_config([])
+        config = _make_config([])
         result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
         assert result is False
 
     def test_calls_apprise_when_urls_configured(self) -> None:
         """Calls apprise.Apprise.notify() when URLs are present."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_index_proxy_alert
-
-        config = self._make_config(["ntfy://test-topic"])
+        config = _make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -280,11 +275,7 @@ class TestSendIndexProxyAlert:
 
     def test_subject_contains_proxy_name_and_hours(self) -> None:
         """Notification subject includes the proxy name and elapsed hours."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_index_proxy_alert
-
-        config = self._make_config(["ntfy://test-topic"])
+        config = _make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -295,11 +286,7 @@ class TestSendIndexProxyAlert:
 
     def test_returns_false_when_apprise_returns_false(self) -> None:
         """Returns False when apprise.notify() returns False."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_index_proxy_alert
-
-        config = self._make_config(["ntfy://test-topic"])
+        config = _make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = False
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -308,11 +295,7 @@ class TestSendIndexProxyAlert:
 
     def test_returns_false_when_apprise_raises(self) -> None:
         """Returns False (does not propagate) when apprise.notify() raises."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_index_proxy_alert
-
-        config = self._make_config(["ntfy://test-topic"])
+        config = _make_config(["ntfy://test-topic"])
         mock_ap = MagicMock()
         mock_ap.notify.side_effect = RuntimeError("boom")
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -323,26 +306,14 @@ class TestSendIndexProxyAlert:
 class TestSendServiceAlert:
     """Tests for the generic send_service_alert() function."""
 
-    def _make_config(self, urls: list[str]) -> Config:
-        from movarr.config import NotificationConfig
-
-        config = Config()
-        return config.model_copy(update={"notification": NotificationConfig(apprise_urls=urls)})
-
     def test_returns_false_when_no_urls_configured(self) -> None:
         """Returns False immediately when apprise_urls is empty."""
-        from movarr.notifications import send_service_alert
-
-        config = self._make_config([])
+        config = _make_config([])
         assert send_service_alert(service_name="qBittorrent", hours_elapsed=3.0, config=config) is False
 
     def test_calls_apprise_when_urls_configured(self) -> None:
         """Calls apprise.Apprise.notify() and returns True on success."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_service_alert
-
-        config = self._make_config(["ntfy://t"])
+        config = _make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -351,11 +322,7 @@ class TestSendServiceAlert:
 
     def test_subject_contains_service_name_and_hours(self) -> None:
         """Subject line includes service name and elapsed hours."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_service_alert
-
-        config = self._make_config(["ntfy://t"])
+        config = _make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -366,11 +333,7 @@ class TestSendServiceAlert:
 
     def test_returns_false_when_apprise_returns_false(self) -> None:
         """Returns False when apprise.notify() returns False."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_service_alert
-
-        config = self._make_config(["ntfy://t"])
+        config = _make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.return_value = False
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -378,11 +341,7 @@ class TestSendServiceAlert:
 
     def test_returns_false_when_apprise_raises(self) -> None:
         """Returns False and does not propagate when apprise raises."""
-        from unittest.mock import MagicMock, patch
-
-        from movarr.notifications import send_service_alert
-
-        config = self._make_config(["ntfy://t"])
+        config = _make_config(["ntfy://t"])
         mock_ap = MagicMock()
         mock_ap.notify.side_effect = RuntimeError("boom")
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
@@ -394,10 +353,6 @@ class TestSendIndexProxyAlertDelegates:
 
     def test_delegates_to_send_service_alert(self) -> None:
         """send_index_proxy_alert() calls send_service_alert() with correct args."""
-        from unittest.mock import patch
-
-        from movarr.notifications import send_index_proxy_alert
-
         config = Config()
         with patch("movarr.notifications.send_service_alert", return_value=True) as mock_generic:
             result = send_index_proxy_alert(proxy_name="Prowlarr", hours_elapsed=3.0, config=config)
@@ -433,3 +388,19 @@ class TestSafeUrlEdgeCases:
         result = _make_full_result(index_details="http://example.com/details")
         body = _build_body(result, cfg)
         assert 'href="#"' in body
+
+
+class TestDispatchApprise:
+    """Unit tests for the _dispatch_apprise helper."""
+
+    def test_returns_false_for_empty_urls(self) -> None:
+        """Guard: empty URL list returns False without touching Apprise."""
+        assert _dispatch_apprise("subject", "body", []) is False
+
+    def test_returns_false_for_empty_subject(self) -> None:
+        """Guard: empty subject returns False without touching Apprise."""
+        assert _dispatch_apprise("", "body", ["apprise://test"]) is False
+
+    def test_returns_false_for_empty_body(self) -> None:
+        """Guard: empty body returns False without touching Apprise."""
+        assert _dispatch_apprise("subject", "", ["apprise://test"]) is False

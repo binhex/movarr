@@ -38,6 +38,12 @@ if TYPE_CHECKING:
 __all__ = ["run", "run_once"]
 
 
+def _cleanup_pid_file(pid_path: str | None) -> None:
+    """Remove the PID file at *pid_path* if it exists."""
+    if pid_path and os.path.exists(pid_path):
+        os.unlink(pid_path)
+
+
 def run(config: Config) -> None:
     """Start the scheduler in daemon/foreground mode.
 
@@ -58,8 +64,7 @@ def run(config: Config) -> None:
         else:
             run_once(config)
     finally:
-        if pid_path and os.path.exists(pid_path):
-            os.unlink(pid_path)
+        _cleanup_pid_file(pid_path)
 
 
 def run_once(config: Config) -> None:
@@ -168,37 +173,41 @@ def _run_daemon(config: Config) -> None:
 # Task wrappers — catch all exceptions so one bad run doesn't kill the scheduler
 
 
-def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+def _run_guarded(
+    label: str,
+    fn: Callable[[Config, QBittorrentClient, Database], None],
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+) -> None:
+    """Call *fn(config, qbt, db)*, logging any exception at ERROR level."""
     try:
-        if n := db.expire_stalled(config.database.stalled_expiry_days):
-            logger.info(
-                "Expired {} stalled history record(s) older than {} days.", n, config.database.stalled_expiry_days
-            )
-        if n := db.expire_failed(config.database.failed_expiry_days):
-            logger.info(
-                "Expired {} failed history record(s) older than {} days.", n, config.database.failed_expiry_days
-            )
-        if n := db.expire_passed(config.database.passed_expiry_days):
-            logger.info(
-                "Expired {} passed history record(s) older than {} days.", n, config.database.passed_expiry_days
-            )
-        run_search(config, qbt, db)
-    except Exception:
-        logger.exception("Search task failed.")
+        fn(config, qbt, db)
+    except Exception:  # noqa: BLE001
+        logger.exception("{} task failed.", label)
+
+
+def _search_with_expiry(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+    """Expire history records then run search — inner callable for _task_search."""
+    if n := db.expire_stalled(config.database.stalled_expiry_days):
+        logger.info("Expired {} stalled history record(s) older than {} days.", n, config.database.stalled_expiry_days)
+    if n := db.expire_failed(config.database.failed_expiry_days):
+        logger.info("Expired {} failed history record(s) older than {} days.", n, config.database.failed_expiry_days)
+    if n := db.expire_passed(config.database.passed_expiry_days):
+        logger.info("Expired {} passed history record(s) older than {} days.", n, config.database.passed_expiry_days)
+    run_search(config, qbt, db)
+
+
+def _task_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
+    _run_guarded("Search", _search_with_expiry, config, qbt, db)
 
 
 def _task_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
-    try:
-        run_queue_management(config, qbt, db)
-    except Exception:
-        logger.exception("Queue management task failed.")
+    _run_guarded("Queue management", run_queue_management, config, qbt, db)
 
 
 def _task_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
-    try:
-        run_post_processing(config, qbt, db)
-    except Exception:
-        logger.exception("Post-processing task failed.")
+    _run_guarded("Post-processing", run_post_processing, config, qbt, db)
 
 
 # Helpers

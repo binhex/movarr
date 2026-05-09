@@ -12,11 +12,11 @@ import re
 import unicodedata
 import urllib.parse
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger as _logger
 
-from movarr.downloader import HttpClient, HttpError
+from movarr.downloader import HttpClient
 from movarr.parsing import normalise_for_compare, sanitise
 
 if TYPE_CHECKING:
@@ -26,10 +26,11 @@ if TYPE_CHECKING:
 __all__ = ["search_for_imdb_id"]
 
 _ASCII_LIMIT = 128
-_DDGS: Any | None = None
-
+_DDGS: Any = None
 with contextlib.suppress(Exception):
-    from ddgs import DDGS as _DDGS  # noqa: F811
+    from ddgs import DDGS
+
+    _DDGS = DDGS
 
 _IMDB_ID_RE = re.compile(r"tt\d+")
 _OMDB_NOT_FOUND_ERROR = "Movie not found!"
@@ -61,6 +62,26 @@ def search_for_imdb_id(result: ResultDict, config: Config) -> ResultDict:
 # Strategy 1 — IMDbPie
 
 
+def _match_imdbpie_hit(hit: dict, movie_title_compare: str, year: str) -> str | None:
+    """Return the IMDb ID from *hit* if it matches *movie_title_compare* and *year*, else None."""
+    imdb_title = hit.get("title")
+    if not imdb_title:
+        return None
+    norm = normalise_for_compare(imdb_title)
+    if not norm or norm != movie_title_compare:
+        return None
+    hit_year = hit.get("year")
+    if hit_year is None:
+        return None
+    try:
+        if int(hit_year) != int(year):
+            return None
+    except (ValueError, TypeError):
+        return None
+    imdb_id = hit.get("imdb_id")
+    return imdb_id if imdb_id else None
+
+
 def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     search_term = result.get("movie_title_and_year_search", "")
     movie_title_compare = result.get("movie_title_compare") or ""
@@ -80,35 +101,73 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
         return result
 
     for hit in hits:
-        imdb_title = hit.get("title")
-        if not imdb_title:
-            continue
-        norm = normalise_for_compare(imdb_title)
-        # Use exact equality against the normalised movie title to prevent
-        # shorter titles (e.g. "Ring") from matching longer ones ("The Ring").
-        if not norm or norm != movie_title_compare:
-            continue
-        hit_year = hit.get("year")
-        if hit_year is None:
-            continue
-        try:
-            if int(hit_year) != int(year):
-                continue
-        except (ValueError, TypeError):
-            continue
-
-        imdb_id = hit.get("imdb_id")
-        if not imdb_id:
-            continue
-
-        _pass(result, imdb_id, f"Found via IMDbPie for '{search_term}'.")
-        return result
+        imdb_id = _match_imdbpie_hit(hit, movie_title_compare, year)
+        if imdb_id:
+            _pass(result, imdb_id, f"Found via IMDbPie for '{search_term}'.")
+            return result
 
     _fail(result, f"IMDbPie: no match for '{search_term}'.")
     return result
 
 
 # Strategy 2 — TMDb
+
+
+def _tmdb_hit_title_matches(hit: dict, movie_title_compare: str) -> bool:
+    """Return True if *hit* has a title or original_title that normalises to *movie_title_compare*."""
+    for field in ("title", "original_title"):
+        candidate = hit.get(field, "")
+        if candidate:
+            norm = normalise_for_compare(candidate)
+            if norm and norm == movie_title_compare:
+                return True
+    return False
+
+
+def _find_tmdb_candidate(
+    results: list,
+    movie_title_compare: str,
+    year: str,
+) -> int | None:
+    """Return the TMDb id of the first result matching *movie_title_compare* and *year*, else None."""
+    for hit in results:
+        if not _tmdb_hit_title_matches(hit, movie_title_compare):
+            continue
+
+        release_date = hit.get("release_date", "")
+        try:
+            release_year = datetime.strptime(release_date, "%Y-%m-%d").year
+            if int(release_year) != int(year):
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        tmdb_id = hit.get("id")
+        if tmdb_id is None:
+            continue
+        return cast("int", tmdb_id)
+    return None
+
+
+def _resolve_imdb_from_tmdb(
+    tmdb_id: int,
+    api_key: str,
+    http: HttpClient,
+    result: ResultDict,
+) -> str | None:
+    """Fetch the IMDb ID for *tmdb_id* via the TMDb movie detail API.
+
+    Returns the IMDb ID string if found, None on any error (also sets result to Failed).
+    """
+    detail_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}"
+    try:
+        resp2 = http.get(detail_url)
+        detail = json.loads(resp2.content)
+    except Exception as exc:  # noqa: BLE001
+        _fail(result, f"TMDb detail request failed: {exc}")
+        return None
+    imdb_id = detail.get("imdb_id")
+    return imdb_id if imdb_id else None
 
 
 def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
@@ -127,53 +186,65 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
     try:
         resp = http.get(url)
         data = json.loads(resp.content)
-    except (HttpError, json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         _fail(result, f"TMDb search request failed: {exc}")
         return result
 
-    candidates: list[dict] = []
-    for hit in data.get("results", []):
-        for field in ("title", "original_title"):
-            candidate = hit.get(field, "")
-            if candidate:
-                norm = normalise_for_compare(candidate)
-                # Exact match prevents shorter titles from matching via substring.
-                if norm and norm == movie_title_compare:
-                    break
-        else:
-            continue
+    tmdb_id = _find_tmdb_candidate(data.get("results", []), movie_title_compare, year)
+    if tmdb_id is None:
+        _apply_imdb_match(result, [], title, year)
+        return result
 
-        release_date = hit.get("release_date", "")
-        try:
-            release_year = datetime.strptime(release_date, "%Y-%m-%d").year
-            if int(release_year) != int(year):
-                continue
-        except (ValueError, TypeError):
-            continue
+    imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, http, result)
+    if imdb_id is None:
+        _apply_imdb_match(result, [], title, year)
+        return result
 
-        tmdb_id = hit.get("id")
-        if tmdb_id is None:
-            continue
-
-        # Second request to resolve the IMDb tt number from the TMDb ID.
-        detail_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}"
-        try:
-            resp2 = http.get(detail_url)
-            detail = json.loads(resp2.content)
-        except (HttpError, json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
-            _fail(result, f"TMDb detail request failed: {exc}")
-            return result
-
-        imdb_id = detail.get("imdb_id")
-        if imdb_id:
-            candidates.append({"imdb_id": imdb_id})
-            break
-
+    candidates = [{"imdb_id": imdb_id}]
     _apply_imdb_match(result, candidates, title, year)
     return result
 
 
 # Strategy 3 — OMDb
+
+
+def _validate_omdb_title(
+    data: dict,
+    title: str,
+    year: str,
+    movie_title_compare: str,
+    result: ResultDict,
+) -> str | None:
+    """Validate the OMDb title response; return the OMDb title string if valid, else None.
+
+    Calls _fail on *result* for invalid responses.
+    """
+    omdb_title = data.get("Title")
+    omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
+    if not omdb_title or not omdb_norm:
+        omdb_error = data.get("Error") or ""
+        if omdb_error and omdb_error != _OMDB_NOT_FOUND_ERROR:
+            _fail(result, f"OMDb: API error for '{title}' ({year}): {omdb_error}")
+        else:
+            _fail(result, f"OMDb: no result for '{title}' ({year}).")
+        return None
+    if omdb_norm != movie_title_compare:
+        _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
+        return None
+    return cast("str", omdb_title)
+
+
+def _validate_omdb_year(data: dict, year: str, result: ResultDict) -> bool:
+    """Validate the year in *data* matches *year*; calls _fail if invalid. Returns True if ok."""
+    raw_year = re.sub(r"\D+", "", data.get("Year") or "")
+    try:
+        if int(raw_year) != int(year):
+            _fail(result, f"OMDb: year '{raw_year}' != '{year}'.")
+            return False
+    except (ValueError, TypeError):
+        _fail(result, f"OMDb: cannot parse year '{raw_year}'.")
+        return False
+    return True
 
 
 def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR0911
@@ -192,33 +263,14 @@ def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR
     try:
         resp = http.get(url)
         data = json.loads(resp.content)
-    except (HttpError, json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         _fail(result, f"OMDb search request failed: {exc}")
         return result
 
-    omdb_title = data.get("Title")
-    omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
-    if not omdb_title or not omdb_norm:
-        omdb_error = data.get("Error") or ""
-        if omdb_error and omdb_error != _OMDB_NOT_FOUND_ERROR:
-            _fail(result, f"OMDb: API error for '{title}' ({year}): {omdb_error}")
-        else:
-            _fail(result, f"OMDb: no result for '{title}' ({year}).")
-        return result
-    # Use exact equality to prevent shorter titles (e.g. "Ring") from matching
-    # longer ones ("The Ring") via substring containment.
-    if omdb_norm != movie_title_compare:
-        _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
+    if _validate_omdb_title(data, title, year, movie_title_compare, result) is None:
         return result
 
-    # Guard against JSON null (Python None) which re.sub cannot handle.
-    raw_year = re.sub(r"\D+", "", data.get("Year") or "")
-    try:
-        if int(raw_year) != int(year):
-            _fail(result, f"OMDb: year '{raw_year}' != '{year}'.")
-            return result
-    except (ValueError, TypeError):
-        _fail(result, f"OMDb: cannot parse year '{raw_year}'.")
+    if not _validate_omdb_year(data, year, result):
         return result
 
     imdb_id = data.get("imdbID")
@@ -269,6 +321,43 @@ def _strip_accents(text: str) -> str:
     return "".join(c for c in decomposed if ord(c) < _ASCII_LIMIT)
 
 
+def _should_skip_ddg_hit_by_year(hit: dict, year: str, movie_title: str) -> bool:
+    """Return True if *hit* should be skipped due to a mismatched year in its title."""
+    title_years = _YEAR_RE.findall(hit.get("title") or "")
+    if not title_years:
+        return False
+    title_years = [y for y in title_years if y not in movie_title]
+    return bool(title_years) and year not in title_years
+
+
+def _extract_imdb_id_from_ddg_hit(
+    hit: dict,
+    movie_title_compare: str,
+    movie_title_and_year_compare: str,
+) -> str | None:
+    """Return the IMDb ID from *hit* if its title matches either compare form, else None."""
+    d_title: str = hit.get("title") or ""
+    d_url: str = hit.get("href") or ""
+    for d_title_variant in (d_title, _strip_accents(d_title)):
+        san = sanitise(d_title_variant)
+        if not san:
+            continue
+        norm = normalise_for_compare(san)
+        if not norm or norm not in (movie_title_compare, movie_title_and_year_compare):
+            continue
+        match = _IMDB_ID_RE.search(d_url)
+        if not match:
+            continue
+        return match.group()
+    return None
+
+
+def _get_str(result: ResultDict, key: str) -> str:
+    """Return ``result[key]`` as a non-None string, defaulting to ``''``."""
+    v: Any = result.get(key)
+    return v if v else ""
+
+
 def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
     """Search IMDb ID via DuckDuckGo web search.
 
@@ -277,9 +366,10 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
     normalised title matches ``movie_title_compare`` or ``movie_title_and_year_compare``.
     """
     search_term = result.get("movie_title_and_year_search", "")
-    movie_title_compare = result.get("movie_title_compare") or ""
-    movie_title_and_year_compare = result.get("movie_title_and_year_compare") or ""
-    year = result.get("movie_title_year") or ""
+    movie_title_compare = _get_str(result, "movie_title_compare")
+    movie_title_and_year_compare = _get_str(result, "movie_title_and_year_compare")
+    year = _get_str(result, "movie_title_year")
+    movie_title = _get_str(result, "movie_title")
 
     try:
         if _DDGS is None:
@@ -292,46 +382,14 @@ def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
 
     candidates: list[dict] = []
     for hit in hits:
-        d_title: str = hit.get("title") or ""
-        d_url: str = hit.get("href") or ""
-
-        # If the result title contains a year that does NOT match the
-        # expected year, skip this hit to avoid returning the wrong film.
-        # Ignore year-like numbers that are literally the movie title
-        # (e.g. "1917", "2012") so we don't false-negative those hits.
-        if year:
-            title_years = _YEAR_RE.findall(d_title)
-            if title_years:
-                movie_title = result.get("movie_title") or ""
-                title_years = [y for y in title_years if y not in movie_title]
-                if title_years and year not in title_years:
-                    continue
-
-        # DDG titles may contain accents that the indexer strips out, or
-        # may preserve non-decomposable characters that the indexer keeps.
-        # Try both the raw title and an accent-stripped variant.
-        for d_title_variant in (d_title, _strip_accents(d_title)):
-            san = sanitise(d_title_variant)
-            if not san:
-                continue
-            norm = normalise_for_compare(san)
-            # Accept match when the DDG snippet title exactly equals the
-            # normalised title OR the normalised title+year form.  Snippets
-            # often include the year, so both forms must be accepted.
-            if not norm or norm not in (movie_title_compare, movie_title_and_year_compare):
-                continue
-
-            match = _IMDB_ID_RE.search(d_url)
-            if not match:
-                continue
-
-            candidates.append({"imdb_id": match.group()})
+        if year and _should_skip_ddg_hit_by_year(hit, year, movie_title):
+            continue
+        imdb_id = _extract_imdb_id_from_ddg_hit(hit, movie_title_compare, movie_title_and_year_compare)
+        if imdb_id:
+            candidates.append({"imdb_id": imdb_id})
             break
 
-        if candidates:
-            break
-
-    _apply_imdb_match(result, candidates, search_term, year or None)
+    _apply_imdb_match(result, candidates, search_term, year if year else None)
     return result
 
 

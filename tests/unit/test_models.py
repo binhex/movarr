@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import movarr.models  # noqa: F401 — ensures coverage of the models module
 from movarr.models import ResultDict, build_result_dict  # noqa: TCH001 — runtime import needed
 
 
@@ -270,8 +269,9 @@ class TestBuildResultDict:
     def test_all_supplied_fields_present(self) -> None:
         """Every keyword argument is stored under the matching key."""
         result = build_result_dict(**self._DEFAULTS)
+        result_as_dict = dict(result)
         for key, value in self._DEFAULTS.items():
-            assert result[key] == value, f"Mismatch on key '{key}'"
+            assert result_as_dict[key] == value, f"Mismatch on key '{key}'"
 
     def test_result_preset_to_passed(self) -> None:
         """The 'result' field is always initialised to 'Passed'."""

@@ -8,7 +8,7 @@ torrents that will never complete.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -33,6 +33,25 @@ class _StuckConfig:
     max_mins: int
     label: str
     delete_data: bool
+
+
+def _filter_to_movarr_tagged(to_delete: dict[str, Any], torrent_map: dict[str, Any]) -> dict[str, Any]:
+    """Return only candidates whose torrent has a movarr- tag in *torrent_map*."""
+    return {
+        h: info
+        for h, info in to_delete.items()
+        if any(t.strip().startswith(_TAG_PREFIX) for t in (torrent_map.get(h, {}).get("tags", "") or "").split(","))
+    }
+
+
+def _find_movarr_tag(torrent_map: dict[str, Any], torrent_hash: str) -> str | None:
+    """Return the first movarr- tag found in *torrent_map* for *torrent_hash*, or None."""
+    torrent_info = torrent_map.get(torrent_hash, {})
+    raw_tags: str = torrent_info.get("tags", "") or ""
+    return next(
+        (t.strip() for t in raw_tags.split(",") if t.strip().startswith(_TAG_PREFIX)),
+        None,
+    )
 
 
 def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -97,13 +116,7 @@ def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> No
         logger.debug("No {} torrents to delete.", cfg.label)
         return
 
-    # Filter: only delete torrents that carry a movarr- tag.  Non-movarr torrents
-    # in the same qBittorrent category must not be touched.
-    to_delete = {
-        h: info
-        for h, info in to_delete.items()
-        if any(t.strip().startswith(_TAG_PREFIX) for t in (torrent_map.get(h, {}).get("tags", "") or "").split(","))
-    }
+    to_delete = _filter_to_movarr_tagged(to_delete, torrent_map)
     if not to_delete:
         logger.debug("No {} torrents with movarr tag to delete.", cfg.label)
         return
@@ -112,12 +125,7 @@ def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> No
     deleted_hashes = qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
 
     for torrent_hash in deleted_hashes:
-        torrent_info = torrent_map.get(torrent_hash, {})
-        raw_tags: str = torrent_info.get("tags", "") or ""
-        tag = next(
-            (t.strip() for t in raw_tags.split(",") if t.strip().startswith(_TAG_PREFIX)),
-            None,
-        )
+        tag = _find_movarr_tag(torrent_map, torrent_hash)
         if tag:
             db.mark_stalled(tag)
             logger.debug("Marked torrent '{}' (tag='{}') as Stalled in DB.", torrent_hash, tag)

@@ -101,6 +101,67 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     check_and_notify(has_results=total_raw > 0, proxy_name=proxy_name, db=db, config=config)
 
 
+def _queue_and_persist(result: ResultDict, session: _SearchSession) -> None:
+    """Add result to qBittorrent and persist; handles add_torrent failure in-place."""
+    updated = session.qbt.add_torrent(result)
+    if updated is None:
+        details: list[str] = result.get("result_details") or []
+        details.append("Failed: add_torrent returned None; torrent not queued.")
+        result["result"] = "Failed"
+        result["result_details"] = details
+        session.db.write(result)
+        return
+    result = updated
+    send_queued_notification(result, session.config)
+    session.db.write(result)
+
+
+def _process_single_result(
+    result: ResultDict,
+    session: _SearchSession,
+    criteria_cfg: SearchCriteriaConfig,
+    site_dict: dict,
+    ignore_set: frozenset[str],
+    indexer: str,
+) -> bool:
+    """Process one raw indexer result through the full filter/enrich/queue pipeline.
+
+    Returns True if the result was counted as a used (non-ignored) result.
+    Returns False if it was skipped due to the ignore list.
+    """
+    result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
+    index_title = result.get("index_title", "")
+    tracker = result.get("index_tracker") or indexer
+    with logger.contextualize(tracker=tracker):
+        if ignore_set and tracker.lower() in ignore_set:
+            logger.debug("Skipping result from ignored indexer '{}'.", tracker)
+            return False
+
+        if session.db.is_duplicate_exact(index_title):
+            logger.debug("'{}' already in DB; skipping.", index_title)
+            return True
+
+        if not result.get("movie_title"):
+            logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
+            return True
+
+        if not result.get("movie_title_year"):
+            logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+            return True
+
+        logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
+        result = filter_by_index(result, site_dict, session.config, session.library_walk)
+        if result.get("result") != "Passed":
+            session.db.write(result)
+            return True
+        if not _enrich_result(result, session):
+            return True
+
+        logger.success("'{}' passed all filters.", result.get("index_title"))
+        _queue_and_persist(result, session)
+    return True
+
+
 def _process_criteria(
     criteria_cfg: SearchCriteriaConfig,
     category: str,
@@ -121,52 +182,24 @@ def _process_criteria(
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         result = _enrich_index_metadata(raw_result)
-        result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
-
-        index_title = result.get("index_title", "")
-        tracker = result.get("index_tracker") or indexer
-        with logger.contextualize(tracker=tracker):
-            if ignore_set and tracker.lower() in ignore_set:
-                logger.debug("Skipping result from ignored indexer '{}'.", tracker)
-                continue
+        if _process_single_result(result, session, criteria_cfg, site_dict, ignore_set, indexer):
             used_count += 1
-            if session.db.is_duplicate_exact(index_title):
-                logger.debug("'{}' already in DB; skipping.", index_title)
-                continue
-
-            if not result.get("movie_title"):
-                logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
-                continue
-
-            if not result.get("movie_title_year"):
-                logger.debug("No year from '{}'; skipping.", result.get("index_title"))
-                continue
-
-            logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
-
-            result = filter_by_index(result, site_dict, session.config, session.library_walk)
-            if result.get("result") != "Passed":
-                session.db.write(result)
-                continue
-
-            if not _enrich_result(result, session):
-                continue
-
-            logger.success("'{}' passed all filters.", result.get("index_title"))
-
-            updated = session.qbt.add_torrent(result)
-            if updated is None:
-                details: list[str] = result.get("result_details") or []
-                details.append("Failed: add_torrent returned None; torrent not queued.")
-                result["result"] = "Failed"
-                result["result_details"] = details
-                session.db.write(result)
-                continue
-            result = updated
-            send_queued_notification(result, session.config)
-            session.db.write(result)
 
     return used_count
+
+
+def _resolve_search_category(
+    site_cfg: IndexSiteConfig,
+    index_site: str,
+    criteria_cfg: SearchCriteriaConfig,
+) -> str:
+    """Return the effective search category, applying any override for *index_site*."""
+    category = criteria_cfg.category
+    if index_site in site_cfg.override_search:
+        overrides = site_cfg.override_search[index_site]
+        if "category" in overrides:
+            category = overrides["category"]
+    return category
 
 
 def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> int:
@@ -192,14 +225,7 @@ def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> 
 
     total_raw = 0
     for criteria_cfg in site_cfg.search:
-        index_site = (
-            site_cfg.jackett_indexer if session.config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
-        )
-        category = criteria_cfg.category
-        if index_site in site_cfg.override_search:
-            overrides = site_cfg.override_search[index_site]
-            if "category" in overrides:
-                category = overrides["category"]
+        category = _resolve_search_category(site_cfg, index_site, criteria_cfg)
 
         logger.info(
             "Searching indexer '{}' for '{}' (category '{}').",
@@ -212,6 +238,14 @@ def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> 
         )
 
     return total_raw
+
+
+def _apply_cached_metadata(result: ResultDict, cached: dict) -> None:
+    """Apply cached IMDb metadata fields to *result* in place."""
+    for key, value in cached.items():
+        result[key] = value  # type: ignore[literal-required]
+    result["result"] = "Passed"
+    result.setdefault("result_details", [])
 
 
 def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
@@ -228,15 +262,11 @@ def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
     if result.get("result") != "Passed" or not result.get("imdb_id"):
         session.db.write(result)
         return False
-
     # Try cached IMDb metadata before hitting the API.
     cached = session.db.find_imdb_metadata(result["imdb_id"])
     if cached:
         logger.info("IMDb metadata cache hit for '{}' — skipping API call.", result["imdb_id"])
-        for key, value in cached.items():
-            result[key] = value  # type: ignore[literal-required]
-        result["result"] = "Passed"
-        result.setdefault("result_details", [])
+        _apply_cached_metadata(result, cached)
     else:
         result.update(fetch_metadata(result, session.config))
         if result.get("result") != "Passed":

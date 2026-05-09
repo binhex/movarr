@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
 _CONFIG_VERSION = "2.14.0"
+_INITIAL_CONFIG_VERSION = "1.0.0"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -266,7 +267,6 @@ class ScheduleTaskConfig(BaseModel):
     """A single scheduled task configuration."""
 
     enabled: bool = True
-    schedule_time_units: str = "minutes"
     schedule_time_mins: int = Field(default=30, gt=0, description="Interval in minutes (must be > 0).")
     run_on_start: bool = True
 
@@ -599,7 +599,7 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     Returns:
         The migrated raw dict (may be unchanged if already up to date).
     """
-    current = raw.get("general", {}).get("config_version", "1.0.0")
+    current = raw.get("general", {}).get("config_version", _INITIAL_CONFIG_VERSION)
     if current not in MIGRATIONS:
         return raw
 

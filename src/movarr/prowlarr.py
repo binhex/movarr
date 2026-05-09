@@ -100,21 +100,8 @@ class ProwlarrClient:
             f"http://{self._cfg.host}:{self._cfg.port}/api/v1/search?query={encoded_criteria}&type=search&{cat_params}"
         )
         url = base_url if indexer_id is None else f"{base_url}&indexerIds={indexer_id}"
-        try:
-            response = self._http.get(url, headers=self._auth_headers(), read_timeout=self._cfg.read_timeout)
-            items = response.json()
-        except HttpError as exc:
-            _logger.warning("Prowlarr HTTP error for '{}': {}.", index_site, exc)
-            return
-        except (ValueError, TypeError) as exc:
-            _logger.warning("Prowlarr JSON parse error for '{}': {}.", index_site, exc)
-            return
-        except Exception as exc:
-            _logger.warning("Prowlarr request failed for '{}': {}.", index_site, exc)
-            return
-
-        if not isinstance(items, list):
-            _logger.warning("Prowlarr returned unexpected response type for '{}'.", index_site)
+        items = self._fetch_search_results(url, index_site)
+        if items is None:
             return
 
         for item in items:
@@ -125,6 +112,30 @@ class ProwlarrClient:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _fetch_search_results(
+        self,
+        url: str,
+        index_site: str,
+    ) -> list | None:
+        """Fetch and return the parsed JSON list from Prowlarr, or None on error."""
+        try:
+            response = self._http.get(url, headers=self._auth_headers(), read_timeout=self._cfg.read_timeout)
+            items = response.json()
+        except HttpError as exc:
+            _logger.warning("Prowlarr HTTP error for '{}': {}.", index_site, exc)
+            return None
+        except (ValueError, TypeError) as exc:
+            _logger.warning("Prowlarr JSON parse error for '{}': {}.", index_site, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Prowlarr request failed for '{}': {}.", index_site, exc)
+            return None
+
+        if not isinstance(items, list):
+            _logger.warning("Prowlarr returned unexpected response type for '{}'.", index_site)
+            return None
+        return items
 
     def _auth_headers(self) -> dict[str, str]:
         """Return the Prowlarr authentication header."""
@@ -174,7 +185,6 @@ class ProwlarrClient:
             magnet_url=item.get("magnetUrl", "") or "",
             category="",
         )
-
         imdb_id_raw = item.get("imdbId")
         if imdb_id_raw:
             with contextlib.suppress(ValueError, TypeError):

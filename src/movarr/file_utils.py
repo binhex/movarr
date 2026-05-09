@@ -18,9 +18,6 @@ __all__ = [
     "resolution_label_from_height",
 ]
 
-# Resolution height strings recognised by the post-processor routing logic.
-_KNOWN_HEIGHTS: frozenset[str] = frozenset({"720", "1080", "2160"})
-
 
 def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[str]]]:
     """Yield ``(root, dirs, files)`` tuples for every path in *library_paths*.
@@ -173,10 +170,8 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
     """
     src_path = Path(src)
     dst_path = Path(dst)
-
     if not make_directory(dst_path.parent):
         return False
-
     if dst_path.is_file():
         existing = _verify_existing(src_path, dst_path)
         if existing is True:

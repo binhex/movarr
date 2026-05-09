@@ -305,7 +305,7 @@ class TestDatabaseVacuum:
     """Database.vacuum() must not raise."""
 
     def test_vacuum_runs_without_error(self, db: Database) -> None:
-        assert db.vacuum() is None
+        db.vacuum()  # must not raise
 
 
 # has_passed

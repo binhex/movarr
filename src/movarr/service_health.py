@@ -137,7 +137,6 @@ def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
 
     elapsed_seconds = (now - since).total_seconds()
     elapsed_hours = elapsed_seconds / 3600.0
-
     if elapsed_seconds < ctx.alert_hours * 3600.0:
         logger.debug(
             "{} unavailability streak: {:.1f}h elapsed, threshold {:.1f}h not reached.",
@@ -146,7 +145,6 @@ def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
             ctx.alert_hours,
         )
         return
-
     if ctx.db.kv_get(key_alert) == "1":
         logger.debug(
             "{} unavailability streak {:.1f}h: alert already sent; suppressing duplicate.",
