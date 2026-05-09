@@ -1098,3 +1098,37 @@ class TestProcessCriteriaIgnoreList:
 
         db.write.assert_not_called()
         qbt.add_torrent.assert_not_called()
+
+    def test_ignore_list_does_not_apply_to_explicit_indexer(self, mocker: MockerFixture) -> None:
+        """ignore_list must NOT filter results when a specific indexer is named.
+
+        If the user sets jackett_indexer='my-indexer' AND ignore_list=['my-indexer'],
+        results from that indexer must still pass through — ignore_list only applies
+        when indexer=='all'.
+        """
+        jackett = mocker.MagicMock()
+        raw = {**_base_result(), "index_tracker": "my-indexer"}
+        jackett.search.return_value = iter([raw])
+        qbt = mocker.MagicMock()
+        db = mocker.MagicMock()
+        db.is_duplicate_exact.return_value = False
+
+        cfg = Config()
+        cfg.index_site.ignore_list = ["my-indexer"]
+
+        session = _SearchSession(
+            config=cfg,
+            indexer=jackett,
+            qbt=qbt,
+            db=db,
+            library_walk=None,
+        )
+        _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="my-indexer",
+            session=session,
+        )
+
+        # The result must reach the DB write path (not silently skipped)
+        db.write.assert_called_once()

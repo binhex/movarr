@@ -133,7 +133,9 @@ def _process_criteria(  # noqa: PLR0912
     """
     site_dict = criteria_cfg.model_dump()
     raw_count = 0
-    ignore_set = {t.lower() for t in session.config.index_site.ignore_list}
+    ignore_set = (
+        frozenset(t.lower() for t in session.config.index_site.ignore_list) if indexer == "all" else frozenset()
+    )
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
         raw_count += 1

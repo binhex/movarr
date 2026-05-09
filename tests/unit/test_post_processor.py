@@ -687,6 +687,39 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_special_edition_not_treated_as_extras(self, tmp_path: Path) -> None:
+        """'Special Edition' in the post-year segment must NOT be treated as extras content.
+
+        A release like 'Movie.2019.Special.Edition.2160p.Remux' is the main feature,
+        not bonus content.  The extras guard must not fire and the lower-quality
+        library copy must be deleted.
+        """
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Special.Edition.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie.2019.Special.Edition.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_special_features_IS_treated_as_extras(self, tmp_path: Path) -> None:
+        """'Special Features' in the post-year segment IS extras content and must be skipped."""
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie.2019.Special.Features.2160p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "Movie.2019.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
 # _safe_path_component
 
 
