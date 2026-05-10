@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger as _logger
 from sqlalchemy import Column, Integer, String, create_engine, text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 if TYPE_CHECKING:
@@ -583,28 +584,40 @@ class Database:
     def kv_set(self, key: str, value: str) -> None:
         """Upsert *value* for *key* in the persistent kv store.
 
+        Uses an atomic INSERT … ON CONFLICT DO UPDATE to be safe under
+        concurrent access.  No row is loaded into the session, so two
+        threads inserting the same key will not raise an IntegrityError.
+
         Args:
             key: Dot-namespaced key string.
             value: String value to store.
         """
         now = datetime.datetime.now(datetime.UTC).isoformat()
         with Session(self._engine) as session:
-            record = session.get(KvRecord, key)
-            if record is None:
-                session.add(KvRecord(key=key, value=value, updated_at=now))
-            else:
-                record.value = value
-                record.updated_at = now
+            stmt = (
+                sqlite_insert(KvRecord)
+                .values(key=key, value=value, updated_at=now)
+                .on_conflict_do_update(
+                    index_elements=[KvRecord.key],
+                    set_={"value": value, "updated_at": now},
+                )
+            )
+            session.execute(stmt)
             session.commit()
 
     def kv_delete(self, key: str) -> None:
         """Delete the entry for *key* if it exists (no-op if absent).
 
+        Uses a bulk DELETE to avoid the ORM load-then-delete pattern.
+        The old pattern loaded a row into the session before deleting it,
+        which produced a ``SAWarning`` when two threads concurrently
+        deleted the same key — the second thread saw a stale session
+        object whose backing row had already been removed.  A bulk
+        ``DELETE … WHERE key = ?`` is naturally idempotent and thread-safe.
+
         Args:
             key: Dot-namespaced key string.
         """
         with Session(self._engine) as session:
-            record = session.get(KvRecord, key)
-            if record is not None:
-                session.delete(record)
-                session.commit()
+            session.query(KvRecord).filter_by(key=key).delete(synchronize_session=False)
+            session.commit()
