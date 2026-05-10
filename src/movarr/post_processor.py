@@ -214,7 +214,6 @@ def _copy_files(
         src_fname = os.path.basename(src_path)
         dst_fname = canonical_fname if src_fname == largest_fname else src_fname
         dst_path = os.path.join(dst_dir, dst_fname)
-        logger.info("Copying '{}' → '{}'.", src_path, dst_path)
         if not copy_with_verify(src_path, dst_path):
             logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
             return False, copied_fnames

@@ -120,6 +120,7 @@ def _perform_copy(src: Path, dst: Path) -> bool:
     Returns:
         True on success, False on any copy or verification failure.
     """
+    _logger.info("Copying '{}' → '{}'.", src, dst)
     try:
         shutil.copy2(str(src), str(dst))
         _logger.info("Copied '{}' → '{}'.", src, dst)
