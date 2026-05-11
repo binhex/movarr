@@ -695,6 +695,77 @@ class TestKvStore:
         db = Database(tmp_path / "test.db")
         db.kv_delete("never.existed")  # must not raise
 
+    def test_kv_delete_concurrent_same_key_no_warning(self, tmp_path: Path) -> None:
+        """Concurrent kv_delete on the same key must not produce SAWarning.
+
+        Regression test: the old ORM load-then-delete pattern loaded a row
+        into the session before deleting.  Two concurrent threads could both
+        load the same row; the second commit would see a stale object and
+        emit ``SAWarning: DELETE statement on table 'kv_store' expected to
+        delete 1 row(s); 0 were matched``.
+
+        The bulk ``DELETE … WHERE key = ?`` replacement is naturally
+        idempotent — both threads succeed silently.
+        """
+        import threading
+        import warnings
+
+        db = Database(tmp_path / "test.db")
+        db.kv_set("concurrent.key", "val")
+
+        failures: list[str] = []
+        barrier = threading.Barrier(2, timeout=5)
+
+        def _delete() -> None:
+            barrier.wait()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                db.kv_delete("concurrent.key")
+                for w in caught:
+                    msg = str(w.message)
+                    if "kv_store" in msg and "expected to delete" in msg:
+                        failures.append(msg)
+
+        t1 = threading.Thread(target=_delete)
+        t2 = threading.Thread(target=_delete)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not failures, f"SAWarning raised during concurrent kv_delete: {failures}"
+        assert db.kv_get("concurrent.key") is None
+
+    def test_kv_set_concurrent_same_key_no_error(self, tmp_path: Path) -> None:
+        """Concurrent kv_set on the same key must not raise IntegrityError.
+
+        The old ORM load-then-decide pattern could cause a duplicate-key
+        insert when two threads both saw the key as absent.  The atomic
+        INSERT … ON CONFLICT DO UPDATE replacement avoids this.
+        """
+        import threading
+
+        db = Database(tmp_path / "test.db")
+        errors: list[Exception] = []
+        barrier = threading.Barrier(2, timeout=5)
+
+        def _upsert() -> None:
+            barrier.wait()
+            try:
+                db.kv_set("concurrent.key", "val")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t1 = threading.Thread(target=_upsert)
+        t2 = threading.Thread(target=_upsert)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Exception during concurrent kv_set: {errors}"
+        assert db.kv_get("concurrent.key") == "val"
+
     def test_kv_store_table_created_on_new_db(self, tmp_path: Path) -> None:
         """kv_store table exists after Database init."""
         db = Database(tmp_path / "test.db")

@@ -52,10 +52,9 @@ _EXTRAS_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
-_HOOK_TIMEOUT_SECS = 300  # Maximum allowed hook runtime before SIGTERM escalation.
 
 
-def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str) -> None:
+def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str, timeout_secs: float) -> None:
     """Escalate signals (SIGTERM → SIGKILL) to terminate the process group, then reap."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         with contextlib.suppress(OSError, ProcessLookupError):
@@ -73,7 +72,7 @@ def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str) -> None:
     # Final reap
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
-    logger.error("{} hook timed out after {} s.", label, _HOOK_TIMEOUT_SECS)
+    logger.error("{} hook timed out after {} s.", label, timeout_secs)
 
 
 def _log_hook_output(stdout: str, stderr: str, label: str) -> None:
@@ -84,7 +83,7 @@ def _log_hook_output(stdout: str, stderr: str, label: str) -> None:
         logger.debug("{} hook stderr: {}", label, stderr.rstrip())
 
 
-def _run_hook(command: str, dir_path: str, label: str) -> bool:
+def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float = 300.0) -> bool:
     """Run a post-process hook command, substituting ``{dir}`` with *dir_path*.
 
     Uses ``shell=True`` so that glob patterns (e.g. ``chattr -i {dir}/*``) are
@@ -133,9 +132,9 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
     except (OSError, ProcessLookupError):
         pgid = proc.pid  # With start_new_session=True, proc.pid IS the PGID
     try:
-        stdout, stderr = proc.communicate(timeout=_HOOK_TIMEOUT_SECS)
+        stdout, stderr = proc.communicate(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
-        _kill_process(proc, pgid, label)
+        _kill_process(proc, pgid, label, timeout_secs)
         return False
     _log_hook_output(stdout, stderr, label)
     if proc.returncode != 0:
@@ -214,7 +213,6 @@ def _copy_files(
         src_fname = os.path.basename(src_path)
         dst_fname = canonical_fname if src_fname == largest_fname else src_fname
         dst_path = os.path.join(dst_dir, dst_fname)
-        logger.info("Copying '{}' → '{}'.", src_path, dst_path)
         if not copy_with_verify(src_path, dst_path):
             logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
             return False, copied_fnames
@@ -253,7 +251,12 @@ def _post_copy_actions(
     logger.info("Marked tag '{}' as completed.", tag)
     if config.post_process.hooks.post_copy:
         try:
-            if not _run_hook(config.post_process.hooks.post_copy, resolved_dst_dir, "post_copy"):
+            if not _run_hook(
+                config.post_process.hooks.post_copy,
+                resolved_dst_dir,
+                "post_copy",
+                config.post_process.hooks.hook_timeout_secs,
+            ):
                 logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
         except Exception as exc:  # noqa: BLE001
             logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
@@ -861,7 +864,12 @@ def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> b
     if not config.post_process.hooks.pre_copy:
         return True
     try:
-        if not _run_hook(config.post_process.hooks.pre_copy, resolved_dst_dir, "pre_copy"):
+        if not _run_hook(
+            config.post_process.hooks.pre_copy,
+            resolved_dst_dir,
+            "pre_copy",
+            config.post_process.hooks.hook_timeout_secs,
+        ):
             logger.error("pre_copy hook failed for '{}'; aborting copy.", dst_dir)
             return False
     except Exception as exc:  # noqa: BLE001
@@ -880,7 +888,12 @@ def _run_pre_delete_hook_and_verify(
     if not config.post_process.hooks.pre_delete:
         return True
     try:
-        if not _run_hook(config.post_process.hooks.pre_delete, str(resolved_dst), "pre_delete"):
+        if not _run_hook(
+            config.post_process.hooks.pre_delete,
+            str(resolved_dst),
+            "pre_delete",
+            config.post_process.hooks.hook_timeout_secs,
+        ):
             logger.error("pre_delete hook failed for '{}'; aborting deletion pass.", dst_dir)
             return False
     except Exception as exc:  # noqa: BLE001
@@ -908,7 +921,12 @@ def _run_post_delete_hook(config: Config, resolved_dst: pathlib.Path, dst_dir: s
     if not config.post_process.hooks.post_delete:
         return
     try:
-        if not _run_hook(config.post_process.hooks.post_delete, str(resolved_dst), "post_delete"):
+        if not _run_hook(
+            config.post_process.hooks.post_delete,
+            str(resolved_dst),
+            "post_delete",
+            config.post_process.hooks.hook_timeout_secs,
+        ):
             logger.warning("post_delete hook failed for '{}'; continuing.", dst_dir)
     except Exception as exc:  # noqa: BLE001
         logger.warning("post_delete hook raised an exception for '{}': {}; continuing.", dst_dir, exc)

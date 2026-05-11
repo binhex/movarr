@@ -145,7 +145,7 @@ class TestCopyWithVerify:
         dst = tmp_path / "dst.mkv"
         src.write_bytes(content)
         dst.write_bytes(content)
-        spy = mocker.patch("shutil.copy2")
+        spy = mocker.patch("movarr.file_utils._do_copy")
         result = copy_with_verify(src, dst)
         assert result is True
         spy.assert_not_called()
@@ -208,7 +208,7 @@ class TestCopyWithVerify:
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst" / "dst.mkv"
         src.write_bytes(b"data")
-        mocker.patch("shutil.copy2", side_effect=PermissionError("denied"))
+        mocker.patch("movarr.file_utils._do_copy", side_effect=PermissionError("denied"))
         result = copy_with_verify(src, dst)
         assert result is False
 
@@ -216,7 +216,7 @@ class TestCopyWithVerify:
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst" / "dst.mkv"
         src.write_bytes(b"data")
-        mocker.patch("shutil.copy2", side_effect=OSError("disk full"))
+        mocker.patch("movarr.file_utils._do_copy", side_effect=OSError("disk full"))
         result = copy_with_verify(src, dst)
         assert result is False
 
@@ -276,16 +276,72 @@ class TestCopyWithVerify:
         original_sha = fu._sha256
         call_count: list[int] = [0]
 
-        def fake_sha(p: Path) -> str:
+        def fake_sha(p: Path, label: str | None = None) -> str:
             call_count[0] += 1
             if call_count[0] == 1:  # first call is src post-copy verification
                 raise OSError("gone")
             return original_sha(p)
 
         mocker.patch("movarr.file_utils._sha256", side_effect=fake_sha)
-        mocker.patch("shutil.copy2")
+        mocker.patch("movarr.file_utils._do_copy")
         result = fu.copy_with_verify(src, dst)
         assert result is False
+
+    def test_logs_copy_progress_at_milestones(self, tmp_path: Path) -> None:
+        """Copy emits '25% complete', '50% complete', '75% complete' progress lines."""
+        from loguru import logger as _loguru_logger
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            src = tmp_path / "src.mkv"
+            dst = tmp_path / "dst" / "dst.mkv"
+            # ~256 KB to span multiple 64 KB chunks
+            src.write_bytes(b"\x00" * 262144)
+            copy_with_verify(src, dst)
+        finally:
+            _loguru_logger.remove(sink_id)
+        messages = [r["message"] for r in records]
+        assert any("25% complete" in m for m in messages)
+        assert any("50% complete" in m for m in messages)
+        assert any("75% complete" in m for m in messages)
+
+    def test_logs_sha_progress_at_milestones(self, tmp_path: Path) -> None:
+        """Post-copy SHA-256 emits '25% complete', '50% complete', '75% complete' lines."""
+        from loguru import logger as _loguru_logger
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            src = tmp_path / "src.mkv"
+            dst = tmp_path / "dst" / "dst.mkv"
+            src.write_bytes(b"\x00" * 262144)
+            copy_with_verify(src, dst)
+        finally:
+            _loguru_logger.remove(sink_id)
+        messages = [r["message"] for r in records]
+        # SHA progress lines include "Verifying"
+        sha_msgs = [m for m in messages if "Verifying" in m and "copy integrity" in m]
+        assert any("25% complete" in m for m in sha_msgs)
+        assert any("50% complete" in m for m in sha_msgs)
+        assert any("75% complete" in m for m in sha_msgs)
+
+    def test_progress_skipped_for_empty_file(self, tmp_path: Path) -> None:
+        """Empty files skip progress logging (division by zero guard)."""
+        from loguru import logger as _loguru_logger
+
+        records: list = []
+        sink_id = _loguru_logger.add(lambda m: records.append(m.record), level=0)
+        try:
+            src = tmp_path / "src.mkv"
+            dst = tmp_path / "dst" / "dst.mkv"
+            src.write_bytes(b"")
+            result = copy_with_verify(src, dst)
+            assert result is True
+        finally:
+            _loguru_logger.remove(sink_id)
+        messages = [r["message"] for r in records]
+        assert not any("% complete" in m for m in messages)
 
 
 class TestResolutionLabelFromHeight:
