@@ -610,9 +610,19 @@ class Config(BaseModel):
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge *override* into *base*, returning a new dict."""
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    ``None`` values in *override* are treated as "not provided" and skipped,
+    so the base value is preserved.  This handles YAML config files where an
+    empty scalar (e.g. ``key:``) parses as Python ``None``.
+    """
     result = dict(base)
     for key, value in override.items():
+        if value is None:
+            # NOTE: safe only while every `T | None` field has default=None.
+            # If a nullable field ever gains a non-None default, explicit
+            # ``null`` from the user's YAML will silently lose to that default.
+            continue
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
@@ -711,12 +721,13 @@ def load_config(config_path: str | Path) -> Config:
 
     raw = _run_migrations(raw, path)
 
-    merged = _deep_merge(_default_config_dict(), raw)
     _known_top_level = set(Config.model_fields.keys())
-    _unknown_keys = set(merged.keys()) - _known_top_level
+    _unknown_keys = set(raw.keys()) - _known_top_level
     if _unknown_keys:
         logger.warning(
             "Unknown config keys (will be ignored): {}. Check for typos.",
             ", ".join(sorted(_unknown_keys)),
         )
+
+    merged = _deep_merge(_default_config_dict(), raw)
     return Config.model_validate(merged)

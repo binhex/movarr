@@ -977,3 +977,45 @@ class TestLoadConfigEdgeCases:
         p.write_text("42")
         with pytest.raises(ValueError, match="YAML mapping"):
             load_config(p)
+
+    def test_null_hooks_fields_default_to_empty(self, tmp_path: Path) -> None:
+        """YAML null values for hook fields fall back to empty string defaults."""
+        p = tmp_path / "config.yml"
+        p.write_text(
+            "general:\n"
+            "  config_version: 2.16.0\n"
+            "post_process:\n"
+            "  hooks:\n"
+            "    pre_copy:\n"
+            "    post_copy: chmod -R 755 {dir}\n"
+            "    pre_delete:\n"
+            "    post_delete:\n"
+            "    hook_timeout_secs:\n"
+        )
+        config = load_config(p)
+        assert config.post_process.hooks.pre_copy == ""
+        assert config.post_process.hooks.post_copy == "chmod -R 755 {dir}"
+        assert config.post_process.hooks.pre_delete == ""
+        assert config.post_process.hooks.post_delete == ""
+        assert config.post_process.hooks.hook_timeout_secs == 300.0
+
+    def test_null_hooks_whole_block_preserves_defaults(self, tmp_path: Path) -> None:
+        """Entire hooks block set to null preserves all default hook values."""
+        p = tmp_path / "config.yml"
+        p.write_text("general:\n  config_version: 2.16.0\npost_process:\n  hooks:\n")
+        config = load_config(p)
+        assert config.post_process.hooks.pre_copy == ""
+        assert config.post_process.hooks.post_copy == ""
+        assert config.post_process.hooks.pre_delete == ""
+        assert config.post_process.hooks.post_delete == ""
+        assert config.post_process.hooks.hook_timeout_secs == 300.0
+
+    def test_null_typo_key_warns(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A null-valued typo'd top-level key still triggers the typo warning."""
+        p = tmp_path / "config.yml"
+        p.write_text("gneral:\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        config = load_config(p)
+        assert isinstance(config, Config)
+        mock_warning.assert_called_once()
+        assert "gneral" in mock_warning.call_args.args[1]
