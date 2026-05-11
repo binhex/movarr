@@ -76,3 +76,4 @@ configs/
 .scratch/
 .mypy_cache/
 .ruff_cache/
+.worktrees/
