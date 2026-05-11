@@ -127,7 +127,11 @@ def _make_migration(
         for keypath, default in additions:
             node = raw
             for k in keypath[:-1]:
-                node = node.setdefault(k, {})
+                if not isinstance(node.get(k), dict):
+                    if k in node:
+                        logger.warning("Replacing non-dict value at config key %r during migration.", k)
+                    node[k] = {}
+                node = node[k]
             node.setdefault(keypath[-1], copy.deepcopy(default))
         raw.setdefault("general", {})["config_version"] = to_v
         return raw
@@ -234,6 +238,7 @@ _migrate_v210_to_v211 = _table_fns["2.10.0"]
 _migrate_v212_to_v213 = _table_fns["2.12.0"]
 _migrate_v213_to_v214 = _table_fns["2.13.0"]
 _migrate_v214_to_v215 = _table_fns["2.14.0"]
+_migrate_v216_to_v217 = _table_fns["2.16.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -254,6 +259,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.13.0": _migrate_v213_to_v214,
     "2.14.0": _migrate_v214_to_v215,
     "2.15.0": _migrate_v215_to_v216,
+    "2.16.0": _migrate_v216_to_v217,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -644,6 +650,8 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     Returns:
         The migrated raw dict (may be unchanged if already up to date).
     """
+    if not isinstance(raw.get("general"), dict):
+        raw["general"] = {}
     current = raw.get("general", {}).get("config_version", _INITIAL_CONFIG_VERSION)
     if current not in MIGRATIONS:
         return raw
