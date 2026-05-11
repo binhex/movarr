@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.16.0"
+_CONFIG_VERSION = "2.17.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 
@@ -104,6 +104,13 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.15.0",
         [
             (("post_process", "hooks", "pre_copy"), ""),
+        ],
+    ),
+    (
+        "2.16.0",
+        "2.17.0",
+        [
+            (("post_process", "hooks", "hook_timeout_secs"), 300.0),
         ],
     ),
 ]
@@ -556,6 +563,7 @@ class PostProcessHooksConfig(BaseModel):
     post_copy: str = ""
     pre_delete: str = ""
     post_delete: str = ""
+    hook_timeout_secs: float = 300.0
 
 
 class PostProcessConfig(BaseModel):

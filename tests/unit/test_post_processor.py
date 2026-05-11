@@ -2290,7 +2290,7 @@ class TestDeleteSupersededFilesHooks:
 
         _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
-        mock_hook.assert_any_call("chattr -i {dir}/*", mocker.ANY, "pre_delete")
+        mock_hook.assert_any_call("chattr -i {dir}/*", mocker.ANY, "pre_delete", mocker.ANY)
 
     def test_pre_delete_hook_failure_aborts_deletion(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """If pre_delete hook returns False, no files are deleted and count is 0."""
@@ -2326,7 +2326,7 @@ class TestDeleteSupersededFilesHooks:
 
         call_order: list[str] = []
 
-        def fake_hook(cmd: str, d: str, label: str) -> bool:
+        def fake_hook(cmd: str, d: str, label: str, timeout_secs: float = 300.0) -> bool:
             call_order.append(label)
             return True
 
@@ -2351,7 +2351,7 @@ class TestDeleteSupersededFilesHooks:
 
         called_labels: list[str] = []
 
-        def fake_hook(cmd: str, d: str, label: str) -> bool:
+        def fake_hook(cmd: str, d: str, label: str, timeout_secs: float = 300.0) -> bool:
             called_labels.append(label)
             return False  # always fail
 

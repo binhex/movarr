@@ -31,12 +31,26 @@ def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[s
 _CHUNK_SIZE = 65_536  # 64 KiB — balance between I/O calls and memory usage
 
 
-def _sha256(file_path: Path) -> str:
-    """Return the SHA-256 hex digest of *file_path*."""
+def _sha256(file_path: Path, label: str | None = None) -> str:
+    """Return the SHA-256 hex digest of *file_path*.
+
+    If *label* is provided, progress is logged at 25/50/75% milestones
+    using *label* as the message prefix with ``{}`` for the file path
+    (e.g. ``"Verifying '{}' checksum: 50% complete."``).
+    """
     h = hashlib.sha256()
+    total = file_path.stat().st_size
+    next_pct = 25
     with file_path.open("rb") as fh:
+        done = 0
         for chunk in iter(lambda: fh.read(_CHUNK_SIZE), b""):
             h.update(chunk)
+            if label and total > 0:
+                done += len(chunk)
+                pct = done * 100 // total
+                while next_pct <= pct and next_pct <= 75:
+                    _logger.info(label + " {}% complete.", file_path, next_pct)
+                    next_pct += 25
     return h.hexdigest()
 
 
@@ -95,7 +109,7 @@ def _verify_existing(src: Path, dst: Path) -> bool | None:
     except OSError:
         _logger.error("Source file disappeared during verification: '{}'", src)
         return False
-    dst_hash = _sha256(dst)
+    dst_hash = _sha256(dst, label="Verifying '{}' checksum:")
     if src_hash == dst_hash:
         _logger.info(
             "Destination '{}' already matches source (sha256={}); skipping copy.",
@@ -114,15 +128,42 @@ def _verify_existing(src: Path, dst: Path) -> bool | None:
     return None
 
 
+def _do_copy(src: Path, dst: Path) -> None:
+    """Copy *src* to *dst* in chunks, logging progress at 25/50/75% milestones.
+
+    Preserves file metadata (timestamps, permissions) via :func:`shutil.copystat`
+    after the data transfer, matching :func:`shutil.copy2` semantics.
+
+    Raises:
+        FileNotFoundError: if *src* does not exist.
+        PermissionError: if *src* cannot be read or *dst* cannot be written.
+        OSError: on any other I/O error.
+    """
+    total = src.stat().st_size
+    next_pct = 25
+    _logger.info("Copying '{}' → '{}'.", src, dst)
+    with src.open("rb") as fsrc, dst.open("wb") as fdst:
+        done = 0
+        for chunk in iter(lambda: fsrc.read(_CHUNK_SIZE), b""):
+            fdst.write(chunk)
+            done += len(chunk)
+            if total > 0:
+                pct = done * 100 // total
+                while next_pct <= pct and next_pct <= 75:
+                    _logger.info("Copying '{}' → '{}': {}% complete.", src, dst, next_pct)
+                    next_pct += 25
+    shutil.copystat(str(src), str(dst))
+    _logger.info("Copied '{}' → '{}'.", src, dst)
+
+
 def _perform_copy(src: Path, dst: Path) -> bool:
-    """Copy *src* to *dst* via :func:`shutil.copy2` and verify checksums.
+    """Copy *src* to *dst* with chunked progress and SHA-256 verification.
 
     Returns:
         True on success, False on any copy or verification failure.
     """
     try:
-        shutil.copy2(str(src), str(dst))
-        _logger.info("Copied '{}' → '{}'.", src, dst)
+        _do_copy(src, dst)
     except FileNotFoundError as exc:
         _logger.warning("Source '{}' not found during copy: {}.", src, exc)
         return False
@@ -139,7 +180,7 @@ def _perform_copy(src: Path, dst: Path) -> bool:
     except OSError:
         _logger.error("Source file disappeared during post-copy verification: '{}'", src)
         return False
-    dst_hash = _sha256(dst)
+    dst_hash = _sha256(dst, label="Verifying '{}' copy integrity:")
     if src_hash != dst_hash:
         _logger.warning(
             "Post-copy checksum mismatch for '{}': src={}, dst={}.",
