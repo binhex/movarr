@@ -264,13 +264,14 @@ class QBittorrentClient:
     # Deleting torrents
     # ------------------------------------------------------------------
 
-    def delete_torrent(self, torrent_hash: str, delete_data: bool, state: str) -> bool:
+    def delete_torrent(self, torrent_hash: str, delete_data: bool, state: str, name: str = "") -> bool:
         """Delete a single torrent by hash.
 
         Args:
             torrent_hash: qBittorrent info-hash.
             delete_data: Whether to remove the downloaded files too.
             state: Human-readable state string for log messages.
+            name: Optional human-readable torrent title for log messages.
         """
         try:
             self._client.torrents_delete(delete_files=delete_data, torrent_hashes=torrent_hash)
@@ -278,12 +279,21 @@ class QBittorrentClient:
             _logger.warning("Failed to delete torrent '{}': {}.", torrent_hash, exc)
             return False
 
-        _logger.info(
-            "Deleted torrent '{}' (state='{}', data_deleted={}).",
-            torrent_hash,
-            state,
-            delete_data,
-        )
+        if name:
+            _logger.info(
+                "Deleted torrent '{}' ({}) (state='{}', data_deleted={}).",
+                torrent_hash,
+                name,
+                state,
+                delete_data,
+            )
+        else:
+            _logger.info(
+                "Deleted torrent '{}' (state='{}', data_deleted={}).",
+                torrent_hash,
+                state,
+                delete_data,
+            )
         return True
 
     def delete_stalled(self, stalled_map: dict[str, Any], state: str, delete_data: bool) -> set[str]:
@@ -299,7 +309,7 @@ class QBittorrentClient:
         """
         deleted: set[str] = set()
         for torrent_hash, info in stalled_map.items():
-            if self.delete_torrent(torrent_hash, delete_data, state):
+            if self.delete_torrent(torrent_hash, delete_data, state, name=info.get("name", "")):
                 deleted.add(torrent_hash)
             else:
                 _logger.warning("Could not delete '{}' ({}).", info["name"], torrent_hash)
