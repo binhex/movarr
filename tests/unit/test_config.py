@@ -24,6 +24,7 @@ from movarr.config import (
     _migrate_v214_to_v215,
     _migrate_v215_to_v216,
     _migrate_v216_to_v217,
+    _migrate_v217_to_v218,
     load_config,
 )
 
@@ -173,7 +174,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -198,14 +199,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -216,7 +217,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -227,7 +228,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -238,7 +239,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -399,7 +400,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -438,7 +439,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -458,7 +459,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -473,7 +474,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -491,7 +492,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -503,7 +504,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.17.0"
+        assert cfg.general.config_version == "2.18.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -731,6 +732,14 @@ class TestPostProcessConfigDefaults:
         cfg = PostProcessConfig()
         assert cfg.delete_lower_quality is False
 
+    def test_hook_timeout_mins_defaults_to_5(self) -> None:
+        """hook_timeout_mins replaces hook_timeout_secs with minutes unit."""
+        from movarr.config import PostProcessHooksConfig
+
+        cfg = PostProcessHooksConfig()
+        assert cfg.hook_timeout_mins == 5.0
+        assert not hasattr(cfg, "hook_timeout_secs")
+
     def test_delete_lower_quality_can_be_enabled(self) -> None:
         from movarr.config import PostProcessConfig
 
@@ -880,10 +889,10 @@ class TestMigrationV215ToV216:
 
 
 class TestMigrationV216ToV217:
-    """Tests for the v2.16.0 -> v2.17.0 config migration (hook_timeout_secs)."""
+    """Tests for the v2.16.0 -> v2.17.0 config migration (hook_timeout_mins)."""
 
     def test_migrates_v216_to_v217(self, tmp_path: Path) -> None:
-        """A v2.16.0 config is migrated to v2.17.0 with hook_timeout_secs on disk."""
+        """A v2.16.0 config is migrated to v2.17.0 with hook_timeout_mins on disk."""
         p = tmp_path / "config.yml"
         p.write_text(
             "general:\n"
@@ -897,13 +906,13 @@ class TestMigrationV216ToV217:
         )
         config = load_config(p)
         # Runtime version bumped
-        assert config.general.config_version == "2.17.0"
-        # hook_timeout_secs added
-        assert config.post_process.hooks.hook_timeout_secs == 300.0
+        assert config.general.config_version == "2.18.0"
+        # hook_timeout_mins added
+        assert config.post_process.hooks.hook_timeout_mins == 5.0
         # Migration persisted to disk
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["general"]["config_version"] == "2.17.0"
-        assert on_disk["post_process"]["hooks"].get("hook_timeout_secs") == 300.0
+        assert on_disk["general"]["config_version"] == "2.18.0"
+        assert on_disk["post_process"]["hooks"].get("hook_timeout_mins") == 5.0
 
 
 class TestLoadConfigUnknownKeys:
@@ -1018,14 +1027,14 @@ class TestLoadConfigEdgeCases:
             "    post_copy: chmod -R 755 {dir}\n"
             "    pre_delete:\n"
             "    post_delete:\n"
-            "    hook_timeout_secs:\n"
+            "    hook_timeout_mins:\n"
         )
         config = load_config(p)
         assert config.post_process.hooks.pre_copy == ""
         assert config.post_process.hooks.post_copy == "chmod -R 755 {dir}"
         assert config.post_process.hooks.pre_delete == ""
         assert config.post_process.hooks.post_delete == ""
-        assert config.post_process.hooks.hook_timeout_secs == 300.0
+        assert config.post_process.hooks.hook_timeout_mins == 5.0
 
     def test_null_hooks_whole_block_preserves_defaults(self, tmp_path: Path) -> None:
         """Entire hooks block set to null preserves all default hook values."""
@@ -1036,7 +1045,7 @@ class TestLoadConfigEdgeCases:
         assert config.post_process.hooks.post_copy == ""
         assert config.post_process.hooks.pre_delete == ""
         assert config.post_process.hooks.post_delete == ""
-        assert config.post_process.hooks.hook_timeout_secs == 300.0
+        assert config.post_process.hooks.hook_timeout_mins == 5.0
 
     def test_null_typo_key_warns(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """A null-valued typo'd top-level key still triggers the typo warning."""
@@ -1084,27 +1093,102 @@ class TestGeneralNull:
         p.write_text("general:\n")
         config = load_config(p)
         assert isinstance(config, Config)
-        assert config.general.config_version == "2.17.0"
+        assert config.general.config_version == "2.18.0"
 
 
 class TestMigrationV216ToV217Isolated:
     """Direct unit tests for the v2.16.0 -> v2.17.0 migration function."""
 
-    def test_adds_hook_timeout_secs(self) -> None:
-        """Migration inserts hook_timeout_secs into hooks block."""
+    def test_adds_hook_timeout_mins(self) -> None:
+        """Migration inserts hook_timeout_mins into hooks block."""
         raw: dict = {"general": {"config_version": "2.16.0"}}
         result = _migrate_v216_to_v217(raw)
-        assert result["post_process"]["hooks"]["hook_timeout_secs"] == 300.0
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
 
     def test_does_not_overwrite_existing_value(self) -> None:
-        """Migration preserves a pre-existing hook_timeout_secs value."""
+        """Migration preserves a pre-existing hook_timeout_mins value."""
         raw: dict = {
             "general": {"config_version": "2.16.0"},
-            "post_process": {"hooks": {"hook_timeout_secs": 120.0}},
+            "post_process": {"hooks": {"hook_timeout_mins": 2.0}},
         }
         result = _migrate_v216_to_v217(raw)
-        assert result["post_process"]["hooks"]["hook_timeout_secs"] == 120.0
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 2.0
 
     def test_bumps_version_to_v217(self) -> None:
         raw: dict = {"general": {"config_version": "2.16.0"}}
         assert _migrate_v216_to_v217(raw)["general"]["config_version"] == "2.17.0"
+
+
+class TestMigrationV217ToV218:
+    """Tests for the v2.17.0 -> v2.18.0 migration (hook_timeout_secs -> hook_timeout_mins)."""
+
+    def test_renames_old_key_and_converts_value(self) -> None:
+        """hook_timeout_secs: 300 is converted to hook_timeout_mins: 5.0."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": {"hook_timeout_secs": 300.0}},
+        }
+        result = _migrate_v217_to_v218(raw)
+        assert "hook_timeout_secs" not in result["post_process"]["hooks"]
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+
+    def test_defaults_when_no_old_key(self) -> None:
+        """When neither key exists, defaults to 5.0 minutes."""
+        raw: dict = {"general": {"config_version": "2.17.0"}}
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+
+    def test_preserves_existing_mins_value(self) -> None:
+        """Does not overwrite an existing hook_timeout_mins value."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": {"hook_timeout_mins": 2.0}},
+        }
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 2.0
+
+    def test_bumps_version_to_v218(self) -> None:
+        raw: dict = {"general": {"config_version": "2.17.0"}}
+        assert _migrate_v217_to_v218(raw)["general"]["config_version"] == "2.18.0"
+
+    def test_post_process_null_does_not_crash(self) -> None:
+        """Migration handles post_process: null without crashing."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": None,
+        }
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+
+    def test_non_numeric_secs_value_warns(self, mocker: MockerFixture) -> None:
+        """A string hook_timeout_secs value triggers a warning and defaults to 5.0."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": {"hook_timeout_secs": "five"}},
+        }
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+        assert "hook_timeout_secs" not in result["post_process"]["hooks"]
+        mock_warning.assert_called_once()
+
+    def test_small_seconds_rounds_to_zero_warns(self, mocker: MockerFixture) -> None:
+        """A tiny seconds value that rounds to 0.0 triggers a warning and uses default."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": {"hook_timeout_secs": 1}},
+        }
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+        mock_warning.assert_called_once()
+
+    def test_both_keys_present_mins_wins(self) -> None:
+        """When both old and new keys exist, hook_timeout_mins is preserved."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": {"hook_timeout_secs": 600.0, "hook_timeout_mins": 3.0}},
+        }
+        result = _migrate_v217_to_v218(raw)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 3.0
+        assert "hook_timeout_secs" not in result["post_process"]["hooks"]

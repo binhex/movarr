@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.17.0"
+_CONFIG_VERSION = "2.18.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 
@@ -110,7 +110,7 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.16.0",
         "2.17.0",
         [
-            (("post_process", "hooks", "hook_timeout_secs"), 300.0),
+            (("post_process", "hooks", "hook_timeout_mins"), 5.0),
         ],
     ),
 ]
@@ -220,6 +220,44 @@ def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.17.0 -> v2.18.0: rename hook_timeout_secs -> hook_timeout_mins (seconds to minutes).
+
+    Converts any existing ``hook_timeout_secs`` value from seconds to minutes
+    (rounding to 1 decimal) and stores it under ``hook_timeout_mins``.
+    If neither key exists, defaults to 5.0 minutes.
+    """
+    if not isinstance(raw.get("post_process"), dict):
+        raw["post_process"] = {}
+    hooks = raw.setdefault("post_process", {}).setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        raw["post_process"]["hooks"] = hooks
+    if "hook_timeout_secs" in hooks:
+        old_secs = hooks.pop("hook_timeout_secs")
+        if isinstance(old_secs, (int, float)):
+            converted = round(old_secs / 60.0, 1)
+        else:
+            try:
+                converted = round(float(old_secs) / 60.0, 1)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Cannot convert hook_timeout_secs value {!r} to minutes; using default 5.0.",
+                    old_secs,
+                )
+                converted = None
+        if converted is not None and converted > 0:
+            hooks.setdefault("hook_timeout_mins", converted)
+        elif converted is not None:
+            logger.warning(
+                "hook_timeout_secs value of {} s is non-positive; using default 5.0.",
+                old_secs,
+            )
+    hooks.setdefault("hook_timeout_mins", 5.0)
+    raw.setdefault("general", {})["config_version"] = "2.18.0"
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Bind table-generated functions to module-level names (import compatibility)
 # ---------------------------------------------------------------------------
@@ -260,6 +298,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.14.0": _migrate_v214_to_v215,
     "2.15.0": _migrate_v215_to_v216,
     "2.16.0": _migrate_v216_to_v217,
+    "2.17.0": _migrate_v217_to_v218,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -569,7 +608,7 @@ class PostProcessHooksConfig(BaseModel):
     post_copy: str = ""
     pre_delete: str = ""
     post_delete: str = ""
-    hook_timeout_secs: float = 300.0
+    hook_timeout_mins: float = 5.0
 
 
 class PostProcessConfig(BaseModel):

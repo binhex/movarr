@@ -54,7 +54,13 @@ _EXTRAS_RE = re.compile(
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 
 
-def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str, timeout_secs: float) -> None:
+def _hook_timeout_secs(config: Config) -> float | None:
+    """Return the hook timeout in seconds from the config, or None for no timeout."""
+    mins = config.post_process.hooks.hook_timeout_mins
+    return None if mins == 0 else mins * 60.0
+
+
+def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str, timeout_mins: float | None) -> None:
     """Escalate signals (SIGTERM → SIGKILL) to terminate the process group, then reap."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
         with contextlib.suppress(OSError, ProcessLookupError):
@@ -72,7 +78,10 @@ def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str, timeout_
     # Final reap
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
-    logger.error("{} hook timed out after {} s.", label, timeout_secs)
+    if timeout_mins is not None and timeout_mins > 0:
+        logger.error("{} hook timed out after {} min.", label, timeout_mins)
+    else:
+        logger.error("{} hook terminated.", label)
 
 
 def _log_hook_output(stdout: str, stderr: str, label: str) -> None:
@@ -83,7 +92,7 @@ def _log_hook_output(stdout: str, stderr: str, label: str) -> None:
         logger.debug("{} hook stderr: {}", label, stderr.rstrip())
 
 
-def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float = 300.0) -> bool:
+def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | None = 300.0) -> bool:
     """Run a post-process hook command, substituting ``{dir}`` with *dir_path*.
 
     Uses ``shell=True`` so that glob patterns (e.g. ``chattr -i {dir}/*``) are
@@ -134,7 +143,7 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float = 300
     try:
         stdout, stderr = proc.communicate(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
-        _kill_process(proc, pgid, label, timeout_secs)
+        _kill_process(proc, pgid, label, timeout_secs / 60.0 if timeout_secs is not None else None)
         return False
     _log_hook_output(stdout, stderr, label)
     if proc.returncode != 0:
@@ -255,7 +264,7 @@ def _post_copy_actions(
                 config.post_process.hooks.post_copy,
                 resolved_dst_dir,
                 "post_copy",
-                config.post_process.hooks.hook_timeout_secs,
+                _hook_timeout_secs(config),
             ):
                 logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
         except Exception as exc:  # noqa: BLE001
@@ -868,7 +877,7 @@ def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> b
             config.post_process.hooks.pre_copy,
             resolved_dst_dir,
             "pre_copy",
-            config.post_process.hooks.hook_timeout_secs,
+            _hook_timeout_secs(config),
         ):
             logger.error("pre_copy hook failed for '{}'; aborting copy.", dst_dir)
             return False
@@ -892,7 +901,7 @@ def _run_pre_delete_hook_and_verify(
             config.post_process.hooks.pre_delete,
             str(resolved_dst),
             "pre_delete",
-            config.post_process.hooks.hook_timeout_secs,
+            _hook_timeout_secs(config),
         ):
             logger.error("pre_delete hook failed for '{}'; aborting deletion pass.", dst_dir)
             return False
@@ -925,7 +934,7 @@ def _run_post_delete_hook(config: Config, resolved_dst: pathlib.Path, dst_dir: s
             config.post_process.hooks.post_delete,
             str(resolved_dst),
             "post_delete",
-            config.post_process.hooks.hook_timeout_secs,
+            _hook_timeout_secs(config),
         ):
             logger.warning("post_delete hook failed for '{}'; continuing.", dst_dir)
     except Exception as exc:  # noqa: BLE001
