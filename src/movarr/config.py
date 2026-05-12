@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 import yaml
 from loguru import logger
@@ -675,6 +675,50 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _strip_none_values(d: dict[str, Any]) -> None:
+    """Recursively remove keys whose value is ``None`` from *d* (mutates in place).
+
+    Also descends into lists to clean dicts nested inside list entries.
+    """
+    for key in list(d.keys()):
+        if d[key] is None:
+            del d[key]
+        elif isinstance(d[key], dict):
+            _strip_none_values(d[key])
+        elif isinstance(d[key], list):
+            for item in d[key]:
+                if isinstance(item, dict):
+                    _strip_none_values(item)
+
+
+def _has_none_values(d: dict[str, Any]) -> bool:
+    """Return True if *d* contains any None-valued key at any depth."""
+    for value in d.values():
+        if value is None:
+            return True
+        if isinstance(value, dict):
+            if _has_none_values(value):
+                return True
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and _has_none_values(item):
+                    return True
+    return False
+
+
+def _strip_and_dump(raw: dict[str, Any], fh: IO[str]) -> None:
+    """Write *raw* to *fh* (a file handle) after stripping None-valued keys."""
+    _clean = copy.deepcopy(raw)
+    _strip_none_values(_clean)
+    yaml.dump(_clean, fh, default_flow_style=False, sort_keys=False)
+
+
+def _strip_and_write(raw: dict[str, Any], config_path: Path) -> None:
+    """Open *config_path* for writing and dump *raw* with None keys stripped."""
+    with config_path.open("w", encoding="utf-8") as fh:
+        _strip_and_dump(raw, fh)
+
+
 def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     """Apply any pending schema migrations to *raw*, rewriting the file on disk.
 
@@ -693,6 +737,8 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
         raw["general"] = {}
     current = raw.get("general", {}).get("config_version", _INITIAL_CONFIG_VERSION)
     if current not in MIGRATIONS:
+        if _has_none_values(raw):
+            _strip_and_write(raw, config_path)
         return raw
 
     backup_path = config_path.with_suffix(f".yml.bak.{current}")
@@ -715,7 +761,7 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
             break
 
     with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(raw, fh, default_flow_style=False, sort_keys=False)
+        _strip_and_dump(raw, fh)
 
     return raw
 

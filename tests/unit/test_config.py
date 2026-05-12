@@ -1192,3 +1192,60 @@ class TestMigrationV217ToV218:
         result = _migrate_v217_to_v218(raw)
         assert result["post_process"]["hooks"]["hook_timeout_mins"] == 3.0
         assert "hook_timeout_secs" not in result["post_process"]["hooks"]
+
+
+class TestStripNullValues:
+    """Migration must not write YAML null values to disk."""
+
+    def test_null_hook_values_stripped_from_disk(self, tmp_path: Path) -> None:
+        """After migration, null-valued hook keys are omitted from on-disk YAML."""
+        p = tmp_path / "config.yml"
+        p.write_text(
+            "general:\n"
+            "  config_version: 2.16.0\n"
+            "post_process:\n"
+            "  hooks:\n"
+            "    pre_copy:\n"
+            "    post_copy: echo ok\n"
+            "    pre_delete:\n"
+            "    post_delete:\n"
+        )
+        config = load_config(p)
+        assert isinstance(config, Config)
+        on_disk = yaml.safe_load(p.read_text())
+        hooks = on_disk["post_process"]["hooks"]
+        # Null-valued keys must be absent from disk (not present at all)
+        assert "pre_copy" not in hooks
+        assert "pre_delete" not in hooks
+        assert "post_delete" not in hooks
+        # post_copy with a value must remain
+        assert hooks["post_copy"] == "echo ok"
+
+    def test_null_hooks_stripped_when_already_current_version(self, tmp_path: Path) -> None:
+        """Early-return path also strips nulls from already-current configs."""
+        p = tmp_path / "config.yml"
+        p.write_text(
+            "general:\n  config_version: '2.18.0'\npost_process:\n  hooks:\n    pre_copy:\n    post_copy: echo ok\n"
+        )
+        config = load_config(p)
+        assert isinstance(config, Config)
+        on_disk = yaml.safe_load(p.read_text())
+        assert "pre_copy" not in on_disk["post_process"]["hooks"]
+
+    def test_null_in_list_dict_item_stripped(self, tmp_path: Path) -> None:
+        """List-of-dict entries with null values are also cleaned."""
+        p = tmp_path / "config.yml"
+        p.write_text(
+            "general:\n"
+            "  config_version: 2.16.0\n"
+            "post_process:\n"
+            "  copy_library_rules:\n"
+            "    - name: test\n"
+            "      max_certification:\n"
+        )
+        config = load_config(p)
+        assert isinstance(config, Config)
+        on_disk = yaml.safe_load(p.read_text())
+        rule = on_disk["post_process"]["copy_library_rules"][0]
+        # max_certification null must be stripped from the list-of-dicts entry
+        assert "max_certification" not in rule
