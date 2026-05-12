@@ -367,6 +367,17 @@ class TestDeleteTorrent:
 
         assert client.delete_torrent("hash1", delete_data=False, state="stalledDL") is False
 
+    def test_log_message_includes_name_when_provided(self, mocker: MockerFixture) -> None:
+        """The INFO log includes the torrent name when passed."""
+        client, mock_api = _make_client(mocker)
+        mock_info = mocker.patch("movarr.qbittorrent._logger.info")
+
+        client.delete_torrent("hash1", delete_data=False, state="stalledDL", name="Movie.Title.2024")
+
+        # The name should appear as a positional argument to the log call
+        log_args = mock_info.call_args.args
+        assert "Movie.Title.2024" in log_args
+
 
 # delete_stalled
 
@@ -381,9 +392,12 @@ class TestDeleteStalled:
             "hash1": {"name": "Movie 1", "age_mins": 200, "state": "stalledDL"},
             "hash2": {"name": "Movie 2", "age_mins": 300, "state": "stalledDL"},
         }
+        mock_dt = mocker.patch.object(client, "delete_torrent", wraps=client.delete_torrent)
         client.delete_stalled(stalled_map, state="stalledDL", delete_data=False)
 
         assert mock_api.torrents_delete.call_count == 2
+        mock_dt.assert_any_call("hash1", False, "stalledDL", name="Movie 1")
+        mock_dt.assert_any_call("hash2", False, "stalledDL", name="Movie 2")
 
     def test_empty_map_makes_no_api_calls(self, mocker: MockerFixture) -> None:
         """No API calls are made when stalled_map is empty."""

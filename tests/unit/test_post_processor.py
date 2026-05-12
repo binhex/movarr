@@ -1729,7 +1729,9 @@ class TestProcessOne:
         _process_one(torrent, cfg, qbt, db)
 
         db.mark_completed.assert_called_once_with("tag1")
-        qbt.delete_torrent.assert_called_once_with("deadbeef", delete_data=True, state="completed")
+        qbt.delete_torrent.assert_called_once_with(
+            "deadbeef", delete_data=True, state="completed", name="The.Matrix.1999.1080p.BluRay"
+        )
 
     def test_copy_succeeds_without_remove_completed(self, mocker: MockerFixture) -> None:
         """All steps succeed but remove_completed=False: mark_completed but no torrent deletion."""
@@ -1880,6 +1882,7 @@ class TestProcessOneCopyCompletedFalse:
         rec = mocker.MagicMock()
         rec.imdb_title = "The Matrix"
         rec.imdb_year = "1999"
+        rec.index_title = "The.Matrix.1999.1080p.BluRay"
         return rec
 
     def test_copy_completed_false_marks_completed_skips_copy(self, mocker: MockerFixture, tmp_path: Any) -> None:
@@ -1913,7 +1916,9 @@ class TestProcessOneCopyCompletedFalse:
             db,
         )
 
-        qbt.delete_torrent.assert_called_once_with("abc123", delete_data=False, state="completed")
+        qbt.delete_torrent.assert_called_once_with(
+            "abc123", delete_data=False, state="completed", name="The.Matrix.1999.1080p.BluRay"
+        )
         db.mark_completed.assert_called_once_with("tag1")
 
 

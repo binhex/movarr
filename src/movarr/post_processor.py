@@ -254,6 +254,7 @@ def _post_copy_actions(
     resolved_dst_dir: str,
     canonical_fname: str,
     copied_fnames: set[str],
+    torrent_name: str = "",
 ) -> None:
     """Mark the torrent completed and run any configured post-copy operations."""
     db.mark_completed(tag)
@@ -276,7 +277,7 @@ def _post_copy_actions(
         if deleted:
             logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
     if config.post_process.remove_completed:
-        qbt.delete_torrent(torrent_hash, delete_data=True, state="completed")
+        qbt.delete_torrent(torrent_hash, delete_data=True, state="completed", name=torrent_name)
 
 
 def _torrent_tag_and_hash(torrent: dict) -> tuple[str, str]:
@@ -334,7 +335,9 @@ def _process_one(
         logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
         db.mark_completed(tag)
         if config.post_process.remove_completed:
-            qbt.delete_torrent(torrent_hash, delete_data=False, state="completed")
+            qbt.delete_torrent(
+                torrent_hash, delete_data=False, state="completed", name=str(db_record.index_title or "")
+            )
         return
 
     target = _build_copy_target(torrent, db_record, config)
@@ -364,6 +367,7 @@ def _process_one(
             resolved_dst_dir,
             canonical_fname,
             copied_fnames,
+            torrent_name=str(db_record.index_title or ""),
         )
 
 
