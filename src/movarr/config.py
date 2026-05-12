@@ -589,6 +589,8 @@ class PostProcessHooksConfig(BaseModel):
     Each field is a command template. Leave empty (the default) to disable.
     The placeholder ``{dir}`` is substituted with the resolved absolute path of
     the destination directory before the command is executed.
+    ``{leaf}`` is substituted with the last path component (e.g. the movie
+    folder name).
 
     ``shell=True`` is used so that glob patterns such as ``chattr -R -i {dir}``
     are expanded by the shell. Commands come from the user's own config file,

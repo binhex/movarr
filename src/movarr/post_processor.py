@@ -92,8 +92,26 @@ def _log_hook_output(stdout: str, stderr: str, label: str) -> None:
         logger.debug("{} hook stderr: {}", label, stderr.rstrip())
 
 
+_PLACEHOLDER_RE = re.compile(r"\{(dir|leaf)\}")
+
+
+def _expand_placeholders(command: str, dir_path: str) -> str:
+    """Expand ``{dir}`` and ``{leaf}`` placeholders in a hook command.
+
+    Uses a single regex pass so that the output of one substitution can never
+    be re-substituted as another placeholder (avoids double-expansion when
+    *dir_path* itself contains the literal text ``{leaf}`` or ``{dir}``).
+    """
+    subs: dict[str, str] = {
+        "dir": shlex.quote(dir_path),
+        "leaf": shlex.quote(os.path.basename(dir_path.rstrip("/"))),
+    }
+    return _PLACEHOLDER_RE.sub(lambda m: subs[m.group(1)], command)
+
+
 def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | None = 300.0) -> bool:
-    """Run a post-process hook command, substituting ``{dir}`` with *dir_path*.
+    """Run a post-process hook command, substituting ``{dir}`` and ``{leaf}`` with
+    *dir_path* and its final component respectively.
 
     Uses ``shell=True`` so that glob patterns (e.g. ``chattr -i {dir}/*``) are
     expanded by the shell. The command originates from the user's own config
@@ -106,10 +124,14 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | Non
     in the expanded command.  Correct: ``chattr -i {dir}/*``.
     Incorrect: ``chattr -i "{dir}/*"``.
 
+    ``{leaf}`` is replaced with a shell-quoted form of the last path
+    component of *dir_path* (e.g. the movie folder name).  The same quoting
+    rules apply: do not add extra quotes around ``{leaf}``.
+
     Args:
         command: Shell command template. ``{dir}`` is replaced with a
-            shell-quoted form of *dir_path*. Do not quote ``{dir}`` in the
-            template.
+            shell-quoted form of *dir_path*; ``{leaf}`` with the shell-quoted
+            last component. Do not quote either placeholder in the template.
         dir_path: Absolute path of the destination directory.
         label: Hook name for log messages (e.g. ``"pre_delete"``).
 
@@ -125,7 +147,7 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | Non
         deletion count. Use hooks only for in-place operations (e.g. ``chattr
         -i``, ``trimarr``).
     """
-    cmd = command.replace("{dir}", shlex.quote(dir_path))
+    cmd = _expand_placeholders(command, dir_path)
     logger.info("Running {} hook: {}", label, cmd)
     proc = subprocess.Popen(  # noqa: S602
         cmd,

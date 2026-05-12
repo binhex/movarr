@@ -51,12 +51,17 @@ is enabled — copying and deletion are independent features.
 
 `pre_delete` and `post_delete` only fire when `delete_lower_quality: true`.
 
-### Placeholder
+### Placeholders
 
-`{dir}` is the sole supported placeholder. It is substituted with the resolved
-absolute path of the destination directory before the command is executed. Using
-`{dir}/*` in the command relies on shell glob expansion, which is why `shell=True`
-is used (see Security note below).
+`{dir}` is substituted with the resolved absolute path of the destination directory
+(e.g. ``/media/movies/HD/Paul/The Matrix (1999)``).
+
+`{leaf}` is substituted with the last path component of that directory
+(e.g. ``The Matrix (1999)``).
+
+Both placeholders are shell-quoted before substitution. Using `{dir}/*` in the
+command relies on shell glob expansion, which is why ``shell=True`` is used
+(see Security note below).
 
 ---
 

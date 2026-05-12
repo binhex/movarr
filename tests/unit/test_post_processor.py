@@ -958,6 +958,52 @@ class TestRunHook:
         cmd = mock_popen.call_args[0][0]
         assert cmd == "chattr -i '/mnt/media/The Matrix (1999)'/*"
 
+    def test_substitutes_leaf_placeholder(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("echo {leaf}", "/mnt/media/The Matrix (1999)", "post_copy")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "echo 'The Matrix (1999)'"
+
+    def test_substitutes_both_placeholders(self, mocker: MockerFixture) -> None:
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("cp {dir}/info.txt /log/{leaf}.txt", "/mnt/media/The Matrix (1999)", "post_copy")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "cp '/mnt/media/The Matrix (1999)'/info.txt /log/'The Matrix (1999)'.txt"
+
+    def test_no_double_expansion_when_dir_contains_leaf(self, mocker: MockerFixture) -> None:
+        """Regression: dir_path literally containing '{leaf}' must not cause re-expansion."""
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("echo {dir}", "/mnt/media/{leaf}/Movie (2020)", "post_copy")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "echo '/mnt/media/{leaf}/Movie (2020)'"
+
+    def test_leaf_with_trailing_slash_dir_path(self, mocker: MockerFixture) -> None:
+        """Trailing slash on dir_path is stripped before extracting the leaf."""
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
+        mock_proc = mocker.Mock()
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        _run_hook("echo {leaf}", "/mnt/media/The Matrix (1999)/", "post_copy")
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == "echo 'The Matrix (1999)'"
+
     def test_uses_shell_true(self, mocker: MockerFixture) -> None:
         mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
         mocker.patch("movarr.post_processor.os.getpgid", return_value=99)
