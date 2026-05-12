@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 import yaml
 from loguru import logger
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.17.0"
+_CONFIG_VERSION = "2.18.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 
@@ -110,7 +110,7 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.16.0",
         "2.17.0",
         [
-            (("post_process", "hooks", "hook_timeout_secs"), 300.0),
+            (("post_process", "hooks", "hook_timeout_mins"), 5.0),
         ],
     ),
 ]
@@ -127,7 +127,11 @@ def _make_migration(
         for keypath, default in additions:
             node = raw
             for k in keypath[:-1]:
-                node = node.setdefault(k, {})
+                if not isinstance(node.get(k), dict):
+                    if k in node:
+                        logger.warning("Replacing non-dict value at config key %r during migration.", k)
+                    node[k] = {}
+                node = node[k]
             node.setdefault(keypath[-1], copy.deepcopy(default))
         raw.setdefault("general", {})["config_version"] = to_v
         return raw
@@ -216,6 +220,44 @@ def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.17.0 -> v2.18.0: rename hook_timeout_secs -> hook_timeout_mins (seconds to minutes).
+
+    Converts any existing ``hook_timeout_secs`` value from seconds to minutes
+    (rounding to 1 decimal) and stores it under ``hook_timeout_mins``.
+    If neither key exists, defaults to 5.0 minutes.
+    """
+    if not isinstance(raw.get("post_process"), dict):
+        raw["post_process"] = {}
+    hooks = raw.setdefault("post_process", {}).setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        raw["post_process"]["hooks"] = hooks
+    if "hook_timeout_secs" in hooks:
+        old_secs = hooks.pop("hook_timeout_secs")
+        if isinstance(old_secs, (int, float)):
+            converted = round(old_secs / 60.0, 1)
+        else:
+            try:
+                converted = round(float(old_secs) / 60.0, 1)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Cannot convert hook_timeout_secs value {!r} to minutes; using default 5.0.",
+                    old_secs,
+                )
+                converted = None
+        if converted is not None and converted > 0:
+            hooks.setdefault("hook_timeout_mins", converted)
+        elif converted is not None:
+            logger.warning(
+                "hook_timeout_secs value of {} s is non-positive; using default 5.0.",
+                old_secs,
+            )
+    hooks.setdefault("hook_timeout_mins", 5.0)
+    raw.setdefault("general", {})["config_version"] = "2.18.0"
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Bind table-generated functions to module-level names (import compatibility)
 # ---------------------------------------------------------------------------
@@ -234,6 +276,7 @@ _migrate_v210_to_v211 = _table_fns["2.10.0"]
 _migrate_v212_to_v213 = _table_fns["2.12.0"]
 _migrate_v213_to_v214 = _table_fns["2.13.0"]
 _migrate_v214_to_v215 = _table_fns["2.14.0"]
+_migrate_v216_to_v217 = _table_fns["2.16.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -254,6 +297,8 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.13.0": _migrate_v213_to_v214,
     "2.14.0": _migrate_v214_to_v215,
     "2.15.0": _migrate_v215_to_v216,
+    "2.16.0": _migrate_v216_to_v217,
+    "2.17.0": _migrate_v217_to_v218,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -563,7 +608,7 @@ class PostProcessHooksConfig(BaseModel):
     post_copy: str = ""
     pre_delete: str = ""
     post_delete: str = ""
-    hook_timeout_secs: float = 300.0
+    hook_timeout_mins: float = 5.0
 
 
 class PostProcessConfig(BaseModel):
@@ -610,14 +655,68 @@ class Config(BaseModel):
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge *override* into *base*, returning a new dict."""
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    ``None`` values in *override* are treated as "not provided" and skipped,
+    so the base value is preserved.  This handles YAML config files where an
+    empty scalar (e.g. ``key:``) parses as Python ``None``.
+    """
     result = dict(base)
     for key, value in override.items():
+        if value is None:
+            # NOTE: safe only while every `T | None` field has default=None.
+            # If a nullable field ever gains a non-None default, explicit
+            # ``null`` from the user's YAML will silently lose to that default.
+            continue
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
             result[key] = value
     return result
+
+
+def _strip_none_values(d: dict[str, Any]) -> None:
+    """Recursively remove keys whose value is ``None`` from *d* (mutates in place).
+
+    Also descends into lists to clean dicts nested inside list entries.
+    """
+    for key in list(d.keys()):
+        if d[key] is None:
+            del d[key]
+        elif isinstance(d[key], dict):
+            _strip_none_values(d[key])
+        elif isinstance(d[key], list):
+            for item in d[key]:
+                if isinstance(item, dict):
+                    _strip_none_values(item)
+
+
+def _has_none_values(d: dict[str, Any]) -> bool:
+    """Return True if *d* contains any None-valued key at any depth."""
+    for value in d.values():
+        if value is None:
+            return True
+        if isinstance(value, dict):
+            if _has_none_values(value):
+                return True
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and _has_none_values(item):
+                    return True
+    return False
+
+
+def _strip_and_dump(raw: dict[str, Any], fh: IO[str]) -> None:
+    """Write *raw* to *fh* (a file handle) after stripping None-valued keys."""
+    _clean = copy.deepcopy(raw)
+    _strip_none_values(_clean)
+    yaml.dump(_clean, fh, default_flow_style=False, sort_keys=False)
+
+
+def _strip_and_write(raw: dict[str, Any], config_path: Path) -> None:
+    """Open *config_path* for writing and dump *raw* with None keys stripped."""
+    with config_path.open("w", encoding="utf-8") as fh:
+        _strip_and_dump(raw, fh)
 
 
 def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
@@ -634,8 +733,12 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     Returns:
         The migrated raw dict (may be unchanged if already up to date).
     """
+    if not isinstance(raw.get("general"), dict):
+        raw["general"] = {}
     current = raw.get("general", {}).get("config_version", _INITIAL_CONFIG_VERSION)
     if current not in MIGRATIONS:
+        if _has_none_values(raw):
+            _strip_and_write(raw, config_path)
         return raw
 
     backup_path = config_path.with_suffix(f".yml.bak.{current}")
@@ -658,7 +761,7 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
             break
 
     with config_path.open("w", encoding="utf-8") as fh:
-        yaml.dump(raw, fh, default_flow_style=False, sort_keys=False)
+        _strip_and_dump(raw, fh)
 
     return raw
 
@@ -711,12 +814,13 @@ def load_config(config_path: str | Path) -> Config:
 
     raw = _run_migrations(raw, path)
 
-    merged = _deep_merge(_default_config_dict(), raw)
     _known_top_level = set(Config.model_fields.keys())
-    _unknown_keys = set(merged.keys()) - _known_top_level
+    _unknown_keys = set(raw.keys()) - _known_top_level
     if _unknown_keys:
         logger.warning(
             "Unknown config keys (will be ignored): {}. Check for typos.",
             ", ".join(sorted(_unknown_keys)),
         )
+
+    merged = _deep_merge(_default_config_dict(), raw)
     return Config.model_validate(merged)

@@ -88,7 +88,7 @@ def _run_hook(command: str, dir_path: str, label: str) -> bool:
 Behaviour:
 
 1. Substitute `{dir}` with `dir_path` in `command`.
-2. Run via `subprocess.run(command, shell=True, capture_output=True, text=True, timeout=300)`.
+2. Run via `subprocess.Popen(cmd, shell=True, ...)` with `timeout=hook_timeout_secs` (converted from `hook_timeout_mins` config value; 0 disables timeout).
 3. Log the command and exit code at INFO.
 4. Log stdout/stderr at DEBUG (non-empty only).
 5. Return `True` if exit code is 0, `False` otherwise.
