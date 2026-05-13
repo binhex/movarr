@@ -289,7 +289,7 @@ _RESOLUTION_SCORES: dict[str, int] = {
     r"(4320p?)": 50,
 }
 _SOURCE_SCORES: dict[str, int] = {
-    r"(remux|bdremux|bd\sremux)": 80,
+    r"(remux|bdremux|uhdremux)": 80,
     r"(bd|bdrip|bluray|blu\sray)": 40,
     r"(webdl|web\sdl|hdrip)": 30,
     r"(hdtv)": 20,
