@@ -164,6 +164,14 @@ class TestNormaliseForCompare:
     def test_empty_string_returns_none(self) -> None:
         assert normalise_for_compare("") is None
 
+    def test_possessive_apostrophe_on_s_ending_name_normalises_same_as_without(self) -> None:
+        """Titles with possessive apostrophe on s-ending name normalise same as without."""
+        with_apos = normalise_for_compare("Bridget Jones's Diary")
+        without_apos = normalise_for_compare("Bridget Jones Diary")
+        assert with_apos is not None
+        assert without_apos is not None
+        assert with_apos == without_apos, f"{with_apos!r} != {without_apos!r}"
+
 
 # build_sqlite_pattern
 
@@ -183,10 +191,6 @@ class TestBuildSqlitePattern:
         assert pattern not in ("", None)
 
     def test_empty_string_returns_none(self) -> None:
-        assert build_sqlite_pattern("") is None
-
-    def test_no_title_before_year_returns_none(self) -> None:
-        # No recognisable title before year → extract_movie_title returns None
         assert build_sqlite_pattern("") is None
 
     def test_no_year_in_sanitised_returns_none(self) -> None:

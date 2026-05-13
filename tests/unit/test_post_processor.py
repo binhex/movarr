@@ -1028,6 +1028,28 @@ class TestRunHook:
         mock_popen.return_value = mock_proc
         assert _run_hook("echo {dir}", "/tmp/movie", "post_copy") is False
 
+    def test_pgid_falls_back_to_pid_when_getpgid_fails(self, mocker: MockerFixture) -> None:
+        """When os.getpgid raises OSError, proc.pid is used as pgid fallback."""
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", side_effect=OSError)
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo hello", "/tmp/movie", "post_copy") is True
+
+    def test_pgid_falls_back_to_pid_when_getpgid_raises_process_lookup(self, mocker: MockerFixture) -> None:
+        """When os.getpgid raises ProcessLookupError, proc.pid is used as pgid fallback."""
+        mock_popen = mocker.patch("movarr.post_processor.subprocess.Popen")
+        mocker.patch("movarr.post_processor.os.getpgid", side_effect=ProcessLookupError)
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 99999
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        assert _run_hook("echo test", "/tmp/movie", "post_copy") is True
+
 
 # _cert_acceptable
 

@@ -145,7 +145,7 @@ class TestRun:
         """No PID file is written when general.pid_path is empty string."""
         mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
         mocker.patch("movarr.scheduler.run_once")
-        config = Config()  # pid_path="" by default
+        config = Config(general=GeneralConfig(pid_path=""))
 
         run(config)
 
