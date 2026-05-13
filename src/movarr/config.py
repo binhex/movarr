@@ -314,10 +314,10 @@ class GeneralConfig(BaseModel):
     daemon_mode: str = "foreground"
     log_level_console: str = "info"
     log_level_file: str = "info"
-    log_path: str = ""
+    log_path: str = "logs/movarr.log"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db/movarr.db"
-    pid_path: str = ""
+    pid_path: str = "configs/movarr.pid"
 
     @field_validator("daemon_mode")
     @classmethod
