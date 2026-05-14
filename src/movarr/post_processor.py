@@ -54,7 +54,7 @@ _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 # Special-edition tokens — used to prevent cross-edition deletion (e.g. Theatrical
 # must not delete Director's Cut even when resolution differs).
 _RE_EDITION = re.compile(
-    r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE
+    r"\b(extended|director(?:s?['\s]?|['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE
 )
 
 
@@ -511,6 +511,8 @@ def _largest_file(torrent: dict) -> tuple[str, str]:
         return "", ""
     biggest = max(file_list, key=lambda f: f.get("file_size") or 0)
     rel_path = biggest.get("file_name") or ""
+    # Normalise Windows backslashes before path parsing.
+    rel_path = rel_path.replace("\\", "/")
     return os.path.basename(rel_path), os.path.dirname(rel_path)
 
 
@@ -747,9 +749,9 @@ def _is_extras_file(fname: str, lib_san: str) -> bool:
     """Return True if *fname* looks like extras/bonus content."""
     lib_after = extract_after_year(lib_san) or ""
     lib_bracket = " ".join(_BRACKET_RE.findall(fname))
-    # Also check the full sanitised name so that extras keywords in filenames
-    # without a parseable year (e.g. "sample.mkv") are still detected.
-    full_match = _EXTRAS_RE.search(lib_san) if not lib_after else None
+    # Always check the full sanitised name so that extras keywords are detected
+    # regardless of whether a parseable year is present.
+    full_match = _EXTRAS_RE.search(lib_san)
     return bool(
         _EXTRAS_RE.search(lib_after)
         or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower()))
@@ -761,7 +763,13 @@ def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
     """Return True if *new_primary_fname* looks like extras/bonus content."""
     new_after = extract_after_year(new_san) or ""
     new_bracket = " ".join(_BRACKET_RE.findall(new_primary_fname))
-    return bool(_EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())))
+    # Always check the full sanitised name — mirrors _is_extras_file fallback.
+    full_match = _EXTRAS_RE.search(new_san)
+    return bool(
+        _EXTRAS_RE.search(new_after)
+        or (new_bracket and _EXTRAS_RE.search(new_bracket.lower()))
+        or full_match
+    )
 
 
 def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> bool:
@@ -917,7 +925,7 @@ def _delete_superseded_loop(
         if _is_extras_file(fname, lib_san):
             logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
             continue
-        if new_editions and _edition_set(lib_san) != new_editions:
+        if new_editions != _edition_set(lib_san):
             logger.debug(
                 "Skipping auto-delete for '{}': edition mismatch (new={}, lib={}).",
                 fname,

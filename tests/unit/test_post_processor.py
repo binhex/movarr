@@ -542,6 +542,20 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
+    def test_skips_deletion_when_new_primary_is_extras_no_year(self, tmp_path: Path) -> None:
+        """No-year extras primary (e.g. 'sample.mkv') must not trigger deletion of real movies."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "sample.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        real_movie = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / real_movie).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / real_movie).exists()
+
     def test_hyphenated_bracket_extras_detected(self, tmp_path: Path) -> None:
         """Hyphen-separated bracket extras still prevent deletion."""
         movie_dir = tmp_path / "The Matrix (1999)"
