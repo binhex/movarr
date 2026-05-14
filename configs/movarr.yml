@@ -1,0 +1,378 @@
+general:
+  config_version: 2.19.0
+  daemon_mode: foreground
+  log_level_console: info
+  log_level_file: debug
+  library_path_list:
+  - /media/Movies
+  - /data/qbittorrent/completed
+  db_path: db
+  log_path: logs
+  pid_path: pids
+schedule:
+  acquisition:
+    enabled: true
+    schedule_time_units: minutes
+    schedule_time_mins: 30
+    run_on_start: true
+  queue_management:
+    enabled: true
+    schedule_time_units: minutes
+    schedule_time_mins: 5
+    run_on_start: true
+  post_processing:
+    enabled: true
+    schedule_time_units: minutes
+    schedule_time_mins: 5
+    run_on_start: true
+filters:
+  minimum_year: 1970
+  minimum_runtime_mins: 60
+  minimum_rating: 7.0
+  minimum_votes: 5000
+  override_genre:
+    animation:
+      minimum_rating: 7.0
+      minimum_votes: 3000
+    sci-fi:
+      minimum_rating: 6.8
+      minimum_votes: 3000
+  reject_index_title_list:
+  - extras
+  - hq
+  - season
+  - series
+  - upscaled
+  - upscale
+  - theupscaler
+  - ups
+  - ai
+  - 3d
+  - cam
+  - camrip
+  - hdtv
+  - hybrid
+  - hdcam
+  - hd-cam
+  - hdcamrip
+  - webrip
+  - iptv
+  - hqcam
+  - hq-cam
+  - hdtc
+  - hc
+  - ts
+  - tc
+  - telesync
+  - screener
+  - mostbet
+  - subbed
+  - german
+  - foreign
+  - danish
+  - french
+  - spanish
+  - italian
+  - dutch
+  - polish
+  - portuguese
+  - portugues
+  - arabic
+  - japan
+  - jpn
+  - ger
+  - fre
+  - fra
+  - ita
+  - spa
+  - lpcm
+  - nlsubs
+  - xvid
+  - chi
+  - rus
+  - divx
+  - japanese
+  - chinese
+  - ads included
+  - dual
+  - pl
+  - dub
+  - protected
+  - dvdscr
+  - screener
+  - enhanced
+  - dual
+  - tam
+  - hin
+  - hindi
+  - tamil
+  - dvdrip
+  - dvd9
+  - dvd
+  - email
+  - es
+  - lat
+  - esp
+  - latino
+  - ukr
+  - ru
+  - fr
+  - ua
+  - uk
+  - de
+  - tr
+  - it
+  - hqcamrip
+  - aiupscale
+  - hdts
+  - nordic
+  - xxx
+  reject_genre_list:
+  - Documentary
+  reject_movie_title_list:
+  - 12 monkeys
+  - Twelve Monkeys
+  - Star Wars
+  - Jurassic Domination
+  - The Jurassic Games
+  - Jurassic City
+  - F1
+  - ex machina
+  - Disaster Movie
+  reject_index_group_list: []
+  override_cast_list: []
+  override_writer_list: []
+  override_director_list:
+  - Steven Spielberg
+  - Stanley Kubrick
+  - James Cameron
+  - Quentin Tarantino
+  override_movie_title_list:
+  - Star Trek
+  - Transformers
+  - Lego
+  - Aquaman
+  - Godzilla
+  - Pokemon
+  - Pok\xE9mon
+  - Jurassic
+  override_character_list:
+  - Scooby Doo
+  - Bridget Jones
+  - Shazam
+  - James Bond
+  - Jack Sparrow
+  - Superman
+  - Pikachuho
+  - Pikach\xFB
+  - Satoshi
+  - Ash Ketchum
+  - Indiana Jones
+  preferred_index_quality_list:
+  - remastered
+  - directors cut
+  - dc
+  - uncut
+  preferred_index_group_list:
+  - fgt
+  - arena
+  - ctrlhd
+  - amiable
+  - sinners
+  - chd
+  - wiki
+  - cinefile
+  - septic
+  - don
+  - esir
+  - refined
+  - reveille
+  - metis
+  - timelords
+  - eureka
+  - hv
+  - 7sins
+  - sector7
+  - sparks
+  - barc0de
+  - ebp
+  - cytsunee
+  - grym
+  - cmrg
+  - framestor
+  - epsilon
+  - flux
+  - ntb
+  - cinephiles
+  - ghd
+  - dtone
+  - dreamhd
+  - hdt
+  allow_imdb_title_type_list:
+  - movie
+  - video
+  - tvmovie
+  allow_country_list:
+  - gb
+  - us
+  - ca
+  - au
+  - ie
+  - nz
+  allow_language_list:
+  - en
+torrent_client:
+  selected: qbittorrent
+  qbittorrent:
+    host: 192.168.1.10
+    port: '2100'
+    username: admin
+    password: adminadmin
+    add_paused: false
+    category: movies-movarr
+notification:
+  apprise_urls:
+  - ntfy://peccleston_lan_alerting
+  index_proxy_alert_hours: 2
+  torrent_client_alert_hours: 2
+index_proxy:
+  selected: prowlarr
+  jackett:
+    host: 192.168.1.10
+    port: '1900'
+    api_key: o4xte43ftp56m64aknxch4pe7cp3lhaj
+    read_timeout: 60.0
+    limit: 1000
+    offset: 0
+    ignore_list:
+    - showrss
+    - rutracker
+    - torrentgalaxy
+    - knaben
+  prowlarr:
+    host: 192.168.1.10
+    port: 9696
+    api_key: 5afd671451564d52a20a6c431c7ce848
+    read_timeout: 60.0
+    ignore_list:
+    - showrss
+    - rutracker
+    - torrentgalaxy
+    - knaben
+credentials:
+  tmdb:
+    api_key: 1d93addd6def495cec493845cd3b2788
+  omdb:
+    api_key: 9cbf6873
+index_site:
+  jackett_indexer: all
+  search:
+  - criteria: 1080p
+    category: 2000,5000
+    minimum_size_mb: 3000
+    maximum_size_mb: 20000
+    minimum_bitrate_mb: 50
+  - criteria: 2160p
+    category: 2000,5000
+    minimum_size_mb: 7000
+    maximum_size_mb: 170000
+    minimum_bitrate_mb: 115
+  - criteria: 2160p remux
+    category: 2000,5000
+    minimum_size_mb: 25000
+    maximum_size_mb: 200000
+    minimum_bitrate_mb: 200
+  override_search:
+    torrentscsv:
+      category: '8000'
+  prowlarr_indexer: all
+queue_management:
+  queue_management_enabled: true
+  metadata_monitor_enabled: true
+  stalled_monitor_enabled: true
+  stalled_delete_torrent_data: true
+  metadata_delete_torrent_data: true
+  stalled_delete_torrent_max_mins: 120
+  metadata_delete_torrent_max_mins: 30
+  connection_down_grace_mins: 30
+post_process:
+  post_process_enabled: true
+  copy_completed: true
+  remove_completed: true
+  exclude_file_min_kb: 1500000
+  exclude_file_regex_list:
+  - sample
+  - featurettes
+  - commentary
+  - commentaries
+  - deleted
+  - proof
+  exclude_folder_regex_list:
+  - subs
+  - sample
+  - featurettes
+  - screenshots
+  - screens
+  - extras
+  - proof
+  copy_library_rules:
+  - name: Paul
+    genres:
+    - Drama
+    - Sci-Fi
+    - Action
+    - Mystery
+    - Thriller
+    - Crime
+    - Western
+    - Adventure
+    - Sport
+    - War
+    - History
+    - Horror
+    hd_path: /media/Movies/HD/Paul
+    uhd_path: /media/Movies/UHD/Paul
+  - name: Vicky
+    genres:
+    - Drama
+    - Romance
+    - Musical
+    - Music
+    - Family
+    - Seasonal
+    hd_path: /media/Movies/HD/Vicky
+    uhd_path: /media/Movies/UHD/Vicky
+  - name: Zack
+    genres:
+    - Animation
+    - Action
+    - Sci-Fi
+    - Family
+    - Adventure
+    - Musical
+    - Seasonal
+    max_certification: 12A
+    hd_path: /media/Movies/HD/Zack
+    uhd_path: /media/Movies/UHD/Zack
+  default_copy_library:
+    hd_path: /media/Movies/HD/Paul
+    uhd_path: /media/Movies/UHD/Paul
+  path_remapping:
+  - from_path: /data/qbittorrent/completed
+    to_path: /cache-downloads/appdata/data/qbittorrent/completed
+  delete_lower_quality: true
+  hooks:
+    pre_copy: ''
+    post_copy: cd /data/trimarr && uv run trimarr --language eng --strip-commentary
+      --strip-lower-channels --no-backup --media-path {dir}
+    pre_delete: /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock no --lock-type files --media-shares Movies --no-secure-chattr --include-folders
+      {leaf}
+    post_delete: /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock yes --lock-type files --media-shares Movies --no-secure-chattr --include-folders
+      {leaf}
+    hook_timeout_mins: 0
+database:
+  stalled_expiry_days: 7
+  failed_expiry_days: 7
+  passed_expiry_days: 30
