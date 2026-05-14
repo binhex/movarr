@@ -1059,6 +1059,7 @@ class TestCreateDefaultConfigDirectory:
         raw = yaml.safe_load(config_file.read_text())
         assert raw["general"]["log_path"] == "logs"
         assert raw["general"]["db_path"] == "db"
+        assert raw["general"]["pid_path"] == "pids"
 
 
 class TestLoadConfigDirectoryPath:
@@ -1074,7 +1075,7 @@ class TestLoadConfigDirectoryPath:
         assert config.general.config_version == "2.19.0"
         assert config.general.log_path == "logs"
         assert config.general.db_path == "db"
-        assert config.general.pid_path == "configs"
+        assert config.general.pid_path == "pids"
 
     def test_load_config_warns_on_unknown_keys(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """load_config logs a warning when the config contains unknown top-level keys."""
