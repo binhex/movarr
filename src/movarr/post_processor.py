@@ -53,9 +53,7 @@ _EXTRAS_RE = re.compile(
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 # Special-edition tokens — used to prevent cross-edition deletion (e.g. Theatrical
 # must not delete Director's Cut even when resolution differs).
-_RE_EDITION = re.compile(
-    r"\b(extended|director(?:s?['\s]?|['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE
-)
+_RE_EDITION = re.compile(r"\b(extended|director(?:s?['\s]?|['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -752,11 +750,7 @@ def _is_extras_file(fname: str, lib_san: str) -> bool:
     # Always check the full sanitised name so that extras keywords are detected
     # regardless of whether a parseable year is present.
     full_match = _EXTRAS_RE.search(lib_san)
-    return bool(
-        _EXTRAS_RE.search(lib_after)
-        or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower()))
-        or full_match
-    )
+    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())) or full_match)
 
 
 def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
@@ -765,11 +759,7 @@ def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
     new_bracket = " ".join(_BRACKET_RE.findall(new_primary_fname))
     # Always check the full sanitised name — mirrors _is_extras_file fallback.
     full_match = _EXTRAS_RE.search(new_san)
-    return bool(
-        _EXTRAS_RE.search(new_after)
-        or (new_bracket and _EXTRAS_RE.search(new_bracket.lower()))
-        or full_match
-    )
+    return bool(_EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())) or full_match)
 
 
 def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> bool:
