@@ -825,19 +825,48 @@ def _run_post_delete_hook(config: Config, resolved_dst: pathlib.Path, dst_dir: s
         logger.warning("post_delete hook raised an exception for '{}': {}; continuing.", dst_dir, exc)
 
 
-def _run_deletion(
-    video_files: list[str],
-    resolved_dst: pathlib.Path,
+def _delete_superseded_files(
     dst_dir: str,
+    dst_base: str,
     new_primary_fname: str,
     config: Config,
-    copied_fnames: frozenset[str],
+    *,
+    copied_fnames: frozenset[str] = frozenset(),
 ) -> int:
-    """Execute the supersession deletion pass after all safety checks have passed."""
-    protected = frozenset(copied_fnames) | {new_primary_fname}
-    new_san = sanitise(new_primary_fname) or ""
-    new_res_str = extract_resolution(new_san)
+    """Delete superseded video files in *dst_dir* after a new copy.
 
+    All video files in *dst_dir* are deleted except:
+    - The newly-copied primary file
+    - Files written in the current torrent run (*copied_fnames*)
+    - Files matching extras/bonus-content patterns
+
+    The search pipeline (:func:`movarr.filters._check_library_canonical`) already
+    guarantees the newly-downloaded file is strictly better than anything in the
+    library, so no resolution/quality re-comparison is needed here.
+
+    Two hard-stop safety guards protect against runaway deletion:
+    1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``.
+    2. *Count cap*: if the directory holds more than
+       ``_MAX_VIDEO_FILES_IN_MOVIE_DIR`` video files, abort.
+
+    Args:
+        dst_dir: Absolute path to the per-movie destination directory.
+        dst_base: Absolute path to the configured library base directory.
+        new_primary_fname: Filename of the newly copied primary video.
+        config: Application configuration.
+        copied_fnames: All destination filenames written during this torrent run.
+            Every filename in this set — including ``new_primary_fname`` — is
+            protected from deletion.
+
+    Returns:
+        Number of files successfully deleted.
+    """
+    preconditions = _check_delete_preconditions(dst_dir, dst_base, new_primary_fname)
+    if preconditions is None:
+        return 0
+    video_files, resolved_dst = preconditions
+
+    new_san = sanitise(new_primary_fname) or ""
     if _is_extras_primary(new_primary_fname, new_san):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
@@ -848,8 +877,14 @@ def _run_deletion(
     if not _run_pre_delete_hook_and_verify(config, resolved_dst, dst_dir, new_primary_fname):
         return 0
 
+    protected = frozenset(copied_fnames) | {new_primary_fname}
     deleted = 0
-    for fname in _collect_superseded_files(video_files, protected, new_san, new_res_str, config):
+    for fname in video_files:
+        if fname in protected:
+            continue
+        if _is_extras_file(fname, sanitise(fname) or ""):
+            logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
+            continue
         lib_path = str(resolved_dst / fname)
         if delete_file(lib_path):
             logger.info("Auto-deleted superseded library file '{}'.", lib_path)
@@ -859,54 +894,3 @@ def _run_deletion(
 
     _run_post_delete_hook(config, resolved_dst, dst_dir)
     return deleted
-
-
-def _delete_superseded_files(
-    dst_dir: str,
-    dst_base: str,
-    new_primary_fname: str,
-    config: Config,
-    *,
-    copied_fnames: frozenset[str] = frozenset(),
-) -> int:
-    """Delete video files in *dst_dir* that are superseded by the newly copied file.
-
-    A library file is superseded if, and only if, the new file is strictly better:
-    - new resolution > library resolution, OR
-    - same resolution AND new supersession quality score > library score.
-
-    Special-edition tokens (extended, director's cut, theatrical, unrated) are
-    deliberately excluded from the score comparison — they represent different cuts
-    rather than superior quality and must not trigger deletion of alternate editions.
-
-    Files named in *copied_fnames* (all destinations written in the current torrent
-    run) are never deletion candidates, preventing cross-deletion of companion files
-    that belong to the same torrent.
-
-    Two hard-stop safety guards protect against runaway deletion:
-    1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``. Any
-       deviation (equal paths, grandchild, unrelated path) aborts immediately.
-    2. *Count cap*: if the directory holds more than
-       ``_MAX_VIDEO_FILES_IN_MOVIE_DIR`` video files, abort. This catches the
-       flat-library case where all movies live in a single directory.
-
-    Args:
-        dst_dir: Absolute path to the per-movie destination directory.
-        dst_base: Absolute path to the configured library base directory.
-            Used exclusively for the depth safety guard.
-        new_primary_fname: Filename (not full path) of the newly copied primary video.
-            Must be present in ``dst_dir``; if absent the function returns 0 without
-            deleting anything.
-        config: Application configuration.
-        copied_fnames: All destination filenames written during this torrent run.
-            Every filename in this set — including ``new_primary_fname`` — is
-            protected from deletion regardless of its quality score.
-
-    Returns:
-        Number of files successfully deleted.
-    """
-    preconditions = _check_delete_preconditions(dst_dir, dst_base, new_primary_fname)
-    if preconditions is None:
-        return 0
-    video_files, resolved_dst = preconditions
-    return _run_deletion(video_files, resolved_dst, dst_dir, new_primary_fname, config, copied_fnames)

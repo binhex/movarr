@@ -678,7 +678,7 @@ class TestDeleteSupersededFiles:
         assert not (movie_dir / lib_fname).exists()
 
     def test_theatrical_vs_extended_preserved(self, tmp_path: Path) -> None:
-        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+        """Extended 2160p deletes Theatrical 1080p — simplified rule deletes all other video files."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Extended.2160p.Remux.mkv"
@@ -688,8 +688,8 @@ class TestDeleteSupersededFiles:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
 
     def test_theatrical_extended_supersedes_lower_quality_extended(self, tmp_path: Path) -> None:
         """Theatrical Extended 2160p Remux should delete Extended 1080p BluRay — both Extended."""
@@ -720,7 +720,7 @@ class TestDeleteSupersededFiles:
         assert not (movie_dir / lib_fname).exists()
 
     def test_compound_edition_different_tags_skipped(self, tmp_path: Path) -> None:
-        """Unrated Extended 2160p must NOT delete Directors Cut 1080p — different edition sets."""
+        """Unrated Extended 2160p deletes Directors Cut 1080p — simplified rule deletes all other video files."""
         movie_dir = tmp_path / "Movie (2019)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
@@ -730,9 +730,8 @@ class TestDeleteSupersededFiles:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
-
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
 
     def test_deletes_all_other_video_files_regardless_of_quality(self, tmp_path: Path) -> None:
         """All other video files are deleted regardless of resolution/quality/edition."""
