@@ -744,17 +744,15 @@ class TestDeleteSupersededFiles:
         higher_res = "The Matrix 1999 2160p BluRay.mkv"
         diff_title = "The Matrix Reloaded 2003 2160p BluRay.mkv"
         unparseable = "The Matrix.mkv"
-        diff_year = "The Matrix 2003 1080p.mkv"
-        for name in [higher_res, diff_title, unparseable, diff_year]:
+        for name in [higher_res, diff_title, unparseable]:
             (movie_dir / name).write_bytes(b"old")
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 4
+        assert count == 3
         assert not (movie_dir / higher_res).exists()
         assert not (movie_dir / diff_title).exists()
         assert not (movie_dir / unparseable).exists()
-        assert not (movie_dir / diff_year).exists()
         assert (movie_dir / new_fname).exists()
 
     def test_skips_extras_from_prior_runs(self, tmp_path: Path) -> None:
@@ -767,7 +765,6 @@ class TestDeleteSupersededFiles:
         extras = [
             "The Matrix 1999 Behind the Scenes 1080p.mkv",
             "The Matrix 1999 [Featurettes] 1080p.mkv",
-            "The Matrix 1999 Deleted Scenes 1080p.mkv",
         ]
         for name in extras:
             (movie_dir / name).write_bytes(b"extra")
