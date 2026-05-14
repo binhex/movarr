@@ -287,10 +287,10 @@ Each entry in `path_remapping`:
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
-| `pre_copy` | Shell command to run before each copy. Failure aborts the copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
-| `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. | `""` (disabled) |
-| `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` substituted. | `""` (disabled) |
-| `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` substituted. | `""` (disabled) |
+| `pre_copy` | Shell command to run before each copy. Failure aborts the copy. `{dir}` is substituted with the absolute destination directory. `{leaf}` is substituted with the last path component (e.g. movie folder name). | `""` (disabled) |
+| `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. `{leaf}` substituted likewise. | `""` (disabled) |
+| `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` and `{leaf}` substituted. | `""` (disabled) |
+| `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` and `{leaf}` substituted. | `""` (disabled) |
 
 Hooks must not rename or move the target files. Use only in-place operations (e.g. `chattr -i`, `trimarr`).
 

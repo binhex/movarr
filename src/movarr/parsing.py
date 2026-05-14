@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from loguru import logger as _logger
 
@@ -47,7 +48,12 @@ _RE_TT_NUMBER = re.compile(r"(?i)tt\d{7,}")
 _RE_AT_END = re.compile(r"@.+?$")
 _RE_SEPARATOR = re.compile(r"[\.\-\_,\s]+")
 _RE_SEPARATOR_BRACKETS = re.compile(r"[\.\-\_,\s\[\(\]\)]+")
-_RE_COMPARE = re.compile(r"[\s\.\-\_\:\+\'\"\!\,\@\#]+")
+_RE_COMPARE = re.compile(r"[\s\.\-\_\:\+\'\"\!\,\@\#\u2018\u2019\u02bc\u02bb]+")
+# Strips possessive 's after an s-ending word (e.g. "Jones's" → "Jones").
+# Matches ASCII and Unicode apostrophes with optional trailing s at a word boundary.
+# The Unicode branches are technically dead after the NFKD step (all text is ASCII),
+# but retained as belt-and-suspenders in case the pipeline order ever changes.
+_RE_POSSESSIVE_S = re.compile(r"(?<=s)['\u2018\u2019\u02bc\u02bb]s?\b", re.IGNORECASE)
 _RE_SQLITE = re.compile(r"\.|_|-|\s|&")
 _RE_RESOLUTION = re.compile(r"\d{3,4}(?=p)")
 _RE_TV_EPISODE = re.compile(r"(?i)s[\d]{2,3}(e[\d]{2,3})|s[\d]{2,3}|ep[\d]{2,3}")
@@ -217,8 +223,10 @@ def extract_after_year(sanitised: str) -> str | None:
 def normalise_for_compare(text: str) -> str | None:
     """Normalise a title string for fuzzy comparison.
 
-    Lowercases, replaces ``&`` with ``and``, strips ``imdb``, converts
-    written/Roman numerals to digits, and removes all separator characters.
+    Lowercases, folds accented/decorated characters to ASCII equivalents
+    (stripping remaining non-ASCII), replaces ``&`` with ``and``, strips
+    ``imdb``, converts written/Roman numerals to digits, and removes all
+    separator characters.
 
     Args:
         text: Input string (should be sanitised first).
@@ -227,9 +235,16 @@ def normalise_for_compare(text: str) -> str | None:
         return None
 
     result = text.lower()
+    # Convert accented/special characters to ASCII equivalents (NFKD decomposition).
+    # Characters that do NOT decompose to ASCII (e.g. ß, æ, ø, ł) are silently dropped
+    # — a known limitation.  Library filenames rarely contain these, and the prior
+    # behaviour (preserving them) also failed to match their ASCII equivalents.
+    result = unicodedata.normalize("NFKD", result).encode("ascii", "ignore").decode("ascii")
     result = result.replace("&", "and")
     result = result.replace("imdb", "")
     result = _replace_words_with_ints(result)
+    # Strip possessive 's after s-ending words before general separator removal
+    result = _RE_POSSESSIVE_S.sub("", result)
     result = _RE_COMPARE.sub("", result)
     return result or None
 
@@ -289,7 +304,7 @@ _RESOLUTION_SCORES: dict[str, int] = {
     r"(4320p?)": 50,
 }
 _SOURCE_SCORES: dict[str, int] = {
-    r"(remux|bdremux|bd\sremux)": 80,
+    r"(remux|bdremux|uhdremux)": 80,
     r"(bd|bdrip|bluray|blu\sray)": 40,
     r"(webdl|web\sdl|hdrip)": 30,
     r"(hdtv)": 20,

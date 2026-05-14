@@ -1000,6 +1000,50 @@ class TestMigrationInfiniteLoopGuard:
         mock_error.assert_called_once()
 
 
+class TestRunMigrationsAlreadyCurrentWithNulls:
+    """_run_migrations when already at latest version with None values."""
+
+    def test_already_current_with_none_values_strips_and_writes(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """When config is at latest version and has None values, _strip_and_write is called."""
+        from typing import Any
+
+        from movarr.config import _CONFIG_VERSION, _run_migrations
+
+        config_path = tmp_path / "config.yml"
+        raw: dict[str, Any] = {
+            "general": {"config_version": _CONFIG_VERSION},
+            "post_process": None,  # None value triggers _strip_and_write
+        }
+        mock_strip = mocker.patch("movarr.config._strip_and_write")
+        result = _run_migrations(raw, config_path)
+        assert result is not None
+        mock_strip.assert_called_once_with(raw, config_path)
+
+    def test_already_current_no_none_values_returns_without_strip(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """When config is at latest version with no None values, _strip_and_write is NOT called."""
+        from typing import Any
+
+        from movarr.config import _CONFIG_VERSION, _run_migrations
+
+        config_path = tmp_path / "config.yml"
+        raw: dict[str, Any] = {
+            "general": {"config_version": _CONFIG_VERSION, "daemon_mode": "foreground"},
+        }
+        mock_strip = mocker.patch("movarr.config._strip_and_write")
+        result = _run_migrations(raw, config_path)
+        assert result is not None
+        mock_strip.assert_not_called()
+
+    def test_has_none_values_returns_false_for_clean_dict(self) -> None:
+        """_has_none_values returns False when no None values at any depth."""
+        from typing import Any
+
+        from movarr.config import _has_none_values
+
+        clean: dict[str, Any] = {"a": 1, "b": {"c": "hello"}, "d": [1, 2, 3]}
+        assert _has_none_values(clean) is False
+
+
 class TestLoadConfigEdgeCases:
     """Edge cases for load_config: empty file and non-dict YAML."""
 
@@ -1082,6 +1126,67 @@ class TestDeepMerge:
         config = load_config(p)
         assert config.general.log_level_console == "DEBUG"
         assert config.general.library_path_list == []
+
+
+class TestDeepMergeDirect:
+    """Direct unit tests for _deep_merge covering edge-case branches."""
+
+    def test_empty_override_returns_base_unchanged(self) -> None:
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"a": 1, "b": {"c": 2}}
+        result = _deep_merge(base, {})
+        assert result == {"a": 1, "b": {"c": 2}}
+
+    def test_none_value_in_override_is_skipped(self) -> None:
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"a": 1, "b": 2}
+        result = _deep_merge(base, {"b": None, "c": 3})
+        assert result == {"a": 1, "b": 2, "c": 3}
+
+    def test_none_in_nested_dict_is_skipped(self) -> None:
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"outer": {"inner": "keep"}}
+        result = _deep_merge(base, {"outer": {"inner": None, "new_key": "added"}})
+        assert result == {"outer": {"inner": "keep", "new_key": "added"}}
+
+    def test_non_dict_override_replaces_value(self) -> None:
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"key": {"nested": "old"}}
+        result = _deep_merge(base, {"key": "replaced"})
+        assert result == {"key": "replaced"}
+
+    def test_deeply_nested_merge(self) -> None:
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"a": {"b": {"c": 1, "d": 2}}}
+        override: dict[str, Any] = {"a": {"b": {"c": None, "e": 3}}}
+        result = _deep_merge(base, override)
+        assert result == {"a": {"b": {"c": 1, "d": 2, "e": 3}}}
+
+    def test_base_has_non_dict_value_override_has_dict(self) -> None:
+        """When base has a non-dict for a key but override provides a dict, base is replaced."""
+        from typing import Any
+
+        from movarr.config import _deep_merge
+
+        base: dict[str, Any] = {"key": "string_value"}
+        override: dict[str, Any] = {"key": {"nested": "new"}}
+        result = _deep_merge(base, override)
+        assert result == {"key": {"nested": "new"}}
 
 
 class TestGeneralNull:
@@ -1192,6 +1297,16 @@ class TestMigrationV217ToV218:
         result = _migrate_v217_to_v218(raw)
         assert result["post_process"]["hooks"]["hook_timeout_mins"] == 3.0
         assert "hook_timeout_secs" not in result["post_process"]["hooks"]
+
+    def test_hooks_is_not_a_dict(self) -> None:
+        """Migration handles hooks being a non-dict (e.g. bare string) by replacing it."""
+        raw: dict = {
+            "general": {"config_version": "2.17.0"},
+            "post_process": {"hooks": "not-a-dict"},
+        }
+        result = _migrate_v217_to_v218(raw)
+        assert isinstance(result["post_process"]["hooks"], dict)
+        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
 
 
 class TestStripNullValues:
