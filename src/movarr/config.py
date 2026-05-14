@@ -368,7 +368,7 @@ class GeneralConfig(BaseModel):
     log_path: str = "logs"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db"
-    pid_path: str = "configs"
+    pid_path: str = "pids"
 
     @field_validator("daemon_mode")
     @classmethod
