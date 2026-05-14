@@ -28,8 +28,7 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import edition_token_set, primary_edition_token, supersession_quality_score
-from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
+from movarr.parsing import extract_after_year, extract_resolution, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
@@ -52,6 +51,9 @@ _EXTRAS_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
+# Special-edition tokens — used to prevent cross-edition deletion (e.g. Theatrical
+# must not delete Director's Cut even when resolution differs).
+_RE_EDITION = re.compile(r"\b(extended|director(?:s?['\s]?|['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -507,6 +509,8 @@ def _largest_file(torrent: dict) -> tuple[str, str]:
         return "", ""
     biggest = max(file_list, key=lambda f: f.get("file_size") or 0)
     rel_path = biggest.get("file_name") or ""
+    # Normalise Windows backslashes before path parsing.
+    rel_path = rel_path.replace("\\", "/")
     return os.path.basename(rel_path), os.path.dirname(rel_path)
 
 
@@ -691,154 +695,6 @@ def _check_directory_safety(resolved_dst: pathlib.Path, resolved_base: pathlib.P
     return resolved_dst.parent == resolved_base
 
 
-def _candidate_basic_match(
-    fname: str,
-    lib_san: str,
-    new_title: str | None,
-    new_year: str | None,
-) -> bool:
-    """Return True iff *fname*'s title and year match the new file."""
-    lib_title = extract_movie_title(lib_san)
-    if not (new_title and lib_title and new_title == lib_title):
-        logger.debug(
-            "Skipping auto-delete for '{}': title mismatch or unparseable (new='{}', lib='{}').",
-            fname,
-            new_title,
-            lib_title,
-        )
-        return False
-    lib_year = extract_year(lib_san)
-    if not lib_year or lib_year != new_year:
-        logger.debug(
-            "Skipping auto-delete for '{}': year mismatch or unparseable (new='{}', lib='{}').",
-            fname,
-            new_year,
-            lib_year,
-        )
-        return False
-    return True
-
-
-def _is_extras_file(fname: str, lib_san: str) -> bool:
-    """Return True if *fname* looks like extras/bonus content."""
-    lib_after = extract_after_year(lib_san) or ""
-    lib_bracket = " ".join(_BRACKET_RE.findall(fname))
-    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())))
-
-
-def _compare_parsed_resolutions(
-    fname: str,
-    new_san: str,
-    lib_san: str,
-    new_res_int: int,
-    lib_res_int: int,
-    config: Config,
-) -> bool | None:
-    """Return True to delete, False to keep, None to skip (edition mismatch or lower res).
-
-    Called after resolution integers have already been parsed.
-    """
-    if new_res_int > lib_res_int:
-        if edition_token_set(new_san) != edition_token_set(lib_san):
-            logger.debug(
-                "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
-                fname,
-                primary_edition_token(new_san) or "base",
-                primary_edition_token(lib_san) or "base",
-            )
-            return None
-        return True
-    if new_res_int == lib_res_int:
-        if edition_token_set(new_san) != edition_token_set(lib_san):
-            logger.debug(
-                "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
-                fname,
-                primary_edition_token(new_san) or "base",
-                primary_edition_token(lib_san) or "base",
-            )
-            return None
-        new_score = supersession_quality_score(new_san, lib_san, config)
-        lib_score = supersession_quality_score(lib_san, new_san, config)
-        return new_score > lib_score
-    return False
-
-
-def _resolution_supersedes(
-    fname: str,
-    new_san: str,
-    lib_san: str,
-    new_res_str: str | None,
-    config: Config,
-) -> bool | None:
-    """Return True to delete, False to keep, None to skip.
-
-    Compares *new_san*'s resolution against *lib_san* and returns whether the
-    new file supersedes the library file.  Returns None when a resolution is
-    unparseable or when an edition mismatch prevents safe comparison.
-    """
-    lib_res_str = extract_resolution(lib_san)
-    if not new_res_str or not lib_res_str:
-        logger.debug(
-            "Skipping auto-delete for '{}': resolution unparseable (new='{}', lib='{}').",
-            fname,
-            new_res_str,
-            lib_res_str,
-        )
-        return None
-    try:
-        new_res_int = int(new_res_str)
-        lib_res_int = int(lib_res_str)
-    except (ValueError, TypeError):
-        return None
-    return _compare_parsed_resolutions(fname, new_san, lib_san, new_res_int, lib_res_int, config)
-
-
-def _should_delete_file(
-    fname: str,
-    protected: frozenset[str],
-    new_san: str,
-    new_title: str | None,
-    new_year: str | None,
-    new_res_str: str | None,
-    config: Config,
-) -> bool:
-    """Return True if *fname* is superseded by the new file and should be deleted."""
-    if fname in protected:
-        return False
-    lib_san = sanitise(fname) or ""
-    if not _candidate_basic_match(fname, lib_san, new_title, new_year):
-        return False
-    if _is_extras_file(fname, lib_san):
-        logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
-        return False
-    return _resolution_supersedes(fname, new_san, lib_san, new_res_str, config) is True
-
-
-def _collect_superseded_files(
-    video_files: list[str],
-    protected: frozenset[str],
-    new_san: str,
-    new_res_str: str | None,
-    config: Config,
-) -> list[str]:
-    """Examine *video_files* and return the filenames that should be deleted.
-
-    A file is a deletion candidate when:
-    - It is not in *protected*.
-    - Its title, year, and extras-status match the new file's.
-    - Both resolutions are parseable integers.
-    - Either the new resolution is strictly higher (and editions match), or the
-      resolutions are equal, editions match, and the new supersession score wins.
-    """
-    new_title = extract_movie_title(new_san)
-    new_year = extract_year(new_san)
-    to_delete: list[str] = []
-    for fname in video_files:
-        if _should_delete_file(fname, protected, new_san, new_title, new_year, new_res_str, config):
-            to_delete.append(fname)
-    return to_delete
-
-
 def _check_delete_preconditions(
     dst_dir: str,
     dst_base: str,
@@ -887,11 +743,23 @@ def _check_delete_preconditions(
     return video_files, resolved_dst
 
 
+def _is_extras_file(fname: str, lib_san: str) -> bool:
+    """Return True if *fname* looks like extras/bonus content."""
+    lib_after = extract_after_year(lib_san) or ""
+    lib_bracket = " ".join(_BRACKET_RE.findall(fname))
+    # Always check the full sanitised name so that extras keywords are detected
+    # regardless of whether a parseable year is present.
+    full_match = _EXTRAS_RE.search(lib_san)
+    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())) or full_match)
+
+
 def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
     """Return True if *new_primary_fname* looks like extras/bonus content."""
     new_after = extract_after_year(new_san) or ""
     new_bracket = " ".join(_BRACKET_RE.findall(new_primary_fname))
-    return bool(_EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())))
+    # Always check the full sanitised name — mirrors _is_extras_file fallback.
+    full_match = _EXTRAS_RE.search(new_san)
+    return bool(_EXTRAS_RE.search(new_after) or (new_bracket and _EXTRAS_RE.search(new_bracket.lower())) or full_match)
 
 
 def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> bool:
@@ -967,19 +835,48 @@ def _run_post_delete_hook(config: Config, resolved_dst: pathlib.Path, dst_dir: s
         logger.warning("post_delete hook raised an exception for '{}': {}; continuing.", dst_dir, exc)
 
 
-def _run_deletion(
-    video_files: list[str],
-    resolved_dst: pathlib.Path,
+def _delete_superseded_files(
     dst_dir: str,
+    dst_base: str,
     new_primary_fname: str,
     config: Config,
-    copied_fnames: frozenset[str],
+    *,
+    copied_fnames: frozenset[str] = frozenset(),
 ) -> int:
-    """Execute the supersession deletion pass after all safety checks have passed."""
-    protected = frozenset(copied_fnames) | {new_primary_fname}
-    new_san = sanitise(new_primary_fname) or ""
-    new_res_str = extract_resolution(new_san)
+    """Delete superseded video files in *dst_dir* after a new copy.
 
+    All video files in *dst_dir* are deleted except:
+    - The newly-copied primary file
+    - Files written in the current torrent run (*copied_fnames*)
+    - Files matching extras/bonus-content patterns
+
+    The search pipeline (:func:`movarr.filters._check_library_canonical`) already
+    guarantees the newly-downloaded file is strictly better than anything in the
+    library, so no resolution/quality re-comparison is needed here.
+
+    Two hard-stop safety guards protect against runaway deletion:
+    1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``.
+    2. *Count cap*: if the directory holds more than
+       ``_MAX_VIDEO_FILES_IN_MOVIE_DIR`` video files, abort.
+
+    Args:
+        dst_dir: Absolute path to the per-movie destination directory.
+        dst_base: Absolute path to the configured library base directory.
+        new_primary_fname: Filename of the newly copied primary video.
+        config: Application configuration.
+        copied_fnames: All destination filenames written during this torrent run.
+            Every filename in this set — including ``new_primary_fname`` — is
+            protected from deletion.
+
+    Returns:
+        Number of files successfully deleted.
+    """
+    preconditions = _check_delete_preconditions(dst_dir, dst_base, new_primary_fname)
+    if preconditions is None:
+        return 0
+    video_files, resolved_dst = preconditions
+
+    new_san = sanitise(new_primary_fname) or ""
     if _is_extras_primary(new_primary_fname, new_san):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
@@ -990,65 +887,65 @@ def _run_deletion(
     if not _run_pre_delete_hook_and_verify(config, resolved_dst, dst_dir, new_primary_fname):
         return 0
 
+    protected = frozenset(copied_fnames) | {new_primary_fname}
+    deleted = _delete_superseded_loop(video_files, resolved_dst, protected, new_san)
+
+    _run_post_delete_hook(config, resolved_dst, dst_dir)
+    return deleted
+
+
+def _delete_superseded_loop(
+    video_files: list[str],
+    resolved_dst: pathlib.Path,
+    protected: frozenset[str],
+    new_san: str,
+) -> int:
+    """Delete files in *video_files* that are not *protected* and not extras.
+
+    A library file whose edition set differs from the new file's is
+    preserved — different cuts (Theatrical vs Director's Cut) must never be
+    deleted even when the new file has higher resolution.
+    """
+    new_editions = _edition_set(new_san)
     deleted = 0
-    for fname in _collect_superseded_files(video_files, protected, new_san, new_res_str, config):
+    for fname in video_files:
+        if fname in protected:
+            continue
+        lib_san = sanitise(fname) or ""
+        if _is_extras_file(fname, lib_san):
+            logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
+            continue
+        if new_editions != _edition_set(lib_san):
+            logger.debug(
+                "Skipping auto-delete for '{}': edition mismatch (new={}, lib={}).",
+                fname,
+                sorted(new_editions),
+                sorted(_edition_set(lib_san)),
+            )
+            continue
         lib_path = str(resolved_dst / fname)
         if delete_file(lib_path):
             logger.info("Auto-deleted superseded library file '{}'.", lib_path)
             deleted += 1
         else:
             logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
-
-    _run_post_delete_hook(config, resolved_dst, dst_dir)
     return deleted
 
 
-def _delete_superseded_files(
-    dst_dir: str,
-    dst_base: str,
-    new_primary_fname: str,
-    config: Config,
-    *,
-    copied_fnames: frozenset[str] = frozenset(),
-) -> int:
-    """Delete video files in *dst_dir* that are superseded by the newly copied file.
+def _edition_set(san: str) -> frozenset[str]:
+    """Return the set of non-theatrical special-edition tokens in *san*.
 
-    A library file is superseded if, and only if, the new file is strictly better:
-    - new resolution > library resolution, OR
-    - same resolution AND new supersession quality score > library score.
-
-    Special-edition tokens (extended, director's cut, theatrical, unrated) are
-    deliberately excluded from the score comparison — they represent different cuts
-    rather than superior quality and must not trigger deletion of alternate editions.
-
-    Files named in *copied_fnames* (all destinations written in the current torrent
-    run) are never deletion candidates, preventing cross-deletion of companion files
-    that belong to the same torrent.
-
-    Two hard-stop safety guards protect against runaway deletion:
-    1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``. Any
-       deviation (equal paths, grandchild, unrelated path) aborts immediately.
-    2. *Count cap*: if the directory holds more than
-       ``_MAX_VIDEO_FILES_IN_MOVIE_DIR`` video files, abort. This catches the
-       flat-library case where all movies live in a single directory.
-
-    Args:
-        dst_dir: Absolute path to the per-movie destination directory.
-        dst_base: Absolute path to the configured library base directory.
-            Used exclusively for the depth safety guard.
-        new_primary_fname: Filename (not full path) of the newly copied primary video.
-            Must be present in ``dst_dir``; if absent the function returns 0 without
-            deleting anything.
-        config: Application configuration.
-        copied_fnames: All destination filenames written during this torrent run.
-            Every filename in this set — including ``new_primary_fname`` — is
-            protected from deletion regardless of its quality score.
-
-    Returns:
-        Number of files successfully deleted.
+    Canonicalizes director's-cut spelling variants and excludes ``theatrical``
+    (treated as the base edition).  Returns an empty frozenset when no
+    non-theatrical token is found.
     """
-    preconditions = _check_delete_preconditions(dst_dir, dst_base, new_primary_fname)
-    if preconditions is None:
-        return 0
-    video_files, resolved_dst = preconditions
-    return _run_deletion(video_files, resolved_dst, dst_dir, new_primary_fname, config, copied_fnames)
+    tokens: set[str] = set()
+    for m in _RE_EDITION.finditer(san):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            tokens.add("directors cut")
+        else:
+            tokens.add(token)
+    return frozenset(tokens)

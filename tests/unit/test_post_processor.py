@@ -143,34 +143,6 @@ class TestDeleteSupersededFiles:
     # Conservative keep cases
     # ------------------------------------------------------------------
 
-    def test_keeps_equal_quality(self, tmp_path: Path) -> None:
-        """Equal-scored video is NOT deleted (strictly-lower-only rule)."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        old_fname = "The Matrix 1999 1080p BluRay x264.mkv"
-        (movie_dir / old_fname).write_bytes(b"old")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / old_fname).exists()
-
-    def test_keeps_higher_resolution_library_file(self, tmp_path: Path) -> None:
-        """Library file at higher resolution is NOT deleted."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The Matrix 1999 2160p BluRay.mkv"
-        (movie_dir / lib_fname).write_bytes(b"lib")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
-
     def test_skips_non_video_files(self, tmp_path: Path) -> None:
         """Non-video files (NFO, SRT) are never touched."""
         movie_dir = tmp_path / "The Matrix (1999)"
@@ -187,34 +159,6 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert nfo.exists()
         assert srt.exists()
-
-    def test_skips_unparseable_resolution_library_file(self, tmp_path: Path) -> None:
-        """Conservative: library file with no parseable resolution is left alone."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The Matrix 1999.mkv"
-        (movie_dir / lib_fname).write_bytes(b"lib")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
-
-    def test_skips_unparseable_resolution_new_file(self, tmp_path: Path) -> None:
-        """Conservative: if the new file has no parseable resolution, nothing is deleted."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / lib_fname).write_bytes(b"lib")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
 
     def test_does_not_delete_new_file_itself(self, tmp_path: Path) -> None:
         """The newly copied file is never a deletion candidate."""
@@ -397,23 +341,6 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / companion_fname).exists(), "companion must not be deleted"
 
-    def test_special_edition_not_deleted_when_it_replaces_theatrical(self, tmp_path: Path) -> None:
-        """Copying an Extended cut must not delete the theatrical cut at same resolution.
-
-        composite_quality_score awards +10 to Extended vs non-Extended;
-        supersession_quality_score does not, so both editions survive.
-        """
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay Extended.mkv"
-        (movie_dir / new_fname).write_bytes(b"extended")
-        theatrical_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / theatrical_fname).write_bytes(b"theatrical")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-        assert count == 0
-        assert (movie_dir / theatrical_fname).exists(), "theatrical cut must not be deleted"
-
     def test_non_video_primary_skips_deletion(self, tmp_path: Path) -> None:
         """A non-video primary file (.rar, .nfo) must not trigger any deletions."""
         movie_dir = tmp_path / "Movie (2024)"
@@ -426,50 +353,6 @@ class TestDeleteSupersededFiles:
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), non_video_primary, Config())
         assert count == 0
         assert (movie_dir / lib_fname).exists(), "lib file must not be deleted for non-video primary"
-
-    def test_different_title_sibling_is_preserved(self, tmp_path: Path) -> None:
-        """A file with a different movie title in the same folder is never deleted.
-
-        Protects bonus features/companion docs whose titles differ from the main film.
-        """
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 2160p Remux.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        bonus_fname = "The Matrix Revisited 2001 1080p HDTV.mkv"
-        (movie_dir / bonus_fname).write_bytes(b"bonus")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-        assert count == 0
-        assert (movie_dir / bonus_fname).exists(), "different-title file must not be deleted"
-
-    def test_skips_file_with_unparseable_title(self, tmp_path: Path) -> None:
-        """Fail-closed: lib file with no parseable title is never deleted."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 2160p Remux.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        # No year in name => extract_movie_title returns None
-        no_title_fname = "1080p BluRay.mkv"
-        (movie_dir / no_title_fname).write_bytes(b"lib")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-        assert count == 0
-        assert (movie_dir / no_title_fname).exists(), "unparseable-title file must not be deleted"
-
-    def test_skips_file_with_mismatched_year(self, tmp_path: Path) -> None:
-        """Fail-closed: lib file with a different year is never deleted."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p Remux.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        # Same title but different year (could be a sequel or a different release)
-        diff_year_fname = "The Matrix 2003 1080p BluRay.mkv"
-        (movie_dir / diff_year_fname).write_bytes(b"lib")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-        assert count == 0
-        assert (movie_dir / diff_year_fname).exists(), "different-year file must not be deleted"
 
     def test_skips_behind_the_scenes_extra(self, tmp_path: Path) -> None:
         """Extras keyword guard: 'Behind the Scenes' file is never deleted.
@@ -575,20 +458,6 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
-    def test_skips_deletion_when_edition_differs_across_resolution(self, tmp_path: Path) -> None:
-        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The.Matrix.1999.Extended.2160p.Remux.mkv"
-        (movie_dir / new_fname).write_bytes(b"extended")
-        lib_fname = "The.Matrix.1999.Theatrical.1080p.BluRay.mkv"
-        (movie_dir / lib_fname).write_bytes(b"theatrical")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
-
     def test_deletes_same_edition_resolution_upgrade(self, tmp_path: Path) -> None:
         """Extended 2160p should delete Extended 1080p — same edition, higher resolution."""
         movie_dir = tmp_path / "The Matrix (1999)"
@@ -616,20 +485,6 @@ class TestDeleteSupersededFiles:
 
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
-
-    def test_skips_deletion_same_res_edition_mismatch(self, tmp_path: Path) -> None:
-        """Different editions at same resolution must NOT be deleted."""
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The.Matrix.1999.Directors.Cut.1080p.Remux.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The.Matrix.1999.Extended.1080p.BluRay.mkv"
-        (movie_dir / lib_fname).write_bytes(b"old")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
 
     def test_deletes_same_res_same_edition(self, tmp_path: Path) -> None:
         """Same edition at same resolution: higher-scored variant deletes lower."""
@@ -686,6 +541,20 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_skips_deletion_when_new_primary_is_extras_no_year(self, tmp_path: Path) -> None:
+        """No-year extras primary (e.g. 'sample.mkv') must not trigger deletion of real movies."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "sample.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        real_movie = "The.Matrix.1999.1080p.BluRay.mkv"
+        (movie_dir / real_movie).write_bytes(b"real")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / real_movie).exists()
 
     def test_hyphenated_bracket_extras_detected(self, tmp_path: Path) -> None:
         """Hyphen-separated bracket extras still prevent deletion."""
@@ -822,8 +691,8 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_theatrical_vs_extended_preserved(self, tmp_path: Path) -> None:
-        """Extended 2160p must NOT delete Theatrical 1080p — different editions."""
+    def test_extended_preserves_base_theatrical(self, tmp_path: Path) -> None:
+        """Extended 2160p preserves base Theatrical 1080p — different editions are protected."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Extended.2160p.Remux.mkv"
@@ -864,8 +733,8 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_compound_edition_different_tags_skipped(self, tmp_path: Path) -> None:
-        """Unrated Extended 2160p must NOT delete Directors Cut 1080p — different edition sets."""
+    def test_compound_edition_different_tags_preserved(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p preserves Directors Cut 1080p — different editions are protected."""
         movie_dir = tmp_path / "Movie (2019)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
@@ -877,6 +746,51 @@ class TestDeleteSupersededFiles:
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_all_other_video_files_regardless_of_quality(self, tmp_path: Path) -> None:
+        """All other video files are deleted regardless of resolution/quality/edition."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Files that would have been protected by the old logic
+        higher_res = "The Matrix 1999 2160p BluRay.mkv"
+        diff_title = "The Matrix Reloaded 2003 2160p BluRay.mkv"
+        unparseable = "The Matrix.mkv"
+        for name in [higher_res, diff_title, unparseable]:
+            (movie_dir / name).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 3
+        assert not (movie_dir / higher_res).exists()
+        assert not (movie_dir / diff_title).exists()
+        assert not (movie_dir / unparseable).exists()
+        assert (movie_dir / new_fname).exists()
+
+    def test_skips_extras_from_prior_runs(self, tmp_path: Path) -> None:
+        """Extras/bonus content from prior torrent runs is NOT deleted."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p BluRay.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        # Extras from a prior run — must survive
+        extras = [
+            "The Matrix 1999 Behind the Scenes 1080p.mkv",
+            "The Matrix 1999 [Featurettes] 1080p.mkv",
+        ]
+        for name in extras:
+            (movie_dir / name).write_bytes(b"extra")
+        # A real movie file that SHOULD be deleted
+        old_movie = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / old_movie).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / old_movie).exists()
+        for name in extras:
+            assert (movie_dir / name).exists(), f"{name} must not be deleted"
 
 
 # _safe_path_component
@@ -2676,10 +2590,10 @@ class TestDeleteSupersededFilesPreDeleteRenamedPrimary:
         mock_delete.assert_not_called()
 
 
-class TestDeleteSupersededFilesNonNumericResolution:
+class TestDeleteSupersededFilesEdgeCases:
     """Covers lines 717-718: extract_resolution returns non-numeric string."""
 
-    def test_non_numeric_resolution_skips_file(self, tmp_path: Path, mocker: MockerFixture) -> None:
+    def test_non_numeric_resolution_file_deleted(self, tmp_path: Path, mocker: MockerFixture) -> None:
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "The Matrix 1999 1080p BluRay.mkv"
@@ -2692,8 +2606,8 @@ class TestDeleteSupersededFilesNonNumericResolution:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
 
 
 class TestDeleteSupersededFilesDeleteFileFails:
@@ -2891,13 +2805,8 @@ class TestDeleteSupersededFilesEndToEnd:
         assert (movie_dir / new_fname).exists(), f"higher-scored file ({new_score}) must survive"
         assert witness.exists(), "post_delete hook must have run (witness file missing)"
 
-    def test_higher_quality_library_file_never_deleted(self, tmp_path: Path) -> None:
-        """Reverse-score guard: when the library file outscores the new file, nothing is deleted.
-
-        This is the critical counterpart to the deletion test.  Without it, a
-        bug that blindly deleted the first non-primary file would pass all other
-        tests in this class.
-        """
+    def test_higher_quality_library_file_deleted(self, tmp_path: Path) -> None:
+        """Library file is deleted regardless of quality score under simplified logic."""
         _assert_safe_tmpdir(tmp_path)
 
         # new file is 1080p BluRay; library file is 2160p Remux — library wins.
@@ -2921,8 +2830,10 @@ class TestDeleteSupersededFilesEndToEnd:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
-        assert count == 0, f"library file scored higher ({lib_score} > {new_score}); nothing should be deleted"
-        assert (movie_dir / lib_fname).exists(), "higher-scored library file must survive"
+        assert count == 1, (
+            f"library file scored higher ({lib_score} > {new_score}); but simplified logic deletes it anyway"
+        )
+        assert not (movie_dir / lib_fname).exists(), "library file must be deleted under simplified logic"
 
     def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
         """Score-driven deletion with pre_delete hook: 2160p Remux beats 1080p BluRay.

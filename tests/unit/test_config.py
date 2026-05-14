@@ -26,6 +26,7 @@ from movarr.config import (
     _migrate_v216_to_v217,
     _migrate_v217_to_v218,
     _migrate_v218_to_v219,
+    _strip_path_basename,
     load_config,
 )
 
@@ -1059,6 +1060,7 @@ class TestCreateDefaultConfigDirectory:
         raw = yaml.safe_load(config_file.read_text())
         assert raw["general"]["log_path"] == "logs"
         assert raw["general"]["db_path"] == "db"
+        assert raw["general"]["pid_path"] == "pids"
 
 
 class TestLoadConfigDirectoryPath:
@@ -1074,7 +1076,7 @@ class TestLoadConfigDirectoryPath:
         assert config.general.config_version == "2.19.0"
         assert config.general.log_path == "logs"
         assert config.general.db_path == "db"
-        assert config.general.pid_path == "configs"
+        assert config.general.pid_path == "pids"
 
     def test_load_config_warns_on_unknown_keys(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """load_config logs a warning when the config contains unknown top-level keys."""
@@ -1409,6 +1411,61 @@ class TestMigrationV218ToV219:
         raw: dict = {"general": {"config_version": "2.18.0", "log_path": "logs/movarr.log/"}}
         result = _migrate_v218_to_v219(raw)
         assert result["general"]["log_path"] == "logs"
+
+
+class TestStripPathBasename:
+    """Tests for _strip_path_basename — the helper extracted from _migrate_v218_to_v219."""
+
+    def test_strips_basename_with_separator(self) -> None:
+        """'logs/movarr.log' strips to 'logs'."""
+        assert _strip_path_basename("logs/movarr.log", "movarr.log") == "logs"
+
+    def test_no_basename_unchanged(self) -> None:
+        """'custom_logs' (no basename) returns unchanged."""
+        assert _strip_path_basename("custom_logs", "movarr.log") == "custom_logs"
+
+    def test_root_path_preserves_separator(self) -> None:
+        """'/movarr.log' migrates to '/' not empty."""
+        assert _strip_path_basename("/movarr.log", "movarr.log") == "/"
+
+    def test_bare_filename_strips_to_empty(self) -> None:
+        """Bare 'movarr.log' strips to ''."""
+        assert _strip_path_basename("movarr.log", "movarr.log") == ""
+
+    def test_substring_not_stripped(self) -> None:
+        """'notmovarr.log' (substring) returns unchanged."""
+        assert _strip_path_basename("notmovarr.log", "movarr.log") == "notmovarr.log"
+
+    def test_trailing_slash_normalised(self) -> None:
+        """'logs/movarr.log/' trailing slash stripped."""
+        assert _strip_path_basename("logs/movarr.log/", "movarr.log") == "logs"
+
+    def test_windows_backslash_path(self) -> None:
+        """'logs\\movarr.log' strips to 'logs'."""
+        assert _strip_path_basename("logs\\movarr.log", "movarr.log") == "logs"
+
+    def test_windows_backslash_root(self) -> None:
+        """'\\movarr.log' strips to '\\' (root separator preserved)."""
+        result = _strip_path_basename("\\movarr.log", "movarr.log")
+        assert result == "\\"
+
+    def test_windows_drive_root_preserved(self) -> None:
+        """'C:\\movarr.log' strips to 'C:\\' (drive root separator preserved)."""
+        result = _strip_path_basename("C:\\movarr.log", "movarr.log")
+        # stripped == 'C:', len 2 with [1] == ':' → root case, returns 'C:\'
+        assert result == "C:\\"
+
+    def test_path_with_only_separator_prefix(self) -> None:
+        """'/something/movarr.log' strips to '/something'."""
+        assert _strip_path_basename("/something/movarr.log", "movarr.log") == "/something"
+
+    def test_basename_at_end_without_separator_unchanged(self) -> None:
+        """'somemovarr.log' (basename embedded, not component) unchanged."""
+        assert _strip_path_basename("somemovarr.log", "movarr.log") == "somemovarr.log"
+
+    def test_single_char_directory(self) -> None:
+        """'a/movarr.log' strips to 'a' (single-char dir, not root)."""
+        assert _strip_path_basename("a/movarr.log", "movarr.log") == "a"
 
 
 class TestStripNullValues:

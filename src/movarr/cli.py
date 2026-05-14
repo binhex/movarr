@@ -22,6 +22,8 @@ except PackageNotFoundError:
 def _apply_general_overrides(config: Config, overrides: dict[str, object]) -> None:
     if overrides.get("db_path") is not None:
         config.general.db_path = str(overrides["db_path"])
+    if overrides.get("pid_path") is not None:
+        config.general.pid_path = str(overrides["pid_path"])
     if overrides.get("library_path_list") is not None:
         config.general.library_path_list = [
             p.strip() for p in str(overrides["library_path_list"]).split(",") if p.strip()
@@ -100,6 +102,14 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     show_default=False,
     metavar="<dir>",
     help="Override the database directory from config.",
+)
+@click.option(
+    "--pid-path",
+    type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
+    default=None,
+    show_default=False,
+    metavar="<dir>",
+    help="Override the PID file directory from config.",
 )
 @click.option(
     "--library-path-list",
@@ -207,6 +217,7 @@ def cli(
     log_path: str | None,
     log_level: str | None,
     db_path: str | None,
+    pid_path: str | None,
     library_path_list: str | None,
     qbt_host: str | None,
     qbt_port: int | None,
@@ -239,6 +250,7 @@ def cli(
     _apply_cli_overrides(
         config,
         db_path=db_path,
+        pid_path=pid_path,
         library_path_list=library_path_list,
         qbt_host=qbt_host,
         qbt_port=qbt_port,

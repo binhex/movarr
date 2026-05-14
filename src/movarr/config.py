@@ -269,6 +269,38 @@ def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _strip_path_basename(value: str, basename: str) -> str:
+    """Strip *basename* from *value* if it is a complete path-component suffix.
+
+    Handles both Unix and Windows separators.  Returns the stripped value.
+
+    Examples:
+        _strip_path_basename("logs/movarr.log", "movarr.log") -> "logs"
+        _strip_path_basename("/movarr.log", "movarr.log")     -> "/"
+        _strip_path_basename("movarr.log", "movarr.log")      -> ""
+        _strip_path_basename("logs", "movarr.log")            -> "logs"
+    """
+    normalised = value.rstrip("/\\")
+    # Find a separator-prefixed basename at end.
+    stripped = normalised
+    for sep in ("/", "\\"):
+        if normalised.endswith(sep + basename):
+            stripped = normalised[: -len(sep) - len(basename)].rstrip("/\\")
+            break
+
+    if stripped != normalised:
+        # Root path (empty, "/", "\\", or "C:") — preserve the separator.
+        if not stripped or (len(stripped) == 2 and stripped[1] == ":"):
+            return normalised[: -len(basename)]
+        return stripped
+
+    if normalised.endswith(basename):
+        prefix = normalised[: -len(basename)]
+        if not prefix or prefix[-1] in ("/", "\\"):
+            return prefix.rstrip("/\\")
+    return value
+
+
 def _migrate_v218_to_v219(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.18.0 -> v2.19.0: strip hardcoded filenames from path fields.
 
@@ -283,27 +315,7 @@ def _migrate_v218_to_v219(raw: dict[str, Any]) -> dict[str, Any]:
     ]:
         value = general.get(key)
         if isinstance(value, str):
-            # Normalise trailing separators before checking.
-            normalised = value.rstrip("/\\")
-            sep_basename = "/" + basename
-            bsl_basename = "\\" + basename
-            if normalised.endswith(sep_basename):
-                stripped = normalised[: -len(sep_basename)].rstrip("/\\")
-            elif normalised.endswith(bsl_basename):
-                stripped = normalised[: -len(bsl_basename)].rstrip("/\\")
-            else:
-                stripped = normalised
-
-            if stripped != normalised:  # matched with leading separator
-                if not stripped or (len(stripped) == 2 and stripped[1] == ":"):
-                    # Root path like "/" or "C:" — preserve the separator
-                    stripped = normalised[: -len(basename)]
-                general[key] = stripped
-            elif normalised.endswith(basename):
-                prefix = normalised[: -len(basename)]
-                # Only strip if basename is a complete path component.
-                if not prefix or prefix[-1] in ("/", "\\"):
-                    general[key] = prefix.rstrip("/\\")
+            general[key] = _strip_path_basename(value, basename)
     general["config_version"] = "2.19.0"
     return raw
 
@@ -368,7 +380,7 @@ class GeneralConfig(BaseModel):
     log_path: str = "logs"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db"
-    pid_path: str = "configs"
+    pid_path: str = "pids"
 
     @field_validator("daemon_mode")
     @classmethod

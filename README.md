@@ -127,7 +127,7 @@ automatically on first run. The file is divided into the sections below.
 | `log_path` | Directory for the log file (`movarr.log` is created inside). Empty string disables file logging. Overridden by `--log-path`. | `"logs"` |
 | `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path-list`. | `[]` |
 | `db_path` | Directory for the SQLite history database (`movarr.db` is created inside). Overridden by `--db-path`. | `"db"` |
-| `pid_path` | Directory for the PID file (`movarr.pid` is created inside). Empty string disables PID file creation. | `"configs"` |
+| `pid_path` | Directory for the PID file (`movarr.pid` is created inside). Empty string disables PID file creation. Overridden by `--pid-path`. | `"pids"` |
 
 ### `schedule`
 
