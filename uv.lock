@@ -564,7 +564,7 @@ wheels = [
 
 [[package]]
 name = "movarr"
-version = "1.2.3"
+version = "1.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "apprise" },
@@ -623,7 +623,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "pytest-crap", git = "https://github.com/binhex/pytest-crap.git?rev=main" },
+    { name = "pytest-crap", git = "https://github.com/binhex/pytest-crap.git?rev=v0.3.1" },
     { name = "pytest-mock", specifier = ">=3.15.1" },
     { name = "types-pyyaml", specifier = ">=6.0.0" },
     { name = "types-requests", specifier = ">=2.31.0" },
@@ -880,8 +880,8 @@ wheels = [
 
 [[package]]
 name = "pytest-crap"
-version = "0.3.0"
-source = { git = "https://github.com/binhex/pytest-crap.git?rev=main#463fe000eb97f149606180467ad8b1720838ce52" }
+version = "0.3.1"
+source = { git = "https://github.com/binhex/pytest-crap.git?rev=v0.3.1#6945824b6546af6f9a4430c8f773146feca9bd31" }
 dependencies = [
     { name = "coverage" },
     { name = "pytest" },

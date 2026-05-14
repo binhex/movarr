@@ -2816,7 +2816,9 @@ class TestDeleteSupersededFilesEndToEnd:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
-        assert count == 1, f"library file scored higher ({lib_score} > {new_score}); but simplified logic deletes it anyway"
+        assert count == 1, (
+            f"library file scored higher ({lib_score} > {new_score}); but simplified logic deletes it anyway"
+        )
         assert not (movie_dir / lib_fname).exists(), "library file must be deleted under simplified logic"
 
     def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
