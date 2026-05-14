@@ -172,6 +172,22 @@ class TestNormaliseForCompare:
         assert without_apos is not None
         assert with_apos == without_apos, f"{with_apos!r} != {without_apos!r}"
 
+    def test_accented_characters_normalise_to_ascii_equivalents(self) -> None:
+        """Accented characters normalise same as their ASCII equivalents."""
+        accented = normalise_for_compare("Léon")
+        ascii_ver = normalise_for_compare("Leon")
+        assert accented is not None
+        assert ascii_ver is not None
+        assert accented == ascii_ver, f"{accented!r} != {ascii_ver!r}"
+
+    def test_multiple_accented_characters_normalise_correctly(self) -> None:
+        """Multiple accented chars in a title all normalise to ASCII equivalents."""
+        accented = normalise_for_compare("Amélie")
+        ascii_ver = normalise_for_compare("Amelie")
+        assert accented is not None
+        assert ascii_ver is not None
+        assert accented == ascii_ver, f"{accented!r} != {ascii_ver!r}"
+
 
 # build_sqlite_pattern
 
