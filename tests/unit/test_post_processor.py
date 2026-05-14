@@ -677,8 +677,8 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_theatrical_vs_extended_preserved(self, tmp_path: Path) -> None:
-        """Extended 2160p deletes Theatrical 1080p — simplified rule deletes all other video files."""
+    def test_extended_preserves_base_theatrical(self, tmp_path: Path) -> None:
+        """Extended 2160p preserves base Theatrical 1080p — different editions are protected."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Extended.2160p.Remux.mkv"
@@ -688,8 +688,8 @@ class TestDeleteSupersededFiles:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 1
-        assert not (movie_dir / lib_fname).exists()
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
 
     def test_theatrical_extended_supersedes_lower_quality_extended(self, tmp_path: Path) -> None:
         """Theatrical Extended 2160p Remux should delete Extended 1080p BluRay — both Extended."""
@@ -719,8 +719,8 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_compound_edition_different_tags_skipped(self, tmp_path: Path) -> None:
-        """Unrated Extended 2160p deletes Directors Cut 1080p — simplified rule deletes all other video files."""
+    def test_compound_edition_different_tags_preserved(self, tmp_path: Path) -> None:
+        """Unrated Extended 2160p preserves Directors Cut 1080p — different editions are protected."""
         movie_dir = tmp_path / "Movie (2019)"
         movie_dir.mkdir()
         new_fname = "Movie.2019.Unrated.Extended.2160p.Remux.mkv"
@@ -730,8 +730,8 @@ class TestDeleteSupersededFiles:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 1
-        assert not (movie_dir / lib_fname).exists()
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
 
     def test_deletes_all_other_video_files_regardless_of_quality(self, tmp_path: Path) -> None:
         """All other video files are deleted regardless of resolution/quality/edition."""
@@ -2576,10 +2576,10 @@ class TestDeleteSupersededFilesPreDeleteRenamedPrimary:
         mock_delete.assert_not_called()
 
 
-class TestDeleteSupersededFilesNonNumericResolution:
+class TestDeleteSupersededFilesEdgeCases:
     """Covers lines 717-718: extract_resolution returns non-numeric string."""
 
-    def test_non_numeric_resolution_skips_file(self, tmp_path: Path, mocker: MockerFixture) -> None:
+    def test_non_numeric_resolution_file_deleted(self, tmp_path: Path, mocker: MockerFixture) -> None:
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "The Matrix 1999 1080p BluRay.mkv"
@@ -2791,7 +2791,7 @@ class TestDeleteSupersededFilesEndToEnd:
         assert (movie_dir / new_fname).exists(), f"higher-scored file ({new_score}) must survive"
         assert witness.exists(), "post_delete hook must have run (witness file missing)"
 
-    def test_higher_quality_library_file_never_deleted(self, tmp_path: Path) -> None:
+    def test_higher_quality_library_file_deleted(self, tmp_path: Path) -> None:
         """Library file is deleted regardless of quality score under simplified logic."""
         _assert_safe_tmpdir(tmp_path)
 

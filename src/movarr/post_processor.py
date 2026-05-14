@@ -51,6 +51,11 @@ _EXTRAS_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
+# Special-edition tokens — used to prevent cross-edition deletion (e.g. Theatrical
+# must not delete Director's Cut even when resolution differs).
+_RE_EDITION = re.compile(
+    r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE
+)
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -742,7 +747,14 @@ def _is_extras_file(fname: str, lib_san: str) -> bool:
     """Return True if *fname* looks like extras/bonus content."""
     lib_after = extract_after_year(lib_san) or ""
     lib_bracket = " ".join(_BRACKET_RE.findall(fname))
-    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())))
+    # Also check the full sanitised name so that extras keywords in filenames
+    # without a parseable year (e.g. "sample.mkv") are still detected.
+    full_match = _EXTRAS_RE.search(lib_san) if not lib_after else None
+    return bool(
+        _EXTRAS_RE.search(lib_after)
+        or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower()))
+        or full_match
+    )
 
 
 def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
@@ -878,7 +890,7 @@ def _delete_superseded_files(
         return 0
 
     protected = frozenset(copied_fnames) | {new_primary_fname}
-    deleted = _delete_superseded_loop(video_files, resolved_dst, protected)
+    deleted = _delete_superseded_loop(video_files, resolved_dst, protected, new_san)
 
     _run_post_delete_hook(config, resolved_dst, dst_dir)
     return deleted
@@ -888,14 +900,30 @@ def _delete_superseded_loop(
     video_files: list[str],
     resolved_dst: pathlib.Path,
     protected: frozenset[str],
+    new_san: str,
 ) -> int:
-    """Delete files in *video_files* that are not *protected* and not extras."""
+    """Delete files in *video_files* that are not *protected* and not extras.
+
+    A library file whose edition set differs from the new file's is
+    preserved — different cuts (Theatrical vs Director's Cut) must never be
+    deleted even when the new file has higher resolution.
+    """
+    new_editions = _edition_set(new_san)
     deleted = 0
     for fname in video_files:
         if fname in protected:
             continue
-        if _is_extras_file(fname, sanitise(fname) or ""):
+        lib_san = sanitise(fname) or ""
+        if _is_extras_file(fname, lib_san):
             logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
+            continue
+        if new_editions and _edition_set(lib_san) != new_editions:
+            logger.debug(
+                "Skipping auto-delete for '{}': edition mismatch (new={}, lib={}).",
+                fname,
+                sorted(new_editions),
+                sorted(_edition_set(lib_san)),
+            )
             continue
         lib_path = str(resolved_dst / fname)
         if delete_file(lib_path):
@@ -904,3 +932,22 @@ def _delete_superseded_loop(
         else:
             logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
     return deleted
+
+
+def _edition_set(san: str) -> frozenset[str]:
+    """Return the set of non-theatrical special-edition tokens in *san*.
+
+    Canonicalizes director's-cut spelling variants and excludes ``theatrical``
+    (treated as the base edition).  Returns an empty frozenset when no
+    non-theatrical token is found.
+    """
+    tokens: set[str] = set()
+    for m in _RE_EDITION.finditer(san):
+        token = m.group(0).lower()
+        if token == "theatrical":
+            continue
+        if "director" in token and "cut" in token:
+            tokens.add("directors cut")
+        else:
+            tokens.add(token)
+    return frozenset(tokens)
