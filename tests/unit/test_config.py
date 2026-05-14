@@ -1452,7 +1452,7 @@ class TestStripPathBasename:
     def test_windows_drive_root_preserved(self) -> None:
         """'C:\\movarr.log' strips to 'C:\\' (drive root separator preserved)."""
         result = _strip_path_basename("C:\\movarr.log", "movarr.log")
-        # stripped == '' after rstrip("/\\"), length 2 check fails, falls through to basename check
+        # stripped == 'C:', len 2 with [1] == ':' → root case, returns 'C:\'
         assert result == "C:\\"
 
     def test_path_with_only_separator_prefix(self) -> None:
@@ -1462,6 +1462,10 @@ class TestStripPathBasename:
     def test_basename_at_end_without_separator_unchanged(self) -> None:
         """'somemovarr.log' (basename embedded, not component) unchanged."""
         assert _strip_path_basename("somemovarr.log", "movarr.log") == "somemovarr.log"
+
+    def test_single_char_directory(self) -> None:
+        """'a/movarr.log' strips to 'a' (single-char dir, not root)."""
+        assert _strip_path_basename("a/movarr.log", "movarr.log") == "a"
 
 
 class TestStripNullValues:

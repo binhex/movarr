@@ -290,7 +290,7 @@ def _strip_path_basename(value: str, basename: str) -> str:
 
     if stripped != normalised:
         # Root path (empty, "/", "\\", or "C:") — preserve the separator.
-        if len(stripped) <= 1 or (len(stripped) == 2 and stripped[1] == ":"):
+        if not stripped or (len(stripped) == 2 and stripped[1] == ":"):
             return normalised[: -len(basename)]
         return stripped
 
