@@ -78,10 +78,10 @@ All options are optional overrides. When an option is omitted, the value from `m
 
 | Option | Description | Default |
 | ------ | ----------- | ------- |
-| `--config-path <path>` | Path to the YAML configuration file. | `configs/movarr.yml` |
-| `--log-path <path>` | Override the log file path from config. | *(from config)* |
+| `--config-path <dir>` | Directory containing `movarr.yml`. | `configs` |
+| `--log-path <dir>` | Override the log directory from config. The file `movarr.log` is created inside. | *(from config)* |
 | `--log-level <level>` | Override the console log level. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. Useful for temporary debugging without editing the config file. | *(from config)* |
-| `--db-path <path>` | Override the database file path from config. | *(from config)* |
+| `--db-path <dir>` | Override the database directory from config. The file `movarr.db` is created inside. | *(from config)* |
 | `--library-path-list <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
 | `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
@@ -113,7 +113,7 @@ All options are optional overrides. When an option is omitted, the value from `m
 
 ## Configuration
 
-All behaviour is controlled by a YAML file (`configs/movarr.yml` by default). A default config is created
+All behaviour is controlled by a YAML file inside the config directory (`configs/movarr.yml` by default). A default config is created
 automatically on first run. The file is divided into the sections below.
 
 ### `general`
@@ -124,10 +124,10 @@ automatically on first run. The file is divided into the sections below.
 | `daemon_mode` | `foreground` or `background`. Overridden by `--daemon` CLI flag. | `foreground` |
 | `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). Overridden by `--log-level`. | `info` |
 | `log_level_file` | File logging level. | `info` |
-| `log_path` | Path to the log file. Empty string disables file logging. Overridden by `--log-path`. | `""` |
+| `log_path` | Directory for the log file (`movarr.log` is created inside). Empty string disables file logging. Overridden by `--log-path`. | `"logs"` |
 | `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path-list`. | `[]` |
-| `db_path` | Path to the SQLite history database. Overridden by `--db-path`. | `db/movarr.db` |
-| `pid_path` | Path to the PID file written in daemon mode. Empty string disables PID file creation. | `""` |
+| `db_path` | Directory for the SQLite history database (`movarr.db` is created inside). Overridden by `--db-path`. | `"db"` |
+| `pid_path` | Directory for the PID file (`movarr.pid` is created inside). Empty string disables PID file creation. | `"configs"` |
 
 ### `schedule`
 

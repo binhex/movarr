@@ -16,8 +16,14 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.18.0"
+_CONFIG_VERSION = "2.19.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
+
+# Hardcoded filenames constructed from directory paths at runtime.
+_LOG_FILENAME = "movarr.log"
+_DB_FILENAME = "movarr.db"
+_PID_FILENAME = "movarr.pid"
+_CONFIG_FILENAME = "movarr.yml"
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -112,6 +118,11 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         [
             (("post_process", "hooks", "hook_timeout_mins"), 5.0),
         ],
+    ),
+    (
+        "2.18.0",
+        "2.19.0",
+        [],  # hand-written migration: strips filenames from path fields
     ),
 ]
 
@@ -258,6 +269,45 @@ def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v218_to_v219(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.18.0 -> v2.19.0: strip hardcoded filenames from path fields.
+
+    log_path, db_path, and pid_path become directory-only; the filename portion
+    (movarr.log, movarr.db, movarr.pid) is now hardcoded in the application.
+    """
+    general = raw.setdefault("general", {})
+    for key, basename in [
+        ("log_path", "movarr.log"),
+        ("db_path", "movarr.db"),
+        ("pid_path", "movarr.pid"),
+    ]:
+        value = general.get(key)
+        if isinstance(value, str):
+            # Normalise trailing separators before checking.
+            normalised = value.rstrip("/\\")
+            sep_basename = "/" + basename
+            bsl_basename = "\\" + basename
+            if normalised.endswith(sep_basename):
+                stripped = normalised[: -len(sep_basename)].rstrip("/\\")
+            elif normalised.endswith(bsl_basename):
+                stripped = normalised[: -len(bsl_basename)].rstrip("/\\")
+            else:
+                stripped = normalised
+
+            if stripped != normalised:  # matched with leading separator
+                if not stripped or (len(stripped) == 2 and stripped[1] == ":"):
+                    # Root path like "/" or "C:" — preserve the separator
+                    stripped = normalised[: -len(basename)]
+                general[key] = stripped
+            elif normalised.endswith(basename):
+                prefix = normalised[: -len(basename)]
+                # Only strip if basename is a complete path component.
+                if not prefix or prefix[-1] in ("/", "\\"):
+                    general[key] = prefix.rstrip("/\\")
+    general["config_version"] = "2.19.0"
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Bind table-generated functions to module-level names (import compatibility)
 # ---------------------------------------------------------------------------
@@ -299,6 +349,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.15.0": _migrate_v215_to_v216,
     "2.16.0": _migrate_v216_to_v217,
     "2.17.0": _migrate_v217_to_v218,
+    "2.18.0": _migrate_v218_to_v219,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -314,10 +365,10 @@ class GeneralConfig(BaseModel):
     daemon_mode: str = "foreground"
     log_level_console: str = "info"
     log_level_file: str = "info"
-    log_path: str = "logs/movarr.log"
+    log_path: str = "logs"
     library_path_list: list[str] = Field(default_factory=list)
-    db_path: str = "db/movarr.db"
-    pid_path: str = "configs/movarr.pid"
+    db_path: str = "db"
+    pid_path: str = "configs"
 
     @field_validator("daemon_mode")
     @classmethod
@@ -774,8 +825,14 @@ def _default_config_dict() -> dict[str, Any]:
 
 
 def create_default_config(config_path: str | Path) -> None:
-    """Write a default config.yml to *config_path* if it does not already exist."""
+    """Write a default ``movarr.yml`` to *config_path* if it does not already exist.
+
+    If *config_path* has a file extension it is used as-is.  Otherwise it is
+    treated as a directory and ``movarr.yml`` is created inside.
+    """
     path = Path(config_path)
+    if not path.suffix:  # directory — construct filename
+        path = path / _CONFIG_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return
@@ -786,11 +843,13 @@ def create_default_config(config_path: str | Path) -> None:
 def load_config(config_path: str | Path) -> Config:
     """Load, validate, and return the application config.
 
+    If *config_path* is a directory, ``movarr.yml`` is created inside it.
     Creates a default config file if none exists. Merges the on-disk file
     with defaults so that missing optional keys are always present.
 
     Args:
-        config_path: Path to ``config.yml``.
+        config_path: Path to the config directory or file.  If a directory,
+            ``movarr.yml`` is used inside it.
 
     Returns:
         A fully validated :class:`Config` instance.
@@ -799,6 +858,8 @@ def load_config(config_path: str | Path) -> Config:
         ValueError: If the config file contains invalid values.
     """
     path = Path(config_path)
+    if not path.suffix:  # directory — construct filename
+        path = path / _CONFIG_FILENAME
 
     if not path.exists():
         create_default_config(path)

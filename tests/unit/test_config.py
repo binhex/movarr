@@ -25,6 +25,7 @@ from movarr.config import (
     _migrate_v215_to_v216,
     _migrate_v216_to_v217,
     _migrate_v217_to_v218,
+    _migrate_v218_to_v219,
     load_config,
 )
 
@@ -174,7 +175,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -199,14 +200,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -217,7 +218,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -228,7 +229,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -239,7 +240,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -400,7 +401,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -439,7 +440,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -459,7 +460,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -474,7 +475,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -492,7 +493,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -504,7 +505,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.18.0"
+        assert cfg.general.config_version == "2.19.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -906,12 +907,12 @@ class TestMigrationV216ToV217:
         )
         config = load_config(p)
         # Runtime version bumped
-        assert config.general.config_version == "2.18.0"
+        assert config.general.config_version == "2.19.0"
         # hook_timeout_mins added
         assert config.post_process.hooks.hook_timeout_mins == 5.0
         # Migration persisted to disk
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["general"]["config_version"] == "2.18.0"
+        assert on_disk["general"]["config_version"] == "2.19.0"
         assert on_disk["post_process"]["hooks"].get("hook_timeout_mins") == 5.0
 
 
@@ -1042,6 +1043,47 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
         clean: dict[str, Any] = {"a": 1, "b": {"c": "hello"}, "d": [1, 2, 3]}
         assert _has_none_values(clean) is False
+
+
+class TestCreateDefaultConfigDirectory:
+    """create_default_config accepts directory path and creates movarr.yml inside."""
+
+    def test_create_default_config_from_directory(self, tmp_path: Path) -> None:
+        """When config_path is a directory, movarr.yml is created inside it."""
+        from movarr.config import create_default_config
+
+        config_dir = tmp_path / "my_configs"
+        create_default_config(str(config_dir))
+        config_file = config_dir / "movarr.yml"
+        assert config_file.exists()
+        raw = yaml.safe_load(config_file.read_text())
+        assert raw["general"]["log_path"] == "logs"
+        assert raw["general"]["db_path"] == "db"
+
+
+class TestLoadConfigDirectoryPath:
+    """load_config accepts a directory path and constructs movarr.yml inside."""
+
+    def test_load_config_from_directory(self, tmp_path: Path) -> None:
+        """When config_path is a directory, movarr.yml is created inside it."""
+        config_dir = tmp_path / "configs"
+        config_dir.mkdir()
+        config = load_config(str(config_dir))
+        assert isinstance(config, Config)
+        assert (config_dir / "movarr.yml").exists()
+        assert config.general.config_version == "2.19.0"
+        assert config.general.log_path == "logs"
+        assert config.general.db_path == "db"
+        assert config.general.pid_path == "configs"
+
+    def test_load_config_warns_on_unknown_keys(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """load_config logs a warning when the config contains unknown top-level keys."""
+        p = tmp_path / "config.yml"
+        p.write_text("general:\n  config_version: 2.19.0\nunknown_section:\n  foo: bar\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        config = load_config(str(p))
+        assert isinstance(config, Config)
+        mock_warning.assert_called_once()
 
 
 class TestLoadConfigEdgeCases:
@@ -1198,7 +1240,7 @@ class TestGeneralNull:
         p.write_text("general:\n")
         config = load_config(p)
         assert isinstance(config, Config)
-        assert config.general.config_version == "2.18.0"
+        assert config.general.config_version == "2.19.0"
 
 
 class TestMigrationV216ToV217Isolated:
@@ -1307,6 +1349,66 @@ class TestMigrationV217ToV218:
         result = _migrate_v217_to_v218(raw)
         assert isinstance(result["post_process"]["hooks"], dict)
         assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+
+
+class TestMigrationV218ToV219:
+    """Tests for the v2.18.0 -> v2.19.0 migration (paths → directories)."""
+
+    def test_strips_filenames_from_paths(self) -> None:
+        """Migration strips movarr.log, movarr.db, movarr.pid suffixes from paths."""
+        raw: dict = {
+            "general": {
+                "config_version": "2.18.0",
+                "log_path": "logs/movarr.log",
+                "db_path": "db/movarr.db",
+                "pid_path": "configs/movarr.pid",
+            },
+        }
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == "logs"
+        assert result["general"]["db_path"] == "db"
+        assert result["general"]["pid_path"] == "configs"
+        assert result["general"]["config_version"] == "2.19.0"
+
+    def test_handles_paths_without_suffix(self) -> None:
+        """Paths already without the hardcoded suffix are left unchanged."""
+        raw: dict = {
+            "general": {
+                "config_version": "2.18.0",
+                "log_path": "custom_logs",
+                "db_path": "/var/data",
+                "pid_path": "run",
+            },
+        }
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == "custom_logs"
+        assert result["general"]["db_path"] == "/var/data"
+        assert result["general"]["pid_path"] == "run"
+        assert result["general"]["config_version"] == "2.19.0"
+
+    def test_root_path_preserved(self) -> None:
+        """/movarr.log migrates to /, not empty string."""
+        raw: dict = {"general": {"config_version": "2.18.0", "log_path": "/movarr.log"}}
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == "/"
+
+    def test_bare_filename_strips_to_empty(self) -> None:
+        """Bare 'movarr.log' (just a filename) strips to empty string."""
+        raw: dict = {"general": {"config_version": "2.18.0", "log_path": "movarr.log"}}
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == ""
+
+    def test_substring_not_stripped(self) -> None:
+        """A path like 'notmovarr.log' (substring match) is NOT stripped."""
+        raw: dict = {"general": {"config_version": "2.18.0", "log_path": "logs/notmovarr.log"}}
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == "logs/notmovarr.log"
+
+    def test_trailing_slash_normalised(self) -> None:
+        """'logs/movarr.log/' (trailing slash) has the basename stripped."""
+        raw: dict = {"general": {"config_version": "2.18.0", "log_path": "logs/movarr.log/"}}
+        result = _migrate_v218_to_v219(raw)
+        assert result["general"]["log_path"] == "logs"
 
 
 class TestStripNullValues:

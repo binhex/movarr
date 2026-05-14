@@ -40,8 +40,10 @@ __all__ = ["run", "run_once"]
 
 def _cleanup_pid_file(pid_path: str | None) -> None:
     """Remove the PID file at *pid_path* if it exists."""
-    if pid_path and os.path.exists(pid_path):
-        os.unlink(pid_path)
+    if pid_path:
+        pid_file = pid_path if os.path.splitext(pid_path)[1] else os.path.join(pid_path, "movarr.pid")
+        if os.path.exists(pid_file):
+            os.unlink(pid_file)
 
 
 def run(config: Config) -> None:
@@ -268,11 +270,14 @@ def _log_next_run(scheduler: BackgroundScheduler, job_id: str) -> None:
 
 def _write_pid(pid_path: str) -> None:
     try:
-        pid_dir = os.path.dirname(pid_path)
+        # If pid_path has an extension, treat as a full file path (backward compat).
+        # Otherwise, treat as a directory and create movarr.pid inside.
+        pid_file = pid_path if os.path.splitext(pid_path)[1] else os.path.join(pid_path, "movarr.pid")
+        pid_dir = os.path.dirname(pid_file)
         if pid_dir:
             os.makedirs(pid_dir, exist_ok=True)
-        with open(pid_path, "w", encoding="utf-8") as f:
+        with open(pid_file, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
-        logger.debug("PID {} written to '{}'.", os.getpid(), pid_path)
+        logger.debug("PID {} written to '{}'.", os.getpid(), pid_file)
     except OSError:
-        logger.warning("Could not write PID file '{}'.", pid_path)
+        logger.warning("Could not write PID file '{}'.", pid_file)
