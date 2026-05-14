@@ -71,19 +71,19 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
 @click.command()
 @click.option(
     "--config-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
-    default="configs/movarr.yml",
+    type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
+    default="configs",
     show_default=True,
-    metavar="<path>",
-    help="Path to YAML configuration file.",
+    metavar="<dir>",
+    help="Directory containing movarr.yml configuration file.",
 )
 @click.option(
     "--log-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
     default=None,
     show_default=False,
-    metavar="<path>",
-    help="Override the log file path from config.",
+    metavar="<dir>",
+    help="Override the log directory from config.",
 )
 @click.option(
     "--log-level",
@@ -95,11 +95,11 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
 )
 @click.option(
     "--db-path",
-    type=click.Path(file_okay=True, dir_okay=False, resolve_path=True),
+    type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
     default=None,
     show_default=False,
-    metavar="<path>",
-    help="Override the database file path from config.",
+    metavar="<dir>",
+    help="Override the database directory from config.",
 )
 @click.option(
     "--library-path-list",
@@ -228,8 +228,8 @@ def cli(
     passing torrents to qBittorrent, post-processes completed downloads, and
     sends notifications.
 
-    All paths (database, log file, PID file) and log levels are configured in
-    the YAML file pointed to by --config-path.  Use --log-level to override
+    All paths (database, log, PID) and log levels are configured in
+    the YAML file inside --config-path.  Use --log-level to override
     the console log level at runtime without editing the config file.
     """
     from movarr.config import load_config  # noqa: PLC0415

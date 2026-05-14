@@ -23,8 +23,9 @@ def create_logger(
         log_format: Loguru format string for console output.
         log_level: Minimum log level for the console sink.
         log_level_file: Minimum log level for the file sink.
-        log_path: Optional path to a log file. The parent directory is created
-            automatically if it does not already exist.
+        log_path: Optional directory path for the log file.  The file
+            ``movarr.log`` is created inside this directory.  Parent
+            directories are created automatically if they do not exist.
     """
     _logger.remove()
 
@@ -40,11 +41,14 @@ def create_logger(
 
     # File sink
     if log_path:
-        log_dir = os.path.dirname(log_path)
+        # If log_path has an extension, treat as a full file path (backward compat).
+        # Otherwise, treat as a directory and create movarr.log inside.
+        log_file = log_path if os.path.splitext(log_path)[1] else os.path.join(log_path, "movarr.log")
+        log_dir = os.path.dirname(log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         _logger.add(
-            sink=log_path,
+            sink=log_file,
             level=log_level_file.upper(),
             format=log_format,
             rotation="10 MB",
