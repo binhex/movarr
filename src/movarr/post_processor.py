@@ -878,6 +878,18 @@ def _delete_superseded_files(
         return 0
 
     protected = frozenset(copied_fnames) | {new_primary_fname}
+    deleted = _delete_superseded_loop(video_files, resolved_dst, protected)
+
+    _run_post_delete_hook(config, resolved_dst, dst_dir)
+    return deleted
+
+
+def _delete_superseded_loop(
+    video_files: list[str],
+    resolved_dst: pathlib.Path,
+    protected: frozenset[str],
+) -> int:
+    """Delete files in *video_files* that are not *protected* and not extras."""
     deleted = 0
     for fname in video_files:
         if fname in protected:
@@ -891,6 +903,4 @@ def _delete_superseded_files(
             deleted += 1
         else:
             logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
-
-    _run_post_delete_hook(config, resolved_dst, dst_dir)
     return deleted
