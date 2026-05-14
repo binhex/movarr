@@ -496,6 +496,8 @@ class TestCliOverrides:
                 "9697",
                 "--prowlarr-api-key",
                 "pkey",
+                "--pid-path",
+                "/run/movarr",
                 "--test",
             ],
         )
@@ -512,6 +514,7 @@ class TestCliOverrides:
         assert cfg.index_proxy.prowlarr.host == "10.0.0.7"
         assert cfg.index_proxy.prowlarr.port == 9697
         assert cfg.index_proxy.prowlarr.api_key == "pkey"
+        assert cfg.general.pid_path == "/run/movarr"
 
     def test_help_shows_all_new_options(self) -> None:
         """Every new CLI override option appears in the --help output."""
@@ -530,6 +533,7 @@ class TestCliOverrides:
             "--prowlarr-host",
             "--prowlarr-port",
             "--prowlarr-api-key",
+            "--pid-path",
         ):
             assert opt in result.output, f"{opt!r} missing from --help"
 
@@ -553,11 +557,3 @@ class TestCliPidPathOverride:
         mocker.patch("movarr.config.load_config", return_value=mock_cfg)
         CliRunner().invoke(cli, ["--test"])
         assert mock_cfg.general.pid_path == "/custom/pids"
-
-    def test_pid_path_flag_overrides_config(self, mocker: MockerFixture) -> None:
-        """--pid-path overrides config.general.pid_path when supplied."""
-        mocker.patch("movarr.cli.create_logger")
-        mock_cfg = _make_config_mock(pid_path="pids")
-        mocker.patch("movarr.config.load_config", return_value=mock_cfg)
-        CliRunner().invoke(cli, ["--pid-path", "/tmp/pids", "--test"])
-        assert mock_cfg.general.pid_path == "/tmp/pids"
