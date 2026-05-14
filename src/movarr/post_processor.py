@@ -738,6 +738,13 @@ def _check_delete_preconditions(
     return video_files, resolved_dst
 
 
+def _is_extras_file(fname: str, lib_san: str) -> bool:
+    """Return True if *fname* looks like extras/bonus content."""
+    lib_after = extract_after_year(lib_san) or ""
+    lib_bracket = " ".join(_BRACKET_RE.findall(fname))
+    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())))
+
+
 def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
     """Return True if *new_primary_fname* looks like extras/bonus content."""
     new_after = extract_after_year(new_san) or ""
