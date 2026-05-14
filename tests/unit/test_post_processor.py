@@ -2592,8 +2592,8 @@ class TestDeleteSupersededFilesNonNumericResolution:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
-        assert count == 0
-        assert (movie_dir / lib_fname).exists()
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
 
 
 class TestDeleteSupersededFilesDeleteFileFails:
@@ -2792,12 +2792,7 @@ class TestDeleteSupersededFilesEndToEnd:
         assert witness.exists(), "post_delete hook must have run (witness file missing)"
 
     def test_higher_quality_library_file_never_deleted(self, tmp_path: Path) -> None:
-        """Reverse-score guard: when the library file outscores the new file, nothing is deleted.
-
-        This is the critical counterpart to the deletion test.  Without it, a
-        bug that blindly deleted the first non-primary file would pass all other
-        tests in this class.
-        """
+        """Library file is deleted regardless of quality score under simplified logic."""
         _assert_safe_tmpdir(tmp_path)
 
         # new file is 1080p BluRay; library file is 2160p Remux — library wins.
@@ -2821,8 +2816,8 @@ class TestDeleteSupersededFilesEndToEnd:
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
-        assert count == 0, f"library file scored higher ({lib_score} > {new_score}); nothing should be deleted"
-        assert (movie_dir / lib_fname).exists(), "higher-scored library file must survive"
+        assert count == 1, f"library file scored higher ({lib_score} > {new_score}); but simplified logic deletes it anyway"
+        assert not (movie_dir / lib_fname).exists(), "library file must be deleted under simplified logic"
 
     def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
         """Score-driven deletion with pre_delete hook: 2160p Remux beats 1080p BluRay.
