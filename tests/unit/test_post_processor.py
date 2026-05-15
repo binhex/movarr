@@ -10,15 +10,15 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 
-from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
+from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
 from movarr.filters import composite_quality_score, supersession_quality_score
 from movarr.post_processor import (
-    _apply_path_remapping,
     _build_copy_list,
     _canonical_filename,
     _cert_acceptable,
     _delete_superseded_files,
     _first_level_dir,
+    _kill_process,
     _largest_file,
     _parse_genres,
     _pick_path,
@@ -964,6 +964,24 @@ class TestRunHook:
         mock_popen.return_value = mock_proc
         assert _run_hook("echo test", "/tmp/movie", "post_copy") is True
 
+    def test_kill_process_with_none_timeout_logs_terminated(self, mocker: MockerFixture) -> None:
+        """_kill_process with timeout_mins=None logs 'hook terminated' not 'timed out'."""
+
+        mocker.patch("movarr.post_processor.os.killpg")
+        mocker.patch("movarr.post_processor.subprocess.Popen")
+        mock_proc = mocker.Mock()
+        mock_proc.pid = 12345
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+        mock_log = mocker.patch("movarr.post_processor.logger.error")
+
+        _kill_process(mock_proc, 99, "pre_delete", None)
+
+        # Should have logged "terminated", not "timed out after None min."
+        assert mock_log.call_count == 1
+        msg = mock_log.call_args[0][0]
+        assert "terminated" in msg
+
 
 # _cert_acceptable
 
@@ -1744,40 +1762,6 @@ class TestProcessOne:
 
         dst_dir_arg = mock_mkdir.call_args[0][0]
         assert "Unknown" in dst_dir_arg
-
-
-# _apply_path_remapping
-
-
-class TestApplyPathRemapping:
-    """Tests for _apply_path_remapping — prefix substitution."""
-
-    def _remap(self, from_path: str, to_path: str) -> PathRemappingConfig:
-        return PathRemappingConfig(from_path=from_path, to_path=to_path)
-
-    def test_exact_match_returns_to_path(self) -> None:
-        result = _apply_path_remapping("/downloads", [self._remap("/downloads", "/media")])
-        assert result == "/media"
-
-    def test_prefix_with_slash_is_replaced(self) -> None:
-        result = _apply_path_remapping("/downloads/movie.mkv", [self._remap("/downloads", "/media")])
-        assert result == "/media/movie.mkv"
-
-    def test_prefix_with_backslash_is_replaced(self) -> None:
-        result = _apply_path_remapping("C:\\downloads\\movie.mkv", [self._remap("C:\\downloads", "D:\\media")])
-        assert result == "D:\\media\\movie.mkv"
-
-    def test_no_match_returns_original_path(self) -> None:
-        result = _apply_path_remapping("/other/path", [self._remap("/downloads", "/media")])
-        assert result == "/other/path"
-
-    def test_empty_from_path_is_skipped(self) -> None:
-        result = _apply_path_remapping("/downloads/movie.mkv", [self._remap("", "/media")])
-        assert result == "/downloads/movie.mkv"
-
-    def test_empty_remappings_list_returns_original(self) -> None:
-        result = _apply_path_remapping("/downloads/movie.mkv", [])
-        assert result == "/downloads/movie.mkv"
 
 
 # _process_one — non-largest-file branch (line 141)

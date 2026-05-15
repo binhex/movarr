@@ -197,6 +197,7 @@ def filter_by_imdb(
     checks = [
         lambda r: _check_allow_title_type(r, config),
         lambda r: _check_reject_genre(r, config),
+        lambda r: _check_reject_genre_exclusive(r, config),
         _check_bitrate,
         lambda r: _check_year(r, config),
         lambda r: _check_runtime(r, config),
@@ -386,6 +387,36 @@ def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
         if reject in genres_lower:
             return _fail(result, f"Genre '{reject}' is in reject genre list.")
     return _pass(result, f"Genres {genres_lower} pass reject genre check.")
+
+
+def _check_reject_genre_exclusive(result: ResultDict, config: Config) -> ResultDict:
+    """Reject a movie only if ALL of its genres are in the reject-exclusive list.
+
+    If the movie has ANY genre that is NOT in this list, it passes this check.
+    This allows rejecting pure horror while accepting horror/sci-fi hybrids.
+    """
+    reject_list = config.filters.reject_genre_exclusive_list
+    if not reject_list:
+        return _pass(result, "No reject genre exclusive list defined.")
+
+    genres = result.get("imdb_genres_list") or []
+    if not genres:
+        return _pass(result, "No genre data; skipping reject genre exclusive check.")
+
+    genres_lower = [g.lower() for g in genres]
+    reject_lower = [r.lower() for r in reject_list]
+
+    for genre in genres_lower:
+        if genre not in reject_lower:
+            return _pass(
+                result,
+                f"Genre '{genre}' is not in reject genre exclusive list; movie has non-excluded genre(s).",
+            )
+
+    return _fail(
+        result,
+        f"All genres {genres_lower} are in reject genre exclusive list.",
+    )
 
 
 def _check_bitrate(result: ResultDict) -> ResultDict:

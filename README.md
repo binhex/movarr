@@ -26,7 +26,6 @@ Automated movie downloader based on IMDb criteria filtering.
   library, and removes source files if configured.
 - **Genre/certification routing** — routes completed movies to different library paths per viewer profile based
   on genre and age-rating rules.
-- **Path remapping** — translates qBittorrent container paths to movarr-visible paths for Docker deployments.
 - **Notifications** — sends alerts via any [apprise](https://github.com/caronc/apprise)-compatible service
   (ntfy, Discord, Telegram, email, and more).
 - **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
@@ -158,6 +157,7 @@ Controls which torrents pass the IMDb quality gate.
 | `allow_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
 | `reject_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
 | `reject_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
+| `reject_genre_exclusive_list` | Reject a movie only when ALL of its IMDb genres are in this list (e.g. add `Horror` to reject pure horror, keep horror/sci-fi hybrids). | `[]` |
 | `reject_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
 | `reject_index_group_list` | Reject torrents from these release groups (case-insensitive). | `[]` |
 | `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing all other filters. | `[]` |
@@ -263,7 +263,6 @@ Each entry in `search`:
 | `copy_library_rules` | Ordered list of routing rules (see below). | `[]` |
 | `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches. | `""` |
 | `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches. | `""` |
-| `path_remapping` | List of path prefix substitutions for Docker deployments (see below). | `[]` |
 | `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Defaults to `false`. Permanent deletion — use with care. | `false` |
 
 Each entry in `copy_library_rules`:
@@ -275,13 +274,6 @@ Each entry in `copy_library_rules`:
 | `max_certification` | Optional age-rating ceiling (e.g. `12A`). Movies rated above this are skipped for this rule. |
 | `hd_path` | Destination directory for 1080p / HD movies. |
 | `uhd_path` | Destination directory for 2160p / UHD movies. |
-
-Each entry in `path_remapping`:
-
-| Key | Description |
-| --- | ----------- |
-| `from_path` | Path prefix as reported by qBittorrent (e.g. inside a Docker container). |
-| `to_path` | Equivalent path as visible to movarr on the host. |
 
 ### `post_process.hooks`
 
@@ -352,8 +344,7 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 
 1. Detects torrents with a completed status.
 2. Scans the download directory, skipping files and folders that match the exclude rules.
-3. Applies `path_remapping` to translate qBittorrent container paths to locally-visible paths.
-4. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
+3. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
 5. Falls back to `default_copy_library` if no rule matches.
 6. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
 7. Marks the history record as `Completed`.

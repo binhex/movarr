@@ -40,6 +40,17 @@ def _minimal_result(**overrides: object) -> ResultDict:
 # write + is_duplicate
 
 
+class TestDatabaseInit:
+    """Database.__init__ accepts directory paths (no extension suffix)."""
+
+    def test_directory_path_creates_movarr_db(self, tmp_path: Path) -> None:
+        """When db_path has no suffix, movarr.db is created inside the directory."""
+        db_dir = tmp_path / "mydb"
+        database = Database(str(db_dir))
+        assert database._db_path == db_dir / "movarr.db"
+        assert database._db_path.parent.exists()
+
+
 class TestWrite:
     """Database.write() must persist a ResultDict."""
 
