@@ -31,7 +31,7 @@ from movarr.file_utils import copy_with_verify, delete_file, make_directory
 from movarr.parsing import extract_after_year, extract_resolution, sanitise
 
 if TYPE_CHECKING:
-    from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig, PathRemappingConfig
+    from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
     from movarr.database import Database, HistoryRecord
     from movarr.qbittorrent import QBittorrentClient
 
@@ -80,7 +80,7 @@ def _kill_process(proc: subprocess.Popen, pgid: int | None, label: str, timeout_
     # Final reap
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
-    if timeout_mins is not None and timeout_mins > 0:
+    if timeout_mins is not None:
         logger.error("{} hook timed out after {} min.", label, timeout_mins)
     else:
         logger.error("{} hook terminated.", label)
@@ -180,24 +180,6 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | Non
 def _safe_path_component(value: str) -> str:
     """Strip characters that are unsafe in a filesystem path component."""
     return _RE_PATH_UNSAFE.sub("", value).strip()
-
-
-def _apply_path_remapping(path: str, remappings: list[PathRemappingConfig]) -> str:
-    """Replace the first matching from_path prefix with its to_path counterpart.
-
-    Handles both forward-slash and OS-native separators so mappings work
-    whether the qBittorrent host is Linux or Windows.
-    """
-    for remap in sorted(remappings, key=lambda r: len(r.from_path), reverse=True):
-        src = remap.from_path.rstrip("/\\")
-        dst = remap.to_path.rstrip("/\\")
-        if not src:
-            continue
-        if path.startswith(src + "/") or path.startswith(src + "\\") or path == src:
-            remapped = dst + path[len(src) :]
-            logger.debug("Path remapped: '{}' → '{}'.", path, remapped)
-            return remapped
-    return path
 
 
 def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -476,8 +458,7 @@ def _should_include_file(
 def _build_copy_list(torrent: dict, config: Config) -> list[str]:
     """Return absolute paths for files that should be copied to the library."""
     pp = config.post_process
-    raw_save_path = torrent.get("torrent_save_path") or ""
-    save_path = _apply_path_remapping(raw_save_path, pp.path_remapping)
+    save_path = torrent.get("torrent_save_path") or ""
 
     # Guard: an empty save_path resolves to CWD, bypassing the path-traversal
     # check below.  Reject early to avoid accidentally copying CWD-relative paths.

@@ -1377,6 +1377,13 @@ class TestEditionTokenSet:
 
         assert edition_token_set("Extended Unrated") == edition_token_set("Unrated Extended")
 
+    def test_returns_directors_cut_canonicalised(self) -> None:
+        """Directors/ cut variants are canonicalised to 'directors cut'."""
+        from movarr.filters import edition_token_set
+
+        result = edition_token_set("Alien 1979 Director's Cut 2160p")
+        assert result == frozenset({"directors cut"})
+
 
 # _check_bitrate — zero threshold treated as disabled
 
