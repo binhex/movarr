@@ -1544,10 +1544,10 @@ class TestStripNullValues:
         assert isinstance(config, Config)
         on_disk = yaml.safe_load(p.read_text())
         hooks = on_disk["post_process"]["hooks"]
-        # Null-valued keys must be absent from disk (not present at all)
-        assert "pre_copy" not in hooks
-        assert "pre_delete" not in hooks
-        assert "post_delete" not in hooks
+        # Null-valued keys are filled with defaults from the model
+        assert hooks["pre_copy"] == ""
+        assert hooks["pre_delete"] == ""
+        assert hooks["post_delete"] == ""
         # post_copy with a value must remain
         assert hooks["post_copy"] == "echo ok"
 
@@ -1560,7 +1560,7 @@ class TestStripNullValues:
         config = load_config(p)
         assert isinstance(config, Config)
         on_disk = yaml.safe_load(p.read_text())
-        assert "pre_copy" not in on_disk["post_process"]["hooks"]
+        assert on_disk["post_process"]["hooks"]["pre_copy"] == ""
 
     def test_null_in_list_dict_item_stripped(self, tmp_path: Path) -> None:
         """List-of-dict entries with null values are also cleaned."""

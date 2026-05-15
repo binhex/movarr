@@ -828,8 +828,9 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
             logger.error("Migration loop detected at version {}; aborting.", current)
             break
 
+    merged = _deep_merge(_default_config_dict(), raw)
     with config_path.open("w", encoding="utf-8") as fh:
-        _strip_and_dump(raw, fh)
+        _strip_and_dump(merged, fh)
 
     return raw
 
