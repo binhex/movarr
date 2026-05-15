@@ -127,7 +127,9 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
     (
         "2.19.0",
         "2.20.0",
-        [],
+        [
+            (("filters", "reject_genre_exclusive_list"), []),
+        ],
     ),
 ]
 
