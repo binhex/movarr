@@ -350,6 +350,7 @@ _migrate_v212_to_v213 = _table_fns["2.12.0"]
 _migrate_v213_to_v214 = _table_fns["2.13.0"]
 _migrate_v214_to_v215 = _table_fns["2.14.0"]
 _migrate_v216_to_v217 = _table_fns["2.16.0"]
+_migrate_v219_to_v220 = _table_fns["2.19.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -373,6 +374,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.16.0": _migrate_v216_to_v217,
     "2.17.0": _migrate_v217_to_v218,
     "2.18.0": _migrate_v218_to_v219,
+    "2.19.0": _migrate_v219_to_v220,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
