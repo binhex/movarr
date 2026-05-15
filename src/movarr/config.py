@@ -448,6 +448,7 @@ class FiltersConfig(BaseModel):
     allow_language_list: list[str] = Field(default_factory=list)
     reject_index_title_list: list[str] = Field(default_factory=list)
     reject_genre_list: list[str] = Field(default_factory=list)
+    reject_genre_exclusive_list: list[str] = Field(default_factory=list)
     reject_movie_title_list: list[str] = Field(default_factory=list)
     reject_index_group_list: list[str] = Field(default_factory=list)
     override_cast_list: list[str] = Field(default_factory=list)
