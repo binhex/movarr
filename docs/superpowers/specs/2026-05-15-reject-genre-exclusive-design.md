@@ -1,4 +1,4 @@
-# Reject Genre If-Only Filter — Design Spec
+# Reject Genre Exclusive Filter — Design Spec
 
 **Date:** 2026-05-15
 **Status:** Approved
@@ -21,7 +21,7 @@ hybrids like *Alien*. With the current system, adding `Horror` to
 
 ## Solution
 
-Add a new config option `reject_genre_if_only_list` that rejects a movie only
+Add a new config option `reject_genre_exclusive_list` that rejects a movie only
 when **every single one** of its genres is in the list. If the movie has any
 genre **not** in this list, it passes this check.
 
@@ -30,7 +30,7 @@ genre **not** in this list, it passes this check.
 New field on `FiltersConfig` in `config.py`:
 
 ```python
-reject_genre_if_only_list: list[str] = Field(default_factory=list)
+reject_genre_exclusive_list: list[str] = Field(default_factory=list)
 ```
 
 An empty list (default) disables the feature. No migration required.
@@ -41,19 +41,19 @@ An empty list (default) disables the feature. No migration required.
 filters:
   reject_genre_list:
     - Documentary        # Always reject Documentary, even Documentary/Drama
-  reject_genre_if_only_list:
+  reject_genre_exclusive_list:
     - Horror             # Reject pure Horror, keep Horror/Sci-Fi
 ```
 
 ### Filter Logic
 
-New function `_check_reject_genre_if_only` in `filters.py`:
+New function `_check_reject_genre_exclusive` in `filters.py`:
 
-1. If `reject_genre_if_only_list` is empty → pass (feature disabled).
+1. If `reject_genre_exclusive_list` is empty → pass (feature disabled).
 2. If the movie has no genre data → pass (insufficient information).
-3. If **any** of the movie's genres is NOT in the reject-if-only list → pass
+3. If **any** of the movie's genres is NOT in the reject-exclusive list → pass
    (the movie has non-rejected genres).
-4. If **all** of the movie's genres ARE in the reject-if-only list → reject.
+4. If **all** of the movie's genres ARE in the reject-exclusive list → reject.
 
 ### Pipeline Placement
 
@@ -65,7 +65,7 @@ _check_allow_title_type
     ↓
 _check_reject_genre          (existing — "always reject" gate)
     ↓
-_check_reject_genre_if_only  (NEW — "reject if only" gate)
+_check_reject_genre_exclusive  (NEW — "reject exclusive" gate)
     ↓
 _check_bitrate
     ↓
@@ -77,12 +77,12 @@ appears in both lists, the hard reject takes priority.
 
 ### Behavior Matrix
 
-| Movie Genres | `reject_genre_list` | `reject_genre_if_only_list` | Result |
+| Movie Genres | `reject_genre_list` | `reject_genre_exclusive_list` | Result |
 |---|---|---|---|
-| `[Horror]` | `[Documentary]` | `[Horror]` | ❌ Reject (if-only: all genres match) |
-| `[Horror, Sci-Fi]` | `[Documentary]` | `[Horror]` | ✅ Pass (Sci-Fi not in if-only) |
+| `[Horror]` | `[Documentary]` | `[Horror]` | ❌ Reject (exclusive: all genres match) |
+| `[Horror, Sci-Fi]` | `[Documentary]` | `[Horror]` | ✅ Pass (Sci-Fi not in exclusive) |
 | `[Horror, Documentary]` | `[Documentary]` | `[Horror]` | ❌ Reject (regular: Documentary in reject list) |
-| `[Horror, Documentary]` | `[]` | `[Horror, Documentary]` | ❌ Reject (if-only: all genres match, both in list) |
+| `[Horror, Documentary]` | `[]` | `[Horror, Documentary]` | ❌ Reject (exclusive: all genres match, both in list) |
 | `[Action]` | `[Documentary]` | `[Horror]` | ✅ Pass (no match at all) |
 | `[Horror, Sci-Fi]` | `[Horror]` | `[]` | ❌ Reject (regular: Horror in reject list) |
 | `[]` | any | any | ✅ Pass (no genre data available — insufficient info to reject) |
@@ -90,10 +90,10 @@ appears in both lists, the hard reject takes priority.
 ### Code Changes
 
 #### `config.py` — `FiltersConfig`
-- Add `reject_genre_if_only_list: list[str] = Field(default_factory=list)`
+- Add `reject_genre_exclusive_list: list[str] = Field(default_factory=list)`
 
 #### `filters.py`
-- Add `_check_reject_genre_if_only(result, config) → ResultDict`
+- Add `_check_reject_genre_exclusive(result, config) → ResultDict`
 - Insert into the `checks` list in `filter_by_imdb` after `_check_reject_genre`
 - Add to `__all__` if made public (not needed — private function)
 
@@ -103,11 +103,11 @@ New test class `TestFilterByImdbRejectGenreIfOnly` in `test_filters.py`:
 
 | Test | Scenario | Expected |
 |---|---|---|
-| `test_if_only_genre_pure_rejects` | Single genre matching if-only list | REJECT |
-| `test_if_only_genre_with_other_passes` | If-only genre + non-matching genre | PASS |
-| `test_empty_list_always_passes` | No if-only genres configured | PASS |
-| `test_case_insensitive` | Case-mismatched genre in if-only list | Correctly matched |
-| `test_multiple_genres_all_rejected` | All genres in if-only list (2+ genres) | REJECT |
+| `test_if_only_genre_pure_rejects` | Single genre matching exclusive list | REJECT |
+| `test_if_only_genre_with_other_passes` | Exclusive genre + non-matching genre | PASS |
+| `test_empty_list_always_passes` | No exclusive genres configured | PASS |
+| `test_case_insensitive` | Case-mismatched genre in exclusive list | Correctly matched |
+| `test_multiple_genres_all_rejected` | All genres in exclusive list (2+ genres) | REJECT |
 | `test_no_genre_data_passes` | No genre metadata available | PASS |
 
 Also verify interaction with existing `reject_genre_list` (both lists populated)
@@ -125,7 +125,7 @@ in existing test run.
 ## Implementation Order
 
 1. Add field to `FiltersConfig` in `config.py`
-2. Add `_check_reject_genre_if_only` function to `filters.py` + wire into pipeline
+2. Add `_check_reject_genre_exclusive` function to `filters.py` + wire into pipeline
 3. Add tests to `test_filters.py`
 4. `ruff` + `mypy` + `pytest --cov` pass
 5. Optionally bump `config_version` to `2.20.0`
