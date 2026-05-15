@@ -157,6 +157,7 @@ Controls which torrents pass the IMDb quality gate.
 | `allow_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
 | `reject_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
 | `reject_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
+| `reject_genre_exclusive_list` | Reject a movie only when ALL of its IMDb genres are in this list (e.g. add `Horror` to reject pure horror, keep horror/sci-fi hybrids). | `[]` |
 | `reject_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
 | `reject_index_group_list` | Reject torrents from these release groups (case-insensitive). | `[]` |
 | `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing all other filters. | `[]` |
