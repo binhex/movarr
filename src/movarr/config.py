@@ -269,6 +269,17 @@ def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _strip_sep_suffix(normalised: str, basename: str) -> str:
+    """Strip a separator-prefixed *basename* suffix from *normalised*.
+
+    Returns *normalised* unchanged if no separator-prefixed match is found.
+    """
+    for sep in ("/", "\\"):
+        if normalised.endswith(sep + basename):
+            return normalised[: -len(sep) - len(basename)].rstrip("/\\")
+    return normalised
+
+
 def _strip_path_basename(value: str, basename: str) -> str:
     """Strip *basename* from *value* if it is a complete path-component suffix.
 
@@ -281,12 +292,7 @@ def _strip_path_basename(value: str, basename: str) -> str:
         _strip_path_basename("logs", "movarr.log")            -> "logs"
     """
     normalised = value.rstrip("/\\")
-    # Find a separator-prefixed basename at end.
-    stripped = normalised
-    for sep in ("/", "\\"):
-        if normalised.endswith(sep + basename):
-            stripped = normalised[: -len(sep) - len(basename)].rstrip("/\\")
-            break
+    stripped = _strip_sep_suffix(normalised, basename)
 
     if stripped != normalised:
         # Root path (empty, "/", "\\", or "C:") — preserve the separator.
@@ -634,18 +640,6 @@ class DefaultCopyLibraryConfig(BaseModel):
     uhd_path: str | None = None
 
 
-class PathRemappingConfig(BaseModel):
-    """A single remote→local path prefix replacement.
-
-    Useful when qBittorrent runs in a container and reports paths that differ
-    from those visible to movarr (e.g. '/downloads' inside qbt container
-    maps to '/mnt/storage/downloads' from movarr's perspective).
-    """
-
-    from_path: str = ""
-    to_path: str = ""
-
-
 class PostProcessHooksConfig(BaseModel):
     """Shell commands to run at defined points in the post-processing pipeline.
 
@@ -687,7 +681,6 @@ class PostProcessConfig(BaseModel):
     exclude_folder_regex_list: list[str] = Field(default_factory=list)
     copy_library_rules: list[CopyLibraryRuleConfig] = Field(default_factory=list)
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
-    path_remapping: list[PathRemappingConfig] = Field(default_factory=list)
     delete_lower_quality: bool = False
     hooks: PostProcessHooksConfig = Field(default_factory=PostProcessHooksConfig)
 

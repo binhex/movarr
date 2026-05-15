@@ -1045,6 +1045,33 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
         clean: dict[str, Any] = {"a": 1, "b": {"c": "hello"}, "d": [1, 2, 3]}
         assert _has_none_values(clean) is False
 
+    def test_has_none_values_returns_true_for_direct_none(self) -> None:
+        """_has_none_values returns True when a top-level value is None."""
+        from typing import Any
+
+        from movarr.config import _has_none_values
+
+        d: dict[str, Any] = {"a": None}
+        assert _has_none_values(d) is True
+
+    def test_has_none_values_returns_true_for_nested_dict_none(self) -> None:
+        """_has_none_values returns True when a nested dict value is None."""
+        from typing import Any
+
+        from movarr.config import _has_none_values
+
+        d: dict[str, Any] = {"a": {"b": None}}
+        assert _has_none_values(d) is True
+
+    def test_has_none_values_returns_true_for_list_with_dict_none(self) -> None:
+        """_has_none_values returns True when a list contains a dict with None."""
+        from typing import Any
+
+        from movarr.config import _has_none_values
+
+        d: dict[str, Any] = {"a": [{"b": None}]}
+        assert _has_none_values(d) is True
+
 
 class TestCreateDefaultConfigDirectory:
     """create_default_config accepts directory path and creates movarr.yml inside."""
@@ -1411,6 +1438,35 @@ class TestMigrationV218ToV219:
         raw: dict = {"general": {"config_version": "2.18.0", "log_path": "logs/movarr.log/"}}
         result = _migrate_v218_to_v219(raw)
         assert result["general"]["log_path"] == "logs"
+
+
+class TestStripSepSuffix:
+    """Tests for _strip_sep_suffix — separator-prefixed basename stripping."""
+
+    def test_strips_sep_prefix_with_forward_slash(self) -> None:
+        from movarr.config import _strip_sep_suffix
+
+        assert _strip_sep_suffix("logs/movarr.log", "movarr.log") == "logs"
+
+    def test_strips_sep_prefix_with_backslash(self) -> None:
+        from movarr.config import _strip_sep_suffix
+
+        assert _strip_sep_suffix("logs\\movarr.log", "movarr.log") == "logs"
+
+    def test_no_match_returns_unchanged(self) -> None:
+        from movarr.config import _strip_sep_suffix
+
+        assert _strip_sep_suffix("logs", "movarr.log") == "logs"
+
+    def test_root_path_preserves_root(self) -> None:
+        from movarr.config import _strip_sep_suffix
+
+        assert _strip_sep_suffix("/movarr.log", "movarr.log") == ""
+
+    def test_windows_drive_returns_prefix(self) -> None:
+        from movarr.config import _strip_sep_suffix
+
+        assert _strip_sep_suffix("C:\\movarr.log", "movarr.log") == "C:"
 
 
 class TestStripPathBasename:

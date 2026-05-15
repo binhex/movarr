@@ -357,9 +357,6 @@ post_process:
   default_copy_library:
     hd_path: /media/Movies/HD/Paul
     uhd_path: /media/Movies/UHD/Paul
-  path_remapping:
-  - from_path: /data/qbittorrent/completed
-    to_path: /cache-downloads/appdata/data/qbittorrent/completed
   delete_lower_quality: true
   hooks:
     pre_copy: ''
