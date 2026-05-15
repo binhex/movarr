@@ -432,6 +432,59 @@ class TestFilterByImdbRejectGenre:
         assert out["result"] != "Passed"
 
 
+class TestFilterByImdbRejectGenreExclusive:
+    """Genre exclusive exclusion filter (reject_genre_exclusive_list)."""
+
+    def test_exclusive_genre_pure_rejects(self) -> None:
+        """Single genre matching exclusive list → reject."""
+        cfg = _make_config(reject_genre_exclusive_list=["Horror"])
+        result = _imdb_result(imdb_genres_list=["Horror"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_exclusive_genre_with_other_passes(self) -> None:
+        """Exclusive genre + non-matching genre → pass (has other genre)."""
+        cfg = _make_config(reject_genre_exclusive_list=["Horror"])
+        result = _imdb_result(imdb_genres_list=["Horror", "Sci-Fi"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
+
+    def test_exclusive_no_match_passes(self) -> None:
+        """No genres match the exclusive list → pass."""
+        cfg = _make_config(reject_genre_exclusive_list=["Horror"])
+        result = _imdb_result(imdb_genres_list=["Action", "Drama"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
+
+    def test_empty_list_always_passes(self) -> None:
+        """Empty reject_genre_exclusive_list → pass (feature disabled)."""
+        cfg = Config()  # empty lists
+        result = _imdb_result(imdb_genres_list=["Horror"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
+
+    def test_case_insensitive_match(self) -> None:
+        """Case-mismatched genre in exclusive list matches case-insensitively."""
+        cfg = _make_config(reject_genre_exclusive_list=["horror"])
+        result = _imdb_result(imdb_genres_list=["Horror"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_multiple_genres_all_rejected(self) -> None:
+        """All genres in the exclusive list (2+ genres) → reject."""
+        cfg = _make_config(reject_genre_exclusive_list=["Horror", "Thriller"])
+        result = _imdb_result(imdb_genres_list=["Horror", "Thriller"])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] != "Passed"
+
+    def test_no_genre_data_passes(self) -> None:
+        """No genre metadata available → pass (insufficient info to reject)."""
+        cfg = _make_config(reject_genre_exclusive_list=["Horror"])
+        result = _imdb_result(imdb_genres_list=[])
+        out = filter_by_imdb(result, cfg)
+        assert out["result"] == "Passed"
+
+
 # filter_by_imdb: language gate
 
 
