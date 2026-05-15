@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.19.0"
+_CONFIG_VERSION = "2.20.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 # Hardcoded filenames constructed from directory paths at runtime.
@@ -123,6 +123,11 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.18.0",
         "2.19.0",
         [],  # hand-written migration: strips filenames from path fields
+    ),
+    (
+        "2.19.0",
+        "2.20.0",
+        [],
     ),
 ]
 
