@@ -409,10 +409,17 @@ sent to qBittorrent, even if qBittorrent is reset externally.
 
 **Q: I am using no_ransom script to secure my media, is it possible to use the 'pre_delete' hook to unlock existing media before deletion?**
 
-Yes - however there are two additional changes you will need to make to the movarr container for this to work with the no_ransom script:
+Yes - however there are thee additional changes you will need to make to the movarr container for this to work with the no_ransom script:
 
 - Grant chattr additional permissions inside the container
 This is done by adding in the following to the extra parameters field for the container: `--cap-add LINUX_IMMUTABLE`.
 
 - Pass through the 'diskX' shares to the container, this is required for no_ransom as chattr cannot traverse FUSE shares (/mnt/user/...)
 This is done by creating an additional path and setting the container path and host path to `/mnt`.
+
+- chattr MUST be run as root, so in order for no_ransom to operate you either need to switch to root account or use sudo.
+
+___
+If you appreciate my work, then please consider buying me a beer  :D
+
+[![PayPal donation](https://www.paypal.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MM5E27UX6AUU4)
