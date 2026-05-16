@@ -192,17 +192,92 @@ class TestCopyWithVerify:
         assert result is True
         assert dst.parent.is_dir()
 
-    def test_returns_false_when_delete_of_mismatched_dst_fails(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        """When dst exists with wrong checksum but delete_file fails, return False."""
+    def test_accepts_existing_dst_when_delete_of_mismatched_dst_fails(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """When dst exists with wrong checksum but delete_file fails (e.g. immutable file),
+        accept existing destination to prevent infinite loop in post-processing."""
         content_src = b"source data"
         content_dst = b"different data"
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst.mkv"
         src.write_bytes(content_src)
         dst.write_bytes(content_dst)
+        # delete_file fails (simulating EPERM on immutable file)
         mocker.patch("movarr.file_utils.delete_file", return_value=False)
+        # chattr -i also fails (simulating missing LINUX_IMMUTABLE capability)
+        mocker.patch("movarr.file_utils.subprocess.run", side_effect=FileNotFoundError("chattr not found"))
         result = copy_with_verify(src, dst)
-        assert result is False
+        assert result is True
+        # Destination file should remain untouched
+        assert dst.read_bytes() == b"different data"
+
+    def test_retries_delete_after_chattr_when_delete_of_mismatched_dst_fails(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """When delete_file fails, try chattr -i first, then retry delete.
+        If chattr succeeds and retry delete succeeds, re-copy proceeds."""
+        content_src = b"source data"
+        content_dst = b"different data"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content_src)
+        dst.write_bytes(content_dst)
+        # delete_file fails first time (immutable), succeeds after chattr
+        delete_calls: list[int] = [0]
+
+        def fake_delete(_path: str | Path) -> bool:
+            delete_calls[0] += 1
+            return delete_calls[0] > 1  # first call fails, subsequent succeed
+
+        mocker.patch("movarr.file_utils.delete_file", side_effect=fake_delete)
+        # chattr succeeds
+        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
+        mock_run.return_value.returncode = 0
+        result = copy_with_verify(src, dst)
+        assert result is True
+        # File was re-copied with source content
+        assert dst.read_bytes() == b"source data"
+        assert delete_calls[0] == 2  # first delete + retry after chattr
+
+    def test_chattr_succeeds_but_retry_delete_still_fails_accepts_existing(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """When chattr -i succeeds but the retry delete still fails, accept existing."""
+        content_src = b"source data"
+        content_dst = b"different data"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content_src)
+        dst.write_bytes(content_dst)
+        # delete_file always fails (even after chattr)
+        mocker.patch("movarr.file_utils.delete_file", return_value=False)
+        # chattr succeeds (returncode 0)
+        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
+        mock_run.return_value.returncode = 0
+        result = copy_with_verify(src, dst)
+        assert result is True
+        # Destination file should remain untouched
+        assert dst.read_bytes() == b"different data"
+
+    def test_chattr_returns_nonzero_exit_still_accepts_existing(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """When chattr -i runs but returns non-zero, log stderr and accept existing."""
+        content_src = b"source data"
+        content_dst = b"different data"
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(content_src)
+        dst.write_bytes(content_dst)
+        # delete_file fails
+        mocker.patch("movarr.file_utils.delete_file", return_value=False)
+        # chattr runs but returns non-zero (e.g., EPERM, missing capability)
+        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = b"Operation not permitted\n"
+        result = copy_with_verify(src, dst)
+        assert result is True
+        # Destination file should remain untouched
+        assert dst.read_bytes() == b"different data"
 
     def test_returns_false_on_permission_error_during_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
         src = tmp_path / "src.mkv"
