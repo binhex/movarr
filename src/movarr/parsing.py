@@ -20,6 +20,7 @@ __all__ = [
     "is_tv_content",
     "keyword_search",
     "bad_keyword_search",
+    "dedup_quality_score",
     "quality_score",
 ]
 
@@ -354,6 +355,26 @@ def bad_keyword_search(string: str, keyword: str) -> bool:
     sep = r"[\s.\-_\[\(\]\)]"
     pattern = rf"(?:^|{sep}){re.escape(keyword)}(?:{sep}|$)"
     return bool(re.search(pattern, after, re.IGNORECASE))
+
+
+def dedup_quality_score(sanitised: str) -> int:
+    """Score a sanitised title for library dedup comparison.
+
+    Only includes resolution and source type — the most reliable signals.
+    HDR and audio tokens are excluded as they are commonly embellished
+    by indexers, causing false "upgrade" detections.
+
+    Args:
+        sanitised: A sanitised index title string.
+    """
+    after = _after_year(sanitised) or ""
+    score = 0
+    for table in (_RESOLUTION_SCORES, _SOURCE_SCORES):
+        for pattern, value in table.items():
+            if re.search(rf"(?:^|\s){pattern}(?:\s|$)", after, re.IGNORECASE):
+                score += value
+                break
+    return score
 
 
 def quality_score(sanitised: str) -> int:
