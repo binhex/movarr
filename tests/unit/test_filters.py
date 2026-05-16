@@ -1183,6 +1183,27 @@ class TestEvaluateLibraryFilesEdgeCases:
         assert out["result"] == "Passed"
         assert "lower resolution" in (out.get("result_details") or [""])[-1]
 
+    def test_fails_when_index_embellishes_hdr_audio_at_same_resolution(self) -> None:
+        """Index with DV/HDR/audio embellishments at same resolution+source should NOT
+        beat the library file — unscored tokens must not inflate the dedup score."""
+        from movarr.filters import _evaluate_library_files
+
+        # Library: plain 2160p REMUX
+        # Index: same 2160p REMUX but with DV, HDR, TrueHD, Atmos embellishments
+        result = _imdb_result(
+            index_title="Test Film 2008 2160p BluRay REMUX DV HDR TrueHD Atmos",
+            index_title_sanitised="Test Film 2008 2160p BluRay REMUX DV HDR TrueHD Atmos",
+            index_title_resolution="2160",
+        )
+        out = _evaluate_library_files(
+            result,
+            ["/lib/Test Film 2008 2160p BluRay REMUX.mkv"],
+            "2160",
+            Config(),
+        )
+        # Library should win (or tie) — stripped scores are equal
+        assert out["result"] != "Passed"
+
 
 # _group_bonus and _special_edition_bonus
 

@@ -24,6 +24,7 @@ from loguru import logger as _logger
 
 from movarr.parsing import (
     bad_keyword_search,
+    dedup_quality_score,
     extract_group,
     extract_movie_title,
     extract_resolution,
@@ -720,8 +721,11 @@ def _evaluate_single_library_file(
         return "better", reason
 
     # Same resolution — compare quality scores.
-    idx_score = quality_score(index_san) + _group_bonus(index_san, lib_san, config)
-    lib_score = quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
+    # Use dedup_quality_score which only considers resolution+source (the reliable
+    # signals). HDR and audio tokens are excluded as they are commonly embellished
+    # by indexers, causing false upgrade detections.
+    idx_score = dedup_quality_score(index_san) + _group_bonus(index_san, lib_san, config)
+    lib_score = dedup_quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
     idx_score += _special_edition_bonus(index_san, lib_san)
     lib_score += _special_edition_bonus(lib_san, index_san)
 

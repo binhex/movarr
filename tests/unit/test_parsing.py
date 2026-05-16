@@ -6,6 +6,7 @@ from movarr.parsing import (
     all_criteria_present,
     bad_keyword_search,
     build_sqlite_pattern,
+    dedup_quality_score,
     extract_after_year,
     extract_group,
     extract_movie_title,
@@ -359,3 +360,52 @@ class TestQualityScore:
         score_dovi = quality_score("Movie 2020 2160p WEB-DL Do.Vi. DTS")
         score_dv = quality_score("Movie 2020 2160p WEB-DL Dolby Vision DTS")
         assert score_dovi == score_dv
+
+
+class TestDedupQualityScore:
+    """Tests for dedup_quality_score() — only resolution and source count."""
+
+    def test_returns_int(self) -> None:
+        score = dedup_quality_score("Movie 2020 1080p BluRay")
+        assert isinstance(score, int)
+
+    def test_higher_resolution_scores_higher(self) -> None:
+        score_4k = dedup_quality_score("Movie 2020 2160p BluRay")
+        score_hd = dedup_quality_score("Movie 2020 1080p BluRay")
+        assert score_4k > score_hd
+
+    def test_remux_scores_higher_than_encode(self) -> None:
+        score_remux = dedup_quality_score("Movie 2020 1080p REMUX")
+        score_encode = dedup_quality_score("Movie 2020 1080p BluRay")
+        assert score_remux > score_encode
+
+    def test_hdr_tokens_do_not_affect_score(self) -> None:
+        """HDR tokens (DV, HDR10, HDR) must not inflate the dedup score."""
+        score_base = dedup_quality_score("Movie 2020 2160p REMUX")
+        score_hdr = dedup_quality_score("Movie 2020 2160p REMUX DV HDR10 HDR")
+        assert score_base == score_hdr
+
+    def test_audio_tokens_do_not_affect_score(self) -> None:
+        """Audio tokens (Atmos, TrueHD, DTS-HD) must not inflate the dedup score."""
+        score_base = dedup_quality_score("Movie 2020 2160p REMUX")
+        score_audio = dedup_quality_score("Movie 2020 2160p REMUX TrueHD Atmos DTS HD")
+        assert score_base == score_audio
+
+    def test_audio_and_hdr_combined_do_not_affect_score(self) -> None:
+        """Both HDR and audio tokens combined must not inflate the dedup score.
+        This is the exact scenario that caused the bug: an index title with
+        DV/HDR/Atmos/TrueHD should score the same as the plain library file."""
+        score_base = dedup_quality_score("Movie 2020 2160p REMUX")
+        score_embellished = dedup_quality_score("Movie 2020 2160p REMUX DV HDR TrueHD Atmos DTS HD MA")
+        assert score_base == score_embellished
+
+    def test_zero_for_unrecognised(self) -> None:
+        score = dedup_quality_score("Movie Title No Quality Info")
+        assert score >= 0
+        assert score == 0
+
+    def test_same_resolution_source_equal_scores(self) -> None:
+        """Two titles with same resolution and source should score equally."""
+        score_a = dedup_quality_score("Movie A 2020 2160p REMUX")
+        score_b = dedup_quality_score("Movie B 2020 2160p REMUX")
+        assert score_a == score_b
