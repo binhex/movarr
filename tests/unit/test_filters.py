@@ -385,11 +385,11 @@ class TestFilterByIndexLibraryDedup:
         out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
         assert out["result"] != "Passed"
 
-    def test_passes_when_no_resolution_in_index_result(self) -> None:
-        """No resolution token skips the library check (passes) rather than failing.
+    def test_fails_when_no_resolution_in_index_result(self) -> None:
+        """No resolution token causes the library check to fail.
 
-        A torrent without a resolution token should not be permanently rejected
-        by the library check; other filters should still evaluate it.
+        If we cannot determine the index title resolution, we cannot perform
+        library dedup, so the torrent must be rejected rather than passed.
         """
         cfg = Config()
         cfg.general.library_path_list = ["/library"]
@@ -398,7 +398,7 @@ class TestFilterByIndexLibraryDedup:
             ("/library", [], ["The Dark Knight 2008 1080p BluRay.mkv"])
         ]
         out = filter_by_index(result, _default_site_dict(), cfg, library_walk=library_walk)
-        assert out["result"] == "Passed"
+        assert out["result"] != "Passed"
 
 
 # filter_by_imdb: genre gate
@@ -635,14 +635,19 @@ class TestFilterByImdbLibraryDedup:
         out = filter_by_imdb(result, cfg, library_walk=library_walk)
         assert out["result"] == "Passed"
 
-    def test_passes_when_imdb_title_missing(self) -> None:
+    def test_fails_when_imdb_fields_incomplete(self) -> None:
+        """Missing IMDb title causes the canonical library check to fail.
+
+        If we cannot determine the IMDb title, we cannot perform library dedup
+        using the canonical title, so the torrent must be rejected.
+        """
         cfg = Config()
         result = _imdb_result(imdb_title=None, imdb_year="2008", index_title_resolution="1080")
         library_walk: list[tuple[str, list[str], list[str]]] = [
             ("/library", [], ["The Dark Knight 2008 1080p BluRay.mkv"])
         ]
         out = filter_by_imdb(result, cfg, library_walk=library_walk)
-        assert out["result"] == "Passed"
+        assert out["result"] != "Passed"
 
 
 # filter_by_imdb: overrides
@@ -1014,13 +1019,13 @@ class TestFilterByImdbOverrideFallthrough:
 
 
 class TestFilterByImdbCanonicalLibraryEdgeCases:
-    """Canonical library dedup correctly skips un-normalisable/year-mismatch files."""
+    """Canonical library dedup correctly handles un-normalisable/year-mismatch files."""
 
-    def test_passes_when_imdb_title_cannot_be_normalised(self) -> None:
+    def test_fails_when_imdb_title_cannot_be_normalised(self) -> None:
         result = _imdb_result(imdb_title="!!!", imdb_year="2008", index_title_resolution="1080")
         library_walk: list[tuple[str, list[str], list[str]]] = [("/lib", [], ["The Dark Knight 2008 1080p BluRay.mkv"])]
         out = filter_by_imdb(result, Config(), library_walk=library_walk)
-        assert out["result"] == "Passed"
+        assert out["result"] != "Passed"
 
     def test_non_video_file_skipped_at_imdb_canonical_stage(self) -> None:
         result = _imdb_result(imdb_title="The Dark Knight", imdb_year="2008", index_title_resolution="1080")
