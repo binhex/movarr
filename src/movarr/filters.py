@@ -347,9 +347,9 @@ def _check_library(
     index_title = result.get("index_title") or ""
     index_resolution = result.get("index_title_resolution") or ""
     if not index_resolution:
-        # No resolution token in the index title - skip the library check rather
-        # than rejecting the torrent, so it can be evaluated by other filters.
-        return _pass(result, f"Cannot determine resolution for '{index_title}'; skipping library check.")
+        # No resolution token in the index title — cannot perform library dedup
+        # so the torrent must be rejected.
+        return _fail(result, f"Cannot determine resolution for '{index_title}'; rejecting.")
 
     matches = _library_files_for_title(result, library_walk)
     if not matches:
@@ -623,11 +623,11 @@ def _check_library_canonical(
     imdb_year = str(result.get("imdb_year") or "")
     index_resolution = result.get("index_title_resolution") or ""
     if not (imdb_title and imdb_year and index_resolution):
-        return _pass(result, "Insufficient IMDb fields for canonical library check.")
+        return _fail(result, "Insufficient IMDb fields for canonical library check.")
 
     canonical_compare = normalise_for_compare(imdb_title)
     if not canonical_compare:
-        return _pass(result, "Cannot normalise IMDb title for canonical library check.")
+        return _fail(result, "Cannot normalise IMDb title for canonical library check.")
     matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
