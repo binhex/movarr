@@ -1122,6 +1122,132 @@ class TestFilterByIndexLibraryWalkEdgeCases:
         assert out["result"] == "Passed"
 
 
+class TestMatchFolderName:
+    """_match_folder_name guard clauses and happy path."""
+
+    def test_returns_false_when_root_empty(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        assert _match_folder_name("", "somecompare", "2001") is False
+
+    def test_returns_false_when_root_is_single_component(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        assert _match_folder_name("/media", "somecompare", "2001") is False
+
+    def test_returns_false_when_basename_is_empty(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        # os.path.basename("/") returns "" — hits the "not folder" guard
+        assert _match_folder_name("/", "x", "2001") is False
+
+    def test_returns_false_when_folder_sanitises_to_none(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        # A folder name like "---...---" sanitises to None
+        assert _match_folder_name("/library/---...---", "x", "2001") is False
+
+    def test_returns_false_when_folder_does_not_match(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        assert _match_folder_name("/library/Some Other Movie (1999)", "thegodfather", "1972") is False
+
+    def test_returns_true_when_folder_matches(self) -> None:
+        from movarr.filters import _match_folder_name
+
+        assert (
+            _match_folder_name(
+                "/library/The Lord of the Rings The Fellowship of the Ring (2001)",
+                "thelordoftheringsthefellowshipofthering",
+                "2001",
+            )
+            is True
+        )
+
+    def test_folder_name_not_used_when_filename_year_contradicts(self) -> None:
+        """When the filename has a parseable year different from the search year,
+        the folder-name fallback should NOT match, to prevent false positives.
+
+        E.g. "The Matrix Reloaded (2003)" inside a "The Matrix (1999)" folder
+        should NOT be considered a match for "The Matrix" (1999).
+        """
+        cfg = Config()
+        cfg.general.library_path_list = ["/library"]
+        result = _index_result(
+            index_title="The Matrix 1999 1080p BluRay",
+            index_title_sanitised="The Matrix 1999 1080p BluRay",
+            index_title_resolution="1080",
+            movie_title="The Matrix",
+            movie_title_year="1999",
+            movie_title_compare="thematrix",
+        )
+        # Library has a DIFFERENT movie (different year) in a correctly-named folder
+        library_walk: list[tuple[str, list[str], list[str]]] = [
+            ("/library/The Matrix (1999)", [], ["The.Matrix.Reloaded.2003.1080p.BluRay.mkv"])
+        ]
+        out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
+        # Should pass (not fail) because the file's year (2003) contradicts the search year (1999)
+        assert out["result"] == "Passed"
+
+    def test_folder_name_not_used_when_filename_title_contradicts_same_year(self) -> None:
+        """When the filename has the same year but a clearly different title,
+        the folder-name fallback should NOT match (prevents false positives).
+
+        E.g. "Fight Club (1999)" inside a "The Matrix (1999)" folder
+        should NOT be considered a match for "The Matrix" (1999).
+        """
+        cfg = Config()
+        cfg.general.library_path_list = ["/library"]
+        result = _index_result(
+            index_title="The Matrix 1999 1080p BluRay",
+            index_title_sanitised="The Matrix 1999 1080p BluRay",
+            index_title_resolution="1080",
+            movie_title="The Matrix",
+            movie_title_year="1999",
+            movie_title_compare="thematrix",
+        )
+        # Library has a DIFFERENT movie (same year, completely different title)
+        library_walk: list[tuple[str, list[str], list[str]]] = [
+            ("/library/The Matrix (1999)", [], ["Fight.Club.1999.1080p.BluRay.mkv"])
+        ]
+        out = filter_by_index(result, _default_site_dict(criteria="1080p"), cfg, library_walk=library_walk)
+        # Should pass (not fail) because the file title (Fight Club) contradicts the search title (The Matrix)
+        assert out["result"] == "Passed"
+
+    def test_folder_name_used_as_fallback_when_filename_does_not_match(self) -> None:
+        """When library filename doesn't contain the full movie title, fall back to parent folder name.
+
+        The filename 'The.Lord.of.the.Rings.2001.EXTENDED...FGT.mkv' sanitises to
+        'The Lord of the Rings' (truncated before 'The Fellowship of the Ring'),
+        but the folder 'The Lord of the Rings The Fellowship of the Ring (2001)'
+        contains the full title. The folder name should be checked as a fallback.
+        """
+        cfg = Config()
+        cfg.general.library_path_list = ["/library"]
+        result = _index_result(
+            index_title="The Lord of the Rings The Fellowship of the Ring 2001 EXTENDED 2160p BluRay",
+            index_title_sanitised="The Lord of the Rings The Fellowship of the Ring 2001 EXTENDED 2160p BluRay",
+            index_title_resolution="1080",
+            movie_title="The Lord of the Rings The Fellowship of the Ring",
+            movie_title_year="2001",
+            movie_title_compare="thelordoftheringsthefellowshipofthering",
+        )
+        # Library has the movie inside a folder with the full readable name,
+        # but the file itself has a garbled release-group filename
+        library_walk: list[tuple[str, list[str], list[str]]] = [
+            (
+                "/library/The Lord of the Rings The Fellowship of the Ring (2001)",
+                [],
+                [
+                    "The.Lord.of.the.Rings.2001.EXTENDED.PROPER.2160p.BluRay.REMUX.HEVC.DTS-HD.MA.TrueHD.7.1.Atmos-FGT.mkv"
+                ],
+            )
+        ]
+        out = filter_by_index(result, _default_site_dict(criteria="2160p"), cfg, library_walk=library_walk)
+        # Should fail because library already has this movie at 2160p (higher res than index's 1080p)
+        assert out["result"] != "Passed"
+
+
 # _evaluate_library_files: resolution edge cases
 
 

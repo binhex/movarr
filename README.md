@@ -345,9 +345,9 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 1. Detects torrents with a completed status.
 2. Scans the download directory, skipping files and folders that match the exclude rules.
 3. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
-5. Falls back to `default_copy_library` if no rule matches.
-6. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
-7. Marks the history record as `Completed`.
+4. Falls back to `default_copy_library` if no rule matches.
+5. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
+6. Marks the history record as `Completed`.
 
 ## Scheduler
 
@@ -384,7 +384,7 @@ uv run pytest
 
 **Q: movarr queued a movie I already have. Why?**
 
-Library matching works by extracting the movie title and year from the torrent's index title and scanning your `library_path_list` for video files whose sanitised filename contains the same title and year. Ensure your media files include the release year in their filename (e.g. `The Matrix 1999 1080p BluRay.mkv`). movarr also attempts an IMDb ID lookup as a secondary match when the index title can be resolved.
+Library matching works by extracting the movie title and year from the torrent's index title and scanning your `library_path_list` for video files whose sanitised filename contains the same title and year. If the filename does not match (e.g. it contains a garbled release-group string), the **parent folder name** is checked as a fallback. Ensure your media files include the release year in their filename (e.g. `The Matrix 1999 1080p BluRay.mkv`) or organise movies into folders whose names contain the full movie title and year. movarr also attempts an IMDb ID lookup as a secondary match when the index title can be resolved.
 
 **Q: How do I prevent movarr from downloading non-English movies?**
 
