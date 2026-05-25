@@ -638,12 +638,48 @@ def _check_library_canonical(
 # Library walk helpers
 
 
+def _match_folder_name(
+    dir_path: str,
+    title_compare: str,
+    year: str,
+) -> bool:
+    """Return True if the last path component of *dir_path* matches *title_compare* and *year*.
+
+    Used as a fallback when the library filename itself does not match.
+    """
+    if not dir_path:
+        return False
+    folder = os.path.basename(dir_path)
+    if not folder:
+        return False
+    san_dir = sanitise(folder)
+    if not san_dir:
+        return False
+    dir_title = extract_movie_title(san_dir)
+    dir_year = extract_year(san_dir)
+    if not dir_title or not dir_year:
+        return False
+    dir_norm = normalise_for_compare(dir_title)
+    return bool(dir_norm and dir_norm == title_compare and dir_year == year)
+
+
 def _match_library_file(
     fname: str,
     title_compare: str,
     year: str,
+    root: str,
 ) -> str | None:
-    """Return the full path if *fname* matches *title_compare* and *year*."""
+    """Return *fname* if it matches *title_compare* and *year*.
+
+    When the filename does not match, falls back to comparing the
+    parent folder name (last path component of *root*) via ``_match_folder_name``.
+    This handles cases where the filename is a garbled release-group string but
+    the containing folder has the full readable movie title.
+
+    Note:
+        Files directly at the library root (no parent folder) silently skip the
+        fallback since there is no folder name to inspect.
+    """
     if not fname.lower().endswith(_VIDEO_EXTS):
         return None
     san = sanitise(fname)
@@ -658,11 +694,25 @@ def _match_library_file(
         return None
     # title_compare is already normalised; require exact match to prevent
     # substring false positives (e.g. "rings" matching "thelordoftherings").
-    if norm != title_compare:
-        return None
-    if lib_year != year:
-        return None
-    return fname
+    if norm == title_compare and lib_year == year:
+        return fname
+
+    # Filename did not match — try the parent folder name as a fallback.
+    if _match_folder_name(root, title_compare, year):
+        # Reject if the filename's year contradicts the search year (e.g.
+        # "Matrix Reloaded (2003)" inside a "The Matrix (1999)" folder).
+        if lib_year != year:
+            return None
+        # Reject if the filename clearly refers to a different movie with
+        # the same year (e.g. "Fight Club (1999)" inside "The Matrix (1999)").
+        # Accept only when the filename title is a substring of the search
+        # title or vice versa — this allows truncated/reordered titles while
+        # rejecting completely different titles.
+        if norm not in title_compare and title_compare not in norm:
+            return None
+        return fname
+
+    return None
 
 
 def _walk_library_files(
@@ -672,7 +722,7 @@ def _walk_library_files(
     found: list[str] = []
     for root, _dirs, files in library_walk:
         for fname in files:
-            if _match_library_file(fname, title_compare, year):
+            if _match_library_file(fname, title_compare, year, root):
                 found.append(os.path.join(root, fname))
     return found
 
