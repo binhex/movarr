@@ -465,7 +465,6 @@ class FiltersConfig(BaseModel):
     override_director_list: list[str] = Field(default_factory=list)
     override_movie_title_list: list[str] = Field(default_factory=list)
     override_character_list: list[str] = Field(default_factory=list)
-    preferred_index_quality_list: list[str] = Field(default_factory=list)
     preferred_index_group_list: list[str] = Field(default_factory=list)
 
     @field_validator("override_genre", mode="before")
@@ -630,7 +629,6 @@ class QueueManagementConfig(BaseModel):
     metadata_delete_torrent_data: bool = True
     stalled_delete_torrent_max_mins: int = 120
     metadata_delete_torrent_max_mins: int = 30
-    connection_down_grace_mins: int = 30
 
 
 class CopyLibraryRuleConfig(BaseModel):

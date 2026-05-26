@@ -698,21 +698,37 @@ def _match_library_file(
         return fname
 
     # Filename did not match — try the parent folder name as a fallback.
-    if _match_folder_name(root, title_compare, year):
-        # Reject if the filename's year contradicts the search year (e.g.
-        # "Matrix Reloaded (2003)" inside a "The Matrix (1999)" folder).
-        if lib_year != year:
-            return None
-        # Reject if the filename clearly refers to a different movie with
-        # the same year (e.g. "Fight Club (1999)" inside "The Matrix (1999)").
-        # Accept only when the filename title is a substring of the search
-        # title or vice versa — this allows truncated/reordered titles while
-        # rejecting completely different titles.
-        if norm not in title_compare and title_compare not in norm:
-            return None
-        return fname
+    return _try_folder_fallback(root, fname, norm, lib_year, title_compare, year)
 
-    return None
+
+def _try_folder_fallback(
+    root: str,
+    fname: str,
+    norm: str,
+    lib_year: str | None,
+    title_compare: str,
+    year: str,
+) -> str | None:
+    """Return *fname* if the parent folder name matches *title_compare* and *year*.
+
+    Used as a fallback when the library filename itself does not match.
+    Returns ``None`` when the folder name does not match, the year contradicts,
+    or the filename's title is completely unrelated to the search title.
+    """
+    if not _match_folder_name(root, title_compare, year):
+        return None
+    # Reject if the filename's year contradicts the search year (e.g.
+    # "Matrix Reloaded (2003)" inside a "The Matrix (1999)" folder).
+    if lib_year != year:
+        return None
+    # Reject if the filename clearly refers to a different movie with
+    # the same year (e.g. "Fight Club (1999)" inside "The Matrix (1999)").
+    # Accept only when the filename title is a substring of the search
+    # title or vice versa — this allows truncated/reordered titles while
+    # rejecting completely different titles.
+    if norm not in title_compare and title_compare not in norm:
+        return None
+    return fname
 
 
 def _walk_library_files(

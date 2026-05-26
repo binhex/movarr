@@ -121,6 +121,7 @@ class TestFetchMetadata:
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb_module})
         result = _make_result()
         cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
         out = fetch_metadata(result, cfg)
         assert out["result"] == "Passed"
 
@@ -271,6 +272,19 @@ class TestFetchImdbpie:
 class TestFetchOmdb:
     """Tests for _fetch_omdb()."""
 
+    def test_missing_api_key_returns_failed(self) -> None:
+        """When OMDb API key is not configured, _fetch_omdb returns Failed immediately."""
+        result = _make_result()
+        cfg = Config()  # no API key set
+        out = _fetch_omdb(result, cfg)
+        assert out["result"] == "Failed"
+
+    @staticmethod
+    def _cfg_with_omdb_key() -> Config:
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "test-key"
+        return cfg
+
     def _setup_omdb_mock(self, mocker: MockerFixture, return_value: dict) -> None:
         mock_omdb = mocker.MagicMock()
         mock_client = mocker.MagicMock()
@@ -318,7 +332,7 @@ class TestFetchOmdb:
             },
         )
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         assert out.get("imdb_cert_source") is None
 
@@ -328,7 +342,7 @@ class TestFetchOmdb:
             {"title": "The Matrix", "year": "1999", "rated": "Not Rated"},
         )
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         assert out.get("imdb_certification") is None
 
@@ -339,7 +353,7 @@ class TestFetchOmdb:
         mock_client.imdbid.side_effect = RuntimeError("api error")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 
@@ -348,7 +362,7 @@ class TestFetchOmdb:
         mock_omdb.OMDBClient.side_effect = RuntimeError("no connection")
         mocker.patch.dict("sys.modules", {"omdb": mock_omdb})
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 
@@ -358,7 +372,7 @@ class TestFetchOmdb:
             {"title": "The Matrix", "year": "1999", "imdb_votes": "1,500,000", "imdb_rating": "8.7"},
         )
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         # Votes should be an integer (no commas or non-digit chars)
         votes = out.get("imdb_votes")
@@ -372,7 +386,7 @@ class TestFetchOmdb:
             {"title": "Big Mistakes", "year": "2026\u2013"},
         )
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         assert out.get("imdb_year") == 2026
 
@@ -382,7 +396,7 @@ class TestFetchOmdb:
             {"title": "The Matrix", "year": "1999", "genre": "Action, Sci-Fi, Thriller"},
         )
         result = _make_result()
-        cfg = Config()
+        cfg = self._cfg_with_omdb_key()
         out = _fetch_omdb(result, cfg)
         genres = out.get("imdb_genres_list")
         if genres:
@@ -593,6 +607,7 @@ class TestFetchOmdbEmptyResponse:
         self._setup_omdb_mock(mocker, {})
         result = _make_result()
         cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 
@@ -600,6 +615,7 @@ class TestFetchOmdbEmptyResponse:
         self._setup_omdb_mock(mocker, {"year": "1999"})
         result = _make_result()
         cfg = Config()
+        cfg.credentials.omdb.api_key = "test_key"
         out = _fetch_omdb(result, cfg)
         assert out["result"] == "Failed"
 

@@ -649,6 +649,23 @@ class TestSearchTmdbEdgeCases:
         mock_http.get.side_effect = [search_resp, HttpError("detail failed")]
         out = _search_tmdb(_make_result(), self._cfg())
         assert out["result"] == "Failed"
+        assert len([d for d in (out.get("result_details") or []) if "Failed:" in d]) == 1
+
+    def test_detail_response_without_imdb_id_calls_apply_imdb_match(self, mocker: MockerFixture) -> None:
+        """When TMDb detail response lacks imdb_id, _apply_imdb_match is called."""
+        mock_http = mocker.MagicMock()
+        mocker.patch("movarr.imdb_search.HttpClient", return_value=mock_http)
+        search_resp = mocker.MagicMock()
+        search_resp.content = json.dumps(
+            {"results": [{"title": "The Matrix", "release_date": "1999-03-31", "id": 603}]}
+        )
+        detail_resp = mocker.MagicMock()
+        detail_resp.content = json.dumps({"imdb_id": None})
+        mock_http.get.return_value = search_resp
+        mock_http.get.side_effect = [search_resp, detail_resp]
+        out = _search_tmdb(_make_result(), self._cfg())
+        # Should fail because _apply_imdb_match is called with empty candidates
+        assert out["result"] == "Failed"
 
 
 # _search_omdb — unparseable year edge case
