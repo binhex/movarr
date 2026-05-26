@@ -294,6 +294,7 @@ def _parse_omdb_canonical(data: dict) -> dict:
         "genres": genres,
         "cert": rated,
         "cert_source": "omdb" if rated else None,
+        "title_id": _omit_na(data, "imdb_id"),
         "characters": None,
         "directors": directors,
         "writers": writers,
@@ -309,6 +310,14 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     api_key = config.credentials.omdb.api_key
     imdb_id = result.get("imdb_id", "")
     details: list[str] = result.get("result_details") or []
+
+    if not api_key:
+        msg = "OMDb API key not configured; cannot fetch OMDb metadata."
+        _logger.warning(msg)
+        details.append(f"Failed: {msg}")
+        result["result"] = "Failed"
+        result["result_details"] = details
+        return result
 
     try:
         omdb_client = omdb.OMDBClient(apikey=api_key)
@@ -364,6 +373,7 @@ def _apply_metadata(result: ResultDict, data: dict[str, Any]) -> None:
             "imdb_genres_list": data.get("genres"),
             "imdb_certification": data.get("cert"),
             "imdb_cert_source": data.get("cert_source"),
+            "imdb_id": data.get("title_id") or result.get("imdb_id") or "",
             "imdb_credits_character_list": data.get("characters"),
             "imdb_credits_director_list": data.get("directors"),
             "imdb_credits_writer_list": data.get("writers"),

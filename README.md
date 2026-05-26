@@ -135,7 +135,6 @@ Each of the three background tasks has its own schedule block with the same keys
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `enabled` | Enable or disable this task. | `true` |
-| `schedule_time_units` | Unit for the interval. Always `minutes`. | `minutes` |
 | `schedule_time_mins` | Interval in minutes between runs. | `30` (acquisition), `5` (queue_management / post_processing) |
 | `run_on_start` | Run this task immediately when movarr starts, before the first interval elapses. | `true` |
 
@@ -165,7 +164,6 @@ Controls which torrents pass the IMDb quality gate.
 | `override_director_list` | Force-accept any movie directed by one of these directors. | `[]` |
 | `override_movie_title_list` | Force-accept any movie whose title contains one of these strings. | `[]` |
 | `override_character_list` | Force-accept any movie featuring one of these characters. | `[]` |
-| `preferred_index_quality_list` | Keywords indicating a preferred quality edition (e.g. `remastered`, `directors cut`). Matching torrents sort higher. | `[]` |
 | `preferred_index_group_list` | Preferred release group names. Matching torrents sort higher. | `[]` |
 
 ### `torrent_client`
@@ -248,7 +246,6 @@ Each entry in `search`:
 | `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `true` |
 | `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
 | `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
-| `connection_down_grace_mins` | Deprecated. qBittorrent's own connection status is used to detect internet outages. | `30` |
 
 ### `post_process`
 

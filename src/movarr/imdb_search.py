@@ -197,7 +197,8 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
 
     imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, http, result)
     if imdb_id is None:
-        _apply_imdb_match(result, [], title, year)
+        if result.get("result") != "Failed":
+            _apply_imdb_match(result, [], title, year)
         return result
 
     candidates = [{"imdb_id": imdb_id}]

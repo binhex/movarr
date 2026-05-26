@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "movarr"
-version = "1.2.11"
+version = "1.2.12"
 description = "Automated tool"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -189,5 +189,7 @@ dev = [
     "pytest-crap @ git+https://github.com/binhex/pytest-crap.git@v0.3.1",
     "types-requests>=2.31.0",
     "types-pyyaml>=6.0.0",
-    "pre-commit"
+    "pre-commit",
+    "mypy",
+    "ruff"
 ]

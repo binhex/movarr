@@ -36,6 +36,8 @@ from loguru import logger
 
 from movarr.notifications import send_service_alert
 
+_SECONDS_PER_HOUR: float = 3600.0
+
 if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.database import Database
@@ -136,8 +138,8 @@ def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
         return
 
     elapsed_seconds = (now - since).total_seconds()
-    elapsed_hours = elapsed_seconds / 3600.0
-    if elapsed_seconds < ctx.alert_hours * 3600.0:
+    elapsed_hours = elapsed_seconds / _SECONDS_PER_HOUR
+    if elapsed_seconds < ctx.alert_hours * _SECONDS_PER_HOUR:
         logger.debug(
             "{} unavailability streak: {:.1f}h elapsed, threshold {:.1f}h not reached.",
             ctx.service_name,
