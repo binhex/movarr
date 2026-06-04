@@ -2194,6 +2194,26 @@ class TestProcessOneHooks:
         labels = [call[0][2] for call in mock_hook.call_args_list]
         assert "pre_copy" not in labels
 
+    def test_poster_art_saved_when_filename_set(self, mocker: MockerFixture) -> None:
+        """_save_poster_art is called when poster_art.filename is set."""
+        config = self._config()
+        config.post_process.poster_art.filename = "poster.jpg"
+
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = self._db_record(mocker)
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.mkv"])
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/hd")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+        mocker.patch("movarr.post_processor._run_hook", return_value=True)
+        mock_save = mocker.patch("movarr.post_processor._save_poster_art")
+
+        _process_one(self._torrent(), config, qbt, db)
+
+        mock_save.assert_called_once()
+
 
 class TestProcessOnePreCopyHookException:
     """Covers the pre_copy hook exception path: copy is aborted."""

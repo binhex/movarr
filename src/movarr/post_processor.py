@@ -310,7 +310,7 @@ def _save_poster_art(
     stem, _ = os.path.splitext(filename)
     safe_name = f"{stem}.jpg"
 
-    poster_url = db_record.imdb_poster_url
+    poster_url = str(db_record.imdb_poster_url or "")
     if not poster_url:
         logger.debug("No poster URL for '{}'; skipping poster save.", db_record.imdb_title)
         return

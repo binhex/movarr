@@ -12,7 +12,7 @@ from __future__ import annotations
 import html
 import re
 import urllib.parse
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import apprise
 from loguru import logger
@@ -144,7 +144,7 @@ def _dispatch_apprise(subject: str, body: str, urls: list[str], attach: str | No
     for url in urls:
         ap.add(url)
     try:
-        notify_kwargs: dict[str, object] = {
+        notify_kwargs: dict[str, Any] = {
             "title": subject,
             "body": body,
             "body_format": apprise.NotifyFormat.HTML,
