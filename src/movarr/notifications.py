@@ -256,14 +256,32 @@ def _extract_body_fields(result: ResultDict, config: Config) -> dict[str, str]:
 
 
 def _build_body(result: ResultDict, config: Config) -> str:
-    """Build the HTML notification body."""
+    """Build the HTML notification body.
+
+    When poster_embed_enabled and imdb_poster_url are set, an inline ``<img>``
+    tag is included so that HTML-capable services (e.g. email) render the
+    poster at the desired position. The ``attach`` parameter in
+    :func:`send_queued_notification` provides the poster for services that
+    do not render HTML (e.g. ntfy).
+    """
     f = _extract_body_fields(result, config)
+
+    # Inline poster image (for HTML-capable services)
+    poster_img = ""
+    if config.notification.poster_embed_enabled:
+        poster_url = result.get("imdb_poster_url")
+        if poster_url:
+            resized = _poster_url_with_width(poster_url, config.notification.poster_embed_width)
+            safe_url = _safe_url(resized)
+            if safe_url != "#":
+                poster_img = f'<p><img src="{safe_url}" alt="Poster" style="max-width:100%;height:auto;"></p>\n'
+
     imdb_line = ""
     if f["imdb_id"]:
         imdb_line = f"<p><strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}</p>\n"
     return f"""
 <p><strong>Title:</strong> <a href="{f["imdb_url"]}">{f["title"]} ({f["year"]})</a> \u2014 {f["rating"]} from {f["votes"]} users</p>
-{imdb_line}<p><strong>Plot:</strong> {f["plot"]}</p>
+{poster_img}{imdb_line}<p><strong>Plot:</strong> {f["plot"]}</p>
 <p><strong>Actors:</strong> {f["actors_str"]}</p>
 <p><strong>Directors:</strong> {f["directors_str"]}</p>
 <p><strong>Genres:</strong> {f["genres_str"]}</p>
