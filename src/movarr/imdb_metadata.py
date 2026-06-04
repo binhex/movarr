@@ -20,6 +20,8 @@ from urllib.parse import urljoin
 import pycountry
 from loguru import logger as _logger
 
+from movarr.notifications import _strip_poster_resolution
+
 if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
@@ -362,7 +364,7 @@ def _apply_metadata(result: ResultDict, data: dict[str, Any]) -> None:
         {
             "imdb_title": data.get("title"),
             "imdb_year": data.get("year"),
-            "imdb_poster_url": data.get("poster"),
+            "imdb_poster_url": _strip_poster_resolution(data.get("poster")) if data.get("poster") else None,
             "imdb_trailer_url": data.get("trailer_url"),
             "imdb_plot_summary": data.get("plot_summary"),
             "imdb_plot_outline": data.get("plot_outline"),

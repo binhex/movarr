@@ -725,3 +725,16 @@ class TestConvertLanguages:
         # A token that matches no lookup strategy must be silently dropped.
         result = _convert_languages("XXXXXXXXXNOTAREALLANGUAGE,en")
         assert result == ["en"]
+
+
+class TestApplyMetadataResolutionStrip:
+    """Tests that _apply_metadata strips resolution from poster URL."""
+
+    def test_poster_url_has_resolution_stripped(self) -> None:
+        """_apply_metadata strips _SX resolution from poster URL."""
+        from movarr.imdb_metadata import _apply_metadata
+
+        result: ResultDict = {"imdb_id": "tt1375666", "result": "Passed", "result_details": []}
+        data = {"poster": "https://m.media-amazon.com/images/M/MV5B._V1_SX300.jpg"}
+        _apply_metadata(result, data)
+        assert result["imdb_poster_url"] == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
