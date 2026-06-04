@@ -185,12 +185,16 @@ class TestBuildBody:
         cfg = Config()
         cfg.notification.poster_embed_enabled = True
         cfg.notification.poster_embed_width = 500
-        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg", imdb_id="tt1375666")
+        result = _make_full_result(
+            imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg", imdb_id="tt1375666"
+        )
         body = _build_body(result, cfg)
         title_pos = body.index("Title:")
         img_pos = body.index('<img src="')
         imdb_pos = body.index("IMDb:")
-        assert title_pos < img_pos < imdb_pos, f"Expected img between Title ({title_pos}) and IMDb ({imdb_pos}), got img at {img_pos}"
+        assert title_pos < img_pos < imdb_pos, (
+            f"Expected img between Title ({title_pos}) and IMDb ({imdb_pos}), got img at {img_pos}"
+        )
 
 
 # _format_result_details
