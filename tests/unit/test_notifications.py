@@ -196,6 +196,33 @@ class TestBuildBody:
             f"Expected img between Title ({title_pos}) and IMDb ({imdb_pos}), got img at {img_pos}"
         )
 
+    def test_poster_img_tag_after_title_when_imdb_id_absent(self) -> None:
+        """Poster <img> appears after Title, before Plot when IMDb line is absent."""
+        cfg = Config()
+        cfg.notification.poster_embed_enabled = True
+        cfg.notification.poster_embed_width = 500
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
+        result.pop("imdb_id", None)
+        body = _build_body(result, cfg)
+        title_pos = body.index("Title:")
+        img_pos = body.index('<img src="')
+        plot_pos = body.index("Plot:")
+        assert title_pos < img_pos < plot_pos, (
+            f"Expected img between Title ({title_pos}) and Plot ({plot_pos}), got img at {img_pos}"
+        )
+
+    def test_poster_img_tag_width_zero_strips_resolution(self) -> None:
+        """Poster <img src> has no _SX resolution when poster_embed_width=0."""
+        cfg = Config()
+        cfg.notification.poster_embed_enabled = True
+        cfg.notification.poster_embed_width = 0
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg")
+        body = _build_body(result, cfg)
+        assert '<img src="' in body
+        assert "_V1_SX" not in body
+        # Should use the stripped (largest) URL
+        assert "_V1_.jpg" in body
+
 
 # _format_result_details
 

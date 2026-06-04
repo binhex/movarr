@@ -272,8 +272,9 @@ def _build_body(result: ResultDict, config: Config) -> str:
         poster_url = result.get("imdb_poster_url")
         if poster_url:
             resized = _poster_url_with_width(poster_url, config.notification.poster_embed_width)
-            safe_src = html.escape(resized, quote=True)
-            poster_img = f'<p><img src="{safe_src}" alt="Poster" style="max-width:100%;height:auto;"></p>\n'
+            safe_url = _safe_url(resized)
+            if safe_url != "#":
+                poster_img = f'<p><img src="{safe_url}" alt="Poster" style="max-width:100%;height:auto;"></p>\n'
 
     imdb_line = ""
     if f["imdb_id"]:
