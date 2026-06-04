@@ -33,13 +33,16 @@ def _strip_poster_resolution(url: str) -> str:
 def _poster_url_with_width(url: str, width: int) -> str:
     """Return the poster URL constrained to *width* pixels (width <= 0 returns largest/original).
 
-    Uses regex-based replacement to handle all Amazon modifier variants
-    (``_SX``, ``_SY``, ``_SW``, ``_UX``, ``_UY``, ``_SL``) and works
-    with both ``.jpg`` and ``.png`` extensions.
+    Handles all known Amazon modifier variants (``_SX``, ``_SY``, ``_SW``,
+    ``_UX``, ``_UY``) using regex-based replacement. Works with both ``.jpg``
+    and ``.png`` extensions. If the URL lacks the ``_V1`` segment (unexpected
+    non-Amazon format), the URL is returned unchanged.
     """
     if width <= 0:
         return _strip_poster_resolution(url)
     stripped = _strip_poster_resolution(url)
+    if "_V1_" not in stripped:
+        return url
     # Inject _SX<width> before the file extension, handling any _V1 modifiers
     return _AMAZON_POSTER_V1_RE.sub(f"._V1_SX{width}.", stripped)
 

@@ -329,7 +329,7 @@ def _save_poster_art(
         )
         with urllib.request.urlopen(req, timeout=30) as response:
             content_type = (response.headers.get("Content-Type") or "").strip()
-            if content_type and not content_type.startswith("image/"):
+            if not content_type or not content_type.startswith("image/"):
                 logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
                 return
             with open(dst_path, "wb") as f:
@@ -398,7 +398,8 @@ def _process_one(
             poster_dst_base = _resolve_destination(db_record, config)
             if poster_dst_base:
                 poster_dst_dir = _build_dst_dir(db_record, poster_dst_base)
-                _save_poster_art(db_record, poster_dst_dir, config)
+                if make_directory(poster_dst_dir):
+                    _save_poster_art(db_record, poster_dst_dir, config)
         db.mark_completed(tag)
         if config.post_process.remove_completed:
             qbt.delete_torrent(
