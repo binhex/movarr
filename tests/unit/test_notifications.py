@@ -11,6 +11,8 @@ from movarr.notifications import (
     _build_subject,
     _dispatch_apprise,
     _format_result_details,
+    _poster_url_with_width,
+    _strip_poster_resolution,
     send_index_proxy_alert,
     send_queued_notification,
     send_service_alert,
@@ -137,6 +139,21 @@ class TestBuildBody:
         body = _build_body(result, cfg)
         assert 'href="#"' in body
 
+    def test_imdb_bare_url_present_when_id_set(self) -> None:
+        """Body contains a bare IMDb URL line when imdb_id is present."""
+        cfg = Config()
+        result = _make_full_result(imdb_id="tt1375666")
+        body = _build_body(result, cfg)
+        assert "https://imdb.com/title/tt1375666" in body
+
+    def test_imdb_bare_url_absent_when_id_missing(self) -> None:
+        """Body omits the IMDb bare URL line when imdb_id is missing."""
+        cfg = Config()
+        result = _make_full_result()
+        result.pop("imdb_id", None)
+        body = _build_body(result, cfg)
+        assert "https://imdb.com/title/" not in body
+
 
 # _format_result_details
 
@@ -236,6 +253,56 @@ class TestSendQueuedNotification:
 
         assert send_queued_notification(_make_full_result(), cfg) is False
 
+    def test_notify_called_with_attach_when_poster_embedded(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() with attach=poster_url when poster_embed_enabled=True."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = True
+        cfg.notification.poster_embed_width = 500
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" in _call_kwargs
+        assert _call_kwargs["attach"] is not None
+
+    def test_notify_no_attach_when_disabled(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() without attach when poster_embed_enabled=False."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = False
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
+
+    def test_notify_no_attach_when_poster_url_none(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() without attach when imdb_poster_url is None."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = True
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url=None)
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
+
 
 # NotificationConfig defaults (via Config)
 
@@ -252,6 +319,26 @@ class TestNotificationConfigDefaults:
         """apprise_urls accepts a list of service URL strings."""
         nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
         assert len(nc.apprise_urls) == 2
+
+    def test_poster_embed_enabled_defaults_to_true(self) -> None:
+        """poster_embed_enabled defaults to True."""
+        cfg = Config()
+        assert cfg.notification.poster_embed_enabled is True
+
+    def test_poster_embed_width_defaults_to_500(self) -> None:
+        """poster_embed_width defaults to 500."""
+        cfg = Config()
+        assert cfg.notification.poster_embed_width == 500
+
+    def test_poster_art_filename_defaults_to_empty(self) -> None:
+        """poster_art.filename defaults to empty string (disabled)."""
+        cfg = Config()
+        assert cfg.post_process.poster_art.filename == ""
+
+    def test_poster_art_download_width_defaults_to_0(self) -> None:
+        """poster_art.download_width defaults to 0 (largest available)."""
+        cfg = Config()
+        assert cfg.post_process.poster_art.download_width == 0
 
 
 class TestSendIndexProxyAlert:
@@ -404,3 +491,43 @@ class TestDispatchApprise:
     def test_returns_false_for_empty_body(self) -> None:
         """Guard: empty body returns False without touching Apprise."""
         assert _dispatch_apprise("subject", "", ["apprise://test"]) is False
+
+
+class TestPosterUrlHelpers:
+    """Tests for poster URL resolution/strip helpers."""
+
+    def test_strip_removes_sx500(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_removes_sy1080(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SY1080.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_removes_sw300(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SW300.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_leaves_unmodified_url_without_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        assert _strip_poster_resolution(url) == url
+
+    def test_strip_handles_url_without_v1_suffix(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B.jpg"
+        assert _strip_poster_resolution(url) == url
+
+    def test_width_500_inserts_sx500(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        assert _poster_url_with_width(url, 500) == "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+
+    def test_width_0_strips_existing_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg"
+        assert _poster_url_with_width(url, 0) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_width_negative_treated_as_zero(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+        assert _poster_url_with_width(url, -1) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_width_500_on_already_resized_url_replaces_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg"
+        assert _poster_url_with_width(url, 500) == "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
