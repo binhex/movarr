@@ -154,74 +154,13 @@ class TestBuildBody:
         body = _build_body(result, cfg)
         assert "https://imdb.com/title/" not in body
 
-    def test_poster_img_tag_present_when_embed_enabled(self) -> None:
-        """Body includes an inline <img> tag with poster URL when poster_embed_enabled is True."""
+    def test_poster_img_never_in_body(self) -> None:
+        """Body never contains an inline poster <img> tag (poster removed from notifications)."""
         cfg = Config()
         cfg.notification.poster_embed_enabled = True
-        cfg.notification.poster_embed_width = 500
-        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
-        body = _build_body(result, cfg)
-        assert '<img src="' in body
-        assert "_V1_SX500" in body
-
-    def test_poster_img_tag_absent_when_embed_disabled(self) -> None:
-        """Body omits the inline <img> tag when poster_embed_enabled is False."""
-        cfg = Config()
-        cfg.notification.poster_embed_enabled = False
         result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
         body = _build_body(result, cfg)
         assert '<img src="' not in body
-
-    def test_poster_img_tag_absent_when_poster_url_none(self) -> None:
-        """Body omits the inline <img> tag when imdb_poster_url is None."""
-        cfg = Config()
-        cfg.notification.poster_embed_enabled = True
-        result = _make_full_result(imdb_poster_url=None)
-        body = _build_body(result, cfg)
-        assert '<img src="' not in body
-
-    def test_poster_img_tag_after_title_before_imdb_link(self) -> None:
-        """Poster <img> appears after the Title line and before the IMDb link line."""
-        cfg = Config()
-        cfg.notification.poster_embed_enabled = True
-        cfg.notification.poster_embed_width = 500
-        result = _make_full_result(
-            imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg", imdb_id="tt1375666"
-        )
-        body = _build_body(result, cfg)
-        title_pos = body.index("Title:")
-        img_pos = body.index('<img src="')
-        imdb_pos = body.index("IMDb:")
-        assert title_pos < img_pos < imdb_pos, (
-            f"Expected img between Title ({title_pos}) and IMDb ({imdb_pos}), got img at {img_pos}"
-        )
-
-    def test_poster_img_tag_after_title_when_imdb_id_absent(self) -> None:
-        """Poster <img> appears after Title, before Plot when IMDb line is absent."""
-        cfg = Config()
-        cfg.notification.poster_embed_enabled = True
-        cfg.notification.poster_embed_width = 500
-        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
-        result.pop("imdb_id", None)
-        body = _build_body(result, cfg)
-        title_pos = body.index("Title:")
-        img_pos = body.index('<img src="')
-        plot_pos = body.index("Plot:")
-        assert title_pos < img_pos < plot_pos, (
-            f"Expected img between Title ({title_pos}) and Plot ({plot_pos}), got img at {img_pos}"
-        )
-
-    def test_poster_img_tag_width_zero_strips_resolution(self) -> None:
-        """Poster <img src> has no _SX resolution when poster_embed_width=0."""
-        cfg = Config()
-        cfg.notification.poster_embed_enabled = True
-        cfg.notification.poster_embed_width = 0
-        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg")
-        body = _build_body(result, cfg)
-        assert '<img src="' in body
-        assert "_V1_SX" not in body
-        # Should use the stripped (largest) URL
-        assert "_V1_.jpg" in body
 
 
 # _format_result_details
@@ -322,12 +261,10 @@ class TestSendQueuedNotification:
 
         assert send_queued_notification(_make_full_result(), cfg) is False
 
-    def test_notify_called_with_attach_when_poster_embedded(self, mocker: MockerFixture) -> None:
-        """Calls apprise.notify() with attach=poster_url when poster_embed_enabled=True."""
+    def test_notify_without_attach(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() without attach parameter (poster removed from notifications)."""
         cfg = Config()
         cfg.notification.apprise_urls = ["ntfy://topic"]
-        cfg.notification.poster_embed_enabled = True
-        cfg.notification.poster_embed_width = 500
 
         mock_instance = mocker.MagicMock()
         mock_instance.notify.return_value = True
@@ -337,40 +274,7 @@ class TestSendQueuedNotification:
         send_queued_notification(result, cfg)
 
         _call_kwargs = mock_instance.notify.call_args[1]
-        assert "attach" in _call_kwargs
-        assert _call_kwargs["attach"] is not None
-
-    def test_notify_no_attach_when_disabled(self, mocker: MockerFixture) -> None:
-        """Calls apprise.notify() without attach when poster_embed_enabled=False."""
-        cfg = Config()
-        cfg.notification.apprise_urls = ["ntfy://topic"]
-        cfg.notification.poster_embed_enabled = False
-
-        mock_instance = mocker.MagicMock()
-        mock_instance.notify.return_value = True
-        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
-
-        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
-        send_queued_notification(result, cfg)
-
-        _call_kwargs = mock_instance.notify.call_args[1]
-        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
-
-    def test_notify_no_attach_when_poster_url_none(self, mocker: MockerFixture) -> None:
-        """Calls apprise.notify() without attach when imdb_poster_url is None."""
-        cfg = Config()
-        cfg.notification.apprise_urls = ["ntfy://topic"]
-        cfg.notification.poster_embed_enabled = True
-
-        mock_instance = mocker.MagicMock()
-        mock_instance.notify.return_value = True
-        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
-
-        result = _make_full_result(imdb_poster_url=None)
-        send_queued_notification(result, cfg)
-
-        _call_kwargs = mock_instance.notify.call_args[1]
-        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
+        assert "attach" not in _call_kwargs
 
 
 # NotificationConfig defaults (via Config)
