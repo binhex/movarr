@@ -1903,6 +1903,7 @@ class TestProcessOneCopyCompletedFalse:
         qbt = mocker.MagicMock()
 
         mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/movies")
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
         mock_save = mocker.patch("movarr.post_processor._save_poster_art")
 
         _process_one(self._torrent(), cfg, qbt, db)

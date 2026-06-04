@@ -328,7 +328,7 @@ def _save_poster_art(
             headers={"User-Agent": "movarr/2.21.0"},
         )
         with urllib.request.urlopen(req, timeout=30) as response:
-            content_type = (response.headers.get("Content-Type") or "").strip()
+            content_type = (response.headers.get("Content-Type") or "").strip().lower()
             if not content_type or not content_type.startswith("image/"):
                 logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
                 return
@@ -392,15 +392,14 @@ def _process_one(
     # (NOT the downloaded files) by passing delete_data=False.
     if not config.post_process.copy_completed:
         logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
-        # Save poster art before marking completed — compute destination dir
-        # from routing rules (same logic used by _build_copy_target).
+        db.mark_completed(tag)
+        # Save poster art after marking completed.
         if db_record and config.post_process.poster_art.filename:
             poster_dst_base = _resolve_destination(db_record, config)
             if poster_dst_base:
                 poster_dst_dir = _build_dst_dir(db_record, poster_dst_base)
                 if make_directory(poster_dst_dir):
                     _save_poster_art(db_record, poster_dst_dir, config)
-        db.mark_completed(tag)
         if config.post_process.remove_completed:
             qbt.delete_torrent(
                 torrent_hash, delete_data=False, state="completed", name=str(db_record.index_title or "")
