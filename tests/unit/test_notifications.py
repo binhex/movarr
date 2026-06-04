@@ -255,6 +255,26 @@ class TestNotificationConfigDefaults:
         nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
         assert len(nc.apprise_urls) == 2
 
+    def test_poster_embed_enabled_defaults_to_true(self) -> None:
+        """poster_embed_enabled defaults to True."""
+        cfg = Config()
+        assert cfg.notification.poster_embed_enabled is True
+
+    def test_poster_embed_width_defaults_to_500(self) -> None:
+        """poster_embed_width defaults to 500."""
+        cfg = Config()
+        assert cfg.notification.poster_embed_width == 500
+
+    def test_poster_art_filename_defaults_to_empty(self) -> None:
+        """poster_art.filename defaults to empty string (disabled)."""
+        cfg = Config()
+        assert cfg.post_process.poster_art.filename == ""
+
+    def test_poster_art_download_width_defaults_to_0(self) -> None:
+        """poster_art.download_width defaults to 0 (largest available)."""
+        cfg = Config()
+        assert cfg.post_process.poster_art.download_width == 0
+
 
 class TestSendIndexProxyAlert:
     """Tests for send_index_proxy_alert()."""

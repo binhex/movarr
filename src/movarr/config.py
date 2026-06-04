@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.20.0"
+_CONFIG_VERSION = "2.21.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 # Hardcoded filenames constructed from directory paths at runtime.
@@ -129,6 +129,15 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.20.0",
         [
             (("filters", "reject_genre_exclusive_list"), []),
+        ],
+    ),
+    (
+        "2.20.0",
+        "2.21.0",
+        [
+            (("notification", "poster_embed_enabled"), True),
+            (("notification", "poster_embed_width"), 500),
+            (("post_process", "poster_art"), {"filename": "", "download_width": 0}),
         ],
     ),
 ]
@@ -353,6 +362,7 @@ _migrate_v213_to_v214 = _table_fns["2.13.0"]
 _migrate_v214_to_v215 = _table_fns["2.14.0"]
 _migrate_v216_to_v217 = _table_fns["2.16.0"]
 _migrate_v219_to_v220 = _table_fns["2.19.0"]
+_migrate_v220_to_v221 = _table_fns["2.20.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -377,6 +387,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.17.0": _migrate_v217_to_v218,
     "2.18.0": _migrate_v218_to_v219,
     "2.19.0": _migrate_v219_to_v220,
+    "2.20.0": _migrate_v220_to_v221,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -524,6 +535,8 @@ class NotificationConfig(BaseModel):
     apprise_urls: list[str] = Field(default_factory=list)
     index_proxy_alert_hours: float = 0
     torrent_client_alert_hours: float = 0
+    poster_embed_enabled: bool = True
+    poster_embed_width: int = 500
 
 
 class JackettConfig(BaseModel):
@@ -678,6 +691,20 @@ class PostProcessHooksConfig(BaseModel):
     hook_timeout_mins: float = 5.0
 
 
+class PosterArtConfig(BaseModel):
+    """Poster art download settings for post-processing.
+
+    ``filename``: target filename (e.g. ``"poster.jpg"`` or ``"folder.jpg"``).
+    Empty string disables poster download. Extension is forced to ``.jpg`` at
+    save time (the user can omit or specify any extension).
+
+    ``download_width``: pixel width for the poster. ``0`` means largest available.
+    """
+
+    filename: str = ""
+    download_width: int = 0
+
+
 class PostProcessConfig(BaseModel):
     """Post-processing settings for copying completed downloads."""
 
@@ -691,6 +718,7 @@ class PostProcessConfig(BaseModel):
     default_copy_library: DefaultCopyLibraryConfig = Field(default_factory=DefaultCopyLibraryConfig)
     delete_lower_quality: bool = False
     hooks: PostProcessHooksConfig = Field(default_factory=PostProcessHooksConfig)
+    poster_art: PosterArtConfig = Field(default_factory=PosterArtConfig)
 
 
 class DatabaseConfig(BaseModel):
