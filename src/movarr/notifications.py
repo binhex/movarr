@@ -10,11 +10,28 @@ are null-guarded here.
 from __future__ import annotations
 
 import html
+import re
 import urllib.parse
 from typing import TYPE_CHECKING
 
 import apprise
 from loguru import logger
+
+_AMAZON_POSTER_RES_RE = re.compile(r'_S[XWY]\d+')
+_AMAZON_POSTER_SUFFIX = '._V1_.jpg'
+
+
+def _strip_poster_resolution(url: str) -> str:
+    """Strip any _SX<width> / _SY<height> / _SW<width> suffix from an Amazon poster URL."""
+    return _AMAZON_POSTER_RES_RE.sub('_', url)
+
+
+def _poster_url_with_width(url: str, width: int) -> str:
+    """Return the poster URL constrained to *width* pixels (width <= 0 returns largest/original)."""
+    if width <= 0:
+        return _strip_poster_resolution(url)
+    stripped = _strip_poster_resolution(url)
+    return stripped.replace(_AMAZON_POSTER_SUFFIX, f'._V1_SX{width}.jpg')
 
 if TYPE_CHECKING:
     from movarr.config import Config

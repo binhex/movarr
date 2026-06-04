@@ -11,6 +11,8 @@ from movarr.notifications import (
     _build_subject,
     _dispatch_apprise,
     _format_result_details,
+    _poster_url_with_width,
+    _strip_poster_resolution,
     send_index_proxy_alert,
     send_queued_notification,
     send_service_alert,
@@ -404,3 +406,43 @@ class TestDispatchApprise:
     def test_returns_false_for_empty_body(self) -> None:
         """Guard: empty body returns False without touching Apprise."""
         assert _dispatch_apprise("subject", "", ["apprise://test"]) is False
+
+
+class TestPosterUrlHelpers:
+    """Tests for poster URL resolution/strip helpers."""
+
+    def test_strip_removes_sx500(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_removes_sy1080(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SY1080.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_removes_sw300(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SW300.jpg"
+        assert _strip_poster_resolution(url) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_strip_leaves_unmodified_url_without_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        assert _strip_poster_resolution(url) == url
+
+    def test_strip_handles_url_without_v1_suffix(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B.jpg"
+        assert _strip_poster_resolution(url) == url
+
+    def test_width_500_inserts_sx500(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        assert _poster_url_with_width(url, 500) == "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+
+    def test_width_0_strips_existing_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg"
+        assert _poster_url_with_width(url, 0) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_width_negative_treated_as_zero(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+        assert _poster_url_with_width(url, -1) == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+    def test_width_500_on_already_resized_url_replaces_resolution(self) -> None:
+        url = "https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg"
+        assert _poster_url_with_width(url, 500) == "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
