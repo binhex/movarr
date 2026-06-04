@@ -139,6 +139,21 @@ class TestBuildBody:
         body = _build_body(result, cfg)
         assert 'href="#"' in body
 
+    def test_imdb_bare_url_present_when_id_set(self) -> None:
+        """Body contains a bare IMDb URL line when imdb_id is present."""
+        cfg = Config()
+        result = _make_full_result(imdb_id="tt1375666")
+        body = _build_body(result, cfg)
+        assert "https://imdb.com/title/tt1375666" in body
+
+    def test_imdb_bare_url_absent_when_id_missing(self) -> None:
+        """Body omits the IMDb bare URL line when imdb_id is missing."""
+        cfg = Config()
+        result = _make_full_result()
+        result.pop("imdb_id", None)
+        body = _build_body(result, cfg)
+        assert "https://imdb.com/title/" not in body
+
 
 # _format_result_details
 
@@ -237,6 +252,56 @@ class TestSendQueuedNotification:
         mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
 
         assert send_queued_notification(_make_full_result(), cfg) is False
+
+    def test_notify_called_with_attach_when_poster_embedded(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() with attach=poster_url when poster_embed_enabled=True."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = True
+        cfg.notification.poster_embed_width = 500
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" in _call_kwargs
+        assert _call_kwargs["attach"] is not None
+
+    def test_notify_no_attach_when_disabled(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() without attach when poster_embed_enabled=False."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = False
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
+
+    def test_notify_no_attach_when_poster_url_none(self, mocker: MockerFixture) -> None:
+        """Calls apprise.notify() without attach when imdb_poster_url is None."""
+        cfg = Config()
+        cfg.notification.apprise_urls = ["ntfy://topic"]
+        cfg.notification.poster_embed_enabled = True
+
+        mock_instance = mocker.MagicMock()
+        mock_instance.notify.return_value = True
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=mock_instance)
+
+        result = _make_full_result(imdb_poster_url=None)
+        send_queued_notification(result, cfg)
+
+        _call_kwargs = mock_instance.notify.call_args[1]
+        assert "attach" not in _call_kwargs or _call_kwargs["attach"] is None
 
 
 # NotificationConfig defaults (via Config)

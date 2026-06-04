@@ -114,15 +114,25 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
     body = _build_body(result, config)
     subject = _build_subject(result)
 
-    if not _dispatch_apprise(subject, body, list(urls)):
+    # Build poster attachment if enabled
+    attach: str | None = None
+    if config.notification.poster_embed_enabled:
+        poster = result.get("imdb_poster_url")
+        if poster:
+            attach = _poster_url_with_width(poster, config.notification.poster_embed_width)
+
+    if not _dispatch_apprise(subject, body, list(urls), attach=attach):
         return False
 
     logger.info("Notification sent: {}", subject)
     return True
 
 
-def _dispatch_apprise(subject: str, body: str, urls: list[str]) -> bool:
+def _dispatch_apprise(subject: str, body: str, urls: list[str], attach: str | None = None) -> bool:
     """Send *subject*/*body* via Apprise to all *urls*.
+
+    If *attach* is provided, it is passed as the ``attach`` parameter to
+    ``ap.notify()`` for services that support image attachments.
 
     Returns True if at least one notification was sent successfully.
     Returns False on empty URL list, empty subject/body, or any error.
@@ -133,7 +143,14 @@ def _dispatch_apprise(subject: str, body: str, urls: list[str]) -> bool:
     for url in urls:
         ap.add(url)
     try:
-        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
+        notify_kwargs: dict[str, object] = {
+            "title": subject,
+            "body": body,
+            "body_format": apprise.NotifyFormat.HTML,
+        }
+        if attach is not None:
+            notify_kwargs["attach"] = attach
+        sent = ap.notify(**notify_kwargs)
     except Exception:  # noqa: BLE001
         logger.warning("Apprise notification failed.")
         return False
@@ -227,9 +244,12 @@ def _extract_body_fields(result: ResultDict, config: Config) -> dict[str, str]:
 def _build_body(result: ResultDict, config: Config) -> str:
     """Build the HTML notification body."""
     f = _extract_body_fields(result, config)
+    imdb_line = ""
+    if f["imdb_id"] and f["imdb_id"] != "#":
+        imdb_line = f'<p><strong>IMDb:</strong> https://imdb.com/title/{html.escape(f["imdb_id"])}</p>\n'
     return f"""
 <p><strong>Title:</strong> <a href="{f["imdb_url"]}">{f["title"]} ({f["year"]})</a> \u2014 {f["rating"]} from {f["votes"]} users</p>
-<p><strong>Plot:</strong> {f["plot"]}</p>
+{imdb_line}<p><strong>Plot:</strong> {f["plot"]}</p>
 <p><strong>Actors:</strong> {f["actors_str"]}</p>
 <p><strong>Directors:</strong> {f["directors_str"]}</p>
 <p><strong>Genres:</strong> {f["genres_str"]}</p>
