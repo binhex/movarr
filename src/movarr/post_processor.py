@@ -323,16 +323,20 @@ def _save_poster_art(
     # Download
     dst_path = os.path.join(dst_dir, safe_name)
     try:
-        with urllib.request.urlopen(resolved_url, timeout=30) as response:
-            content_type = response.headers.get("Content-Type", "")
-            if not content_type.startswith("image/"):
+        req = urllib.request.Request(
+            resolved_url,
+            headers={"User-Agent": "movarr/2.21.0"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content_type = (response.headers.get("Content-Type") or "").strip()
+            if content_type and not content_type.startswith("image/"):
                 logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
                 return
             with open(dst_path, "wb") as f:
                 shutil.copyfileobj(response, f)
         logger.info("Saved poster art to '{}'.", dst_path)
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to download/save poster art from '{}'.", resolved_url)
+    except OSError as exc:
+        logger.warning("Failed to download/save poster art from '{}': {}.", resolved_url, exc)
 
 
 def _torrent_tag_and_hash(torrent: dict) -> tuple[str, str]:
@@ -388,6 +392,13 @@ def _process_one(
     # (NOT the downloaded files) by passing delete_data=False.
     if not config.post_process.copy_completed:
         logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
+        # Save poster art before marking completed — compute destination dir
+        # from routing rules (same logic used by _build_copy_target).
+        if db_record and config.post_process.poster_art.filename:
+            poster_dst_base = _resolve_destination(db_record, config)
+            if poster_dst_base:
+                poster_dst_dir = _build_dst_dir(db_record, poster_dst_base)
+                _save_poster_art(db_record, poster_dst_dir, config)
         db.mark_completed(tag)
         if config.post_process.remove_completed:
             qbt.delete_torrent(

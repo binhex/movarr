@@ -17,21 +17,31 @@ from typing import TYPE_CHECKING, Any
 import apprise
 from loguru import logger
 
-_AMAZON_POSTER_RES_RE = re.compile(r"_S[XWY]\d+")
-_AMAZON_POSTER_SUFFIX = "._V1_.jpg"
+_AMAZON_POSTER_RES_RE = re.compile(r"_[SU][XWYL]\d+")
+_AMAZON_POSTER_V1_RE = re.compile(r"\._V1_[^.]*\.")
 
 
 def _strip_poster_resolution(url: str) -> str:
-    """Strip any _SX<width> / _SY<height> / _SW<width> suffix from an Amazon poster URL."""
+    """Strip any resolution/quality modifier from an Amazon poster URL.
+
+    Handles _SX<width>, _SY<height>, _SW<width>, _UX<max-width>,
+    _UY<max-height>, and _SL<size-limit> suffixes.
+    """
     return _AMAZON_POSTER_RES_RE.sub("_", url)
 
 
 def _poster_url_with_width(url: str, width: int) -> str:
-    """Return the poster URL constrained to *width* pixels (width <= 0 returns largest/original)."""
+    """Return the poster URL constrained to *width* pixels (width <= 0 returns largest/original).
+
+    Uses regex-based replacement to handle all Amazon modifier variants
+    (``_SX``, ``_SY``, ``_SW``, ``_UX``, ``_UY``, ``_SL``) and works
+    with both ``.jpg`` and ``.png`` extensions.
+    """
     if width <= 0:
         return _strip_poster_resolution(url)
     stripped = _strip_poster_resolution(url)
-    return stripped.replace(_AMAZON_POSTER_SUFFIX, f"._V1_SX{width}.jpg")
+    # Inject _SX<width> before the file extension, handling any _V1 modifiers
+    return _AMAZON_POSTER_V1_RE.sub(f"._V1_SX{width}.", stripped)
 
 
 if TYPE_CHECKING:
@@ -246,7 +256,7 @@ def _build_body(result: ResultDict, config: Config) -> str:
     """Build the HTML notification body."""
     f = _extract_body_fields(result, config)
     imdb_line = ""
-    if f["imdb_id"] and f["imdb_id"] != "#":
+    if f["imdb_id"]:
         imdb_line = f"<p><strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}</p>\n"
     return f"""
 <p><strong>Title:</strong> <a href="{f["imdb_url"]}">{f["title"]} ({f["year"]})</a> \u2014 {f["rating"]} from {f["votes"]} users</p>

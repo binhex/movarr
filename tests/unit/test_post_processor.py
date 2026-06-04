@@ -1890,6 +1890,26 @@ class TestProcessOneCopyCompletedFalse:
         )
         db.mark_completed.assert_called_once_with("tag1")
 
+    def test_copy_completed_false_saves_poster_when_filename_set(self, mocker: MockerFixture) -> None:
+        """When copy_completed=False, poster is saved if filename is configured."""
+        cfg = self._config(copy_completed=False)
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        cfg.post_process.poster_art.download_width = 0
+
+        db = mocker.MagicMock()
+        record = self._db_record(mocker)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_SX300.jpg"
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+
+        mocker.patch("movarr.post_processor._resolve_destination", return_value="/media/movies")
+        mock_save = mocker.patch("movarr.post_processor._save_poster_art")
+
+        _process_one(self._torrent(), cfg, qbt, db)
+
+        mock_save.assert_called_once()
+        db.mark_completed.assert_called_once_with("tag1")
+
 
 class TestProcessOneSupersession:
     """Integration tests for the delete_lower_quality path in _process_one."""
@@ -2986,8 +3006,10 @@ class TestSavePosterArt:
         _save_poster_art(record, str(tmp_path), cfg)
 
         mock_urlopen.assert_called_once()
-        call_url = mock_urlopen.call_args[0][0]
-        assert "_SX500" in str(call_url)
+        call_arg = mock_urlopen.call_args[0][0]
+        # The first argument may be a Request object or a plain URL string
+        call_url = str(getattr(call_arg, "full_url", call_arg))
+        assert "_SX500" in call_url
         mock_copyfileobj.assert_called_once()
 
     def test_skips_on_non_image_content_type(self, mocker: MockerFixture, tmp_path: Path) -> None:
