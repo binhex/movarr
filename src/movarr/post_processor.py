@@ -20,8 +20,10 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import signal
 import subprocess
+import urllib.request
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -261,6 +263,7 @@ def _post_copy_actions(
     canonical_fname: str,
     copied_fnames: set[str],
     torrent_name: str = "",
+    db_record: HistoryRecord | None = None,
 ) -> None:
     """Mark the torrent completed and run any configured post-copy operations."""
     db.mark_completed(tag)
@@ -276,6 +279,9 @@ def _post_copy_actions(
                 logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
         except Exception as exc:  # noqa: BLE001
             logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
+    # Save poster art
+    if db_record and config.post_process.poster_art.filename:
+        _save_poster_art(db_record, dst_dir, config)
     if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
         deleted = _delete_superseded_files(
             dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
@@ -284,6 +290,49 @@ def _post_copy_actions(
             logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
     if config.post_process.remove_completed:
         qbt.delete_torrent(torrent_hash, delete_data=True, state="completed", name=torrent_name)
+
+
+def _save_poster_art(
+    db_record: HistoryRecord,
+    dst_dir: str,
+    config: Config,
+) -> None:
+    """Download poster art to *dst_dir* with configured name/resolution.
+
+    Logs and returns silently on any failure — does NOT abort post-processing.
+    """
+    poster_cfg = config.post_process.poster_art
+    filename = poster_cfg.filename or ""
+    if not filename:
+        return
+
+    # Force .jpg extension
+    stem, _ = os.path.splitext(filename)
+    safe_name = f"{stem}.jpg"
+
+    poster_url = db_record.imdb_poster_url
+    if not poster_url:
+        logger.debug("No poster URL for '{}'; skipping poster save.", db_record.imdb_title)
+        return
+
+    # Resolve width
+    from movarr.notifications import _poster_url_with_width  # noqa: PLC0415
+
+    resolved_url = _poster_url_with_width(poster_url, poster_cfg.download_width)
+
+    # Download
+    dst_path = os.path.join(dst_dir, safe_name)
+    try:
+        with urllib.request.urlopen(resolved_url, timeout=30) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
+                return
+            with open(dst_path, "wb") as f:
+                shutil.copyfileobj(response, f)
+        logger.info("Saved poster art to '{}'.", dst_path)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to download/save poster art from '{}'.", resolved_url)
 
 
 def _torrent_tag_and_hash(torrent: dict) -> tuple[str, str]:
@@ -374,6 +423,7 @@ def _process_one(
             canonical_fname,
             copied_fnames,
             torrent_name=str(db_record.index_title or ""),
+            db_record=db_record,
         )
 
 

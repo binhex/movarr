@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
 
 
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
+from movarr.database import HistoryRecord
 from movarr.filters import composite_quality_score, supersession_quality_score
 from movarr.post_processor import (
     _build_copy_list,
@@ -27,6 +29,7 @@ from movarr.post_processor import (
     _resolve_destination,
     _run_hook,
     _safe_path_component,
+    _save_poster_art,
     run_post_processing,
 )
 
@@ -2910,3 +2913,104 @@ class TestDeleteSupersededFilesEndToEnd:
         assert not (movie_dir / old_fname).exists(), f"lower-scored file ({old_score}) must be physically gone"
         assert pre_witness.exists(), "pre_delete hook must have run"
         assert post_witness.exists(), "post_delete hook must have run"
+
+
+class TestSavePosterArt:
+    """Tests for _save_poster_art — poster download + save to disk."""
+
+    @staticmethod
+    def _make_response(headers: dict[str, str]) -> Any:
+        """Return a MagicMock that acts as a context manager returning itself."""
+        resp = MagicMock()
+        resp.headers = headers
+        resp.__enter__.return_value = resp
+        return resp
+
+    def test_skip_when_filename_blank(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Does nothing when filename is blank."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = ""
+        record = mocker.MagicMock(spec=HistoryRecord)
+        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen")
+        _save_poster_art(record, str(tmp_path), cfg)
+        urlopen.assert_not_called()
+
+    def test_skip_when_poster_url_none(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Does nothing when poster URL is None."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = None
+        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen")
+        _save_poster_art(record, str(tmp_path), cfg)
+        urlopen.assert_not_called()
+
+    def test_downloads_and_writes_file(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Downloads poster and writes to correct path."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        cfg.post_process.poster_art.download_width = 500
+
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        record.imdb_title = "Inception"
+
+        mock_response = self._make_response({"Content-Type": "image/jpeg"})
+        mock_urlopen = mocker.patch(
+            "movarr.post_processor.urllib.request.urlopen",
+            return_value=mock_response,
+        )
+        mock_copyfileobj = mocker.patch("movarr.post_processor.shutil.copyfileobj")
+        mocker.patch("builtins.open", mocker.mock_open())
+
+        _save_poster_art(record, str(tmp_path), cfg)
+
+        mock_urlopen.assert_called_once()
+        call_url = mock_urlopen.call_args[0][0]
+        assert "_SX500" in str(call_url)
+        mock_copyfileobj.assert_called_once()
+
+    def test_skips_on_non_image_content_type(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Skips save when response Content-Type is not image/*."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+        mock_response = self._make_response({"Content-Type": "text/html"})
+        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
+        mocker.patch("builtins.open", mocker.mock_open())
+        mock_copyfileobj = mocker.patch("movarr.post_processor.shutil.copyfileobj")
+
+        _save_poster_art(record, str(tmp_path), cfg)
+        mock_copyfileobj.assert_not_called()
+
+    def test_handles_download_failure_gracefully(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Does not raise on network failure."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        mocker.patch("movarr.post_processor.urllib.request.urlopen", side_effect=OSError("timeout"))
+
+        # Should not raise
+        _save_poster_art(record, str(tmp_path), cfg)
+
+    def test_forces_jpg_extension(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Forces .jpg extension even when user specifies .png."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.png"
+        cfg.post_process.poster_art.download_width = 0
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        mock_response = self._make_response({"Content-Type": "image/jpeg"})
+        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
+        m_open = mocker.patch("builtins.open", mocker.mock_open())
+        mocker.patch("movarr.post_processor.shutil.copyfileobj")
+
+        _save_poster_art(record, str(tmp_path), cfg)
+
+        call_args = m_open.call_args
+        assert call_args is not None
+        file_path = call_args[0][0]
+        assert file_path.endswith(".jpg")
