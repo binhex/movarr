@@ -59,9 +59,9 @@ class TestBuildSubject:
     """Tests for the _build_subject pure helper."""
 
     def test_with_year_and_rating(self) -> None:
-        """Subject includes year and rating when both are present."""
+        """Subject is a clean headline without rating or status."""
         result: ResultDict = {"imdb_title": "Inception", "imdb_year": 2010, "imdb_rating": 8.8}
-        assert _build_subject(result) == "movarr: Inception (2010) — IMDb 8.8 — Queued"
+        assert _build_subject(result) == "movarr: Inception (2010)"
 
     def test_without_year_omits_parentheses(self) -> None:
         """Subject omits year parentheses when imdb_year is absent."""
@@ -70,10 +70,10 @@ class TestBuildSubject:
         assert "()" not in subject
         assert "Unknown Film" in subject
 
-    def test_without_rating_uses_question_mark(self) -> None:
-        """Subject shows '?' for rating when imdb_rating is absent."""
+    def test_without_rating_omits_rating(self) -> None:
+        """Subject omits rating entirely when imdb_rating is absent."""
         result: ResultDict = {"imdb_title": "Film", "imdb_year": 2020, "imdb_rating": None}
-        assert "IMDb ?" in _build_subject(result)
+        assert _build_subject(result) == "movarr: Film (2020)"
 
     def test_missing_title_defaults_to_unknown(self) -> None:
         """Subject defaults to 'Unknown' when imdb_title is missing."""
@@ -87,13 +87,24 @@ class TestBuildBody:
     """Tests for the _build_body pure helper."""
 
     def test_full_result_contains_key_fields(self) -> None:
-        """Body contains title, actors and directors from a full result."""
+        """Body contains status, score, actors and directors from a full result."""
         cfg = Config()
         body = _build_body(_make_full_result(), cfg)
-        assert "Inception" in body
+        assert "Status:" in body
+        assert "Score:" in body
         assert "Leonardo DiCaprio" in body
         assert "Christopher Nolan" in body
         assert "Action" in body
+
+    def test_body_opens_with_status_and_score_not_title(self) -> None:
+        """Body starts with Status and Score lines, not a redundant Title line."""
+        cfg = Config()
+        cfg.torrent_client.qbittorrent.add_paused = True
+        body = _build_body(_make_full_result(), cfg)
+        # Should start with Status and Score, not repeat the movie title
+        assert "<strong>Status:</strong> Paused" in body
+        assert "<strong>Score:</strong> 8.8 from 2000000 users" in body
+        assert "<strong>Title:</strong>" not in body
 
     def test_empty_cast_list_shows_dash(self) -> None:
         """Body shows '—' for actors when cast list is empty."""
@@ -131,11 +142,12 @@ class TestBuildBody:
         cfg = Config()
         assert "tt1375666" in _build_body(_make_full_result(), cfg)
 
-    def test_missing_imdb_id_uses_hash_fallback(self) -> None:
-        """Body uses '#' as href when imdb_id is absent."""
+    def test_missing_imdb_id_and_index_details_uses_hash_fallback(self) -> None:
+        """Body uses '#' as href when both imdb_id and index_details are absent."""
         cfg = Config()
         result = _make_full_result()
         result.pop("imdb_id", None)
+        result.pop("index_details", None)
         body = _build_body(result, cfg)
         assert 'href="#"' in body
 
@@ -504,3 +516,8 @@ class TestPosterUrlHelpers:
     def test_width_500_on_already_resized_url_replaces_resolution(self) -> None:
         url = "https://m.media-amazon.com/images/M/MV5B._V1_SX1080.jpg"
         assert _poster_url_with_width(url, 500) == "https://m.media-amazon.com/images/M/MV5B._V1_SX500.jpg"
+
+    def test_width_positive_without_v1_returns_original(self) -> None:
+        """URL with resolution modifier but no _V1_ returns original unchanged."""
+        url = "https://m.media-amazon.com/images/M/MV5B_SX500.jpg"
+        assert _poster_url_with_width(url, 500) == url
