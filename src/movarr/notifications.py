@@ -167,9 +167,8 @@ def _build_subject(result: ResultDict) -> str:
     """
     title = result.get("imdb_title") or "Unknown"
     year = result.get("imdb_year") or ""
-    rating = result.get("imdb_rating") or "?"
     year_str = f" ({year})" if year else ""
-    return f"movarr: {title}{year_str} \u2014 IMDb {rating} \u2014 Queued"
+    return f"movarr: {title}{year_str}"
 
 
 def _safe_url(raw: str) -> str:
@@ -195,8 +194,13 @@ def _extract_imdb_fields(result: ResultDict) -> dict[str, str]:
     imdb_id = result.get("imdb_id") or ""
     rating = html.escape(str(result.get("imdb_rating") or "?"))
     votes = html.escape(str(result.get("imdb_votes") or "?"))
-    imdb_url = f"https://imdb.com/title/{html.escape(imdb_id)}" if imdb_id else "#"
-    return {"title": title, "year": year, "imdb_id": imdb_id, "imdb_url": imdb_url, "rating": rating, "votes": votes}
+    return {"title": title, "year": year, "imdb_id": imdb_id, "rating": rating, "votes": votes}
+
+
+def _extract_plot(result: ResultDict) -> str:
+    """Extract the plot/outline field with fallback."""
+    raw = result.get("imdb_plot_outline") or result.get("imdb_plot_summary")
+    return html.escape(raw or "\u2014")
 
 
 def _extract_content_fields(result: ResultDict) -> dict[str, str]:
@@ -207,7 +211,7 @@ def _extract_content_fields(result: ResultDict) -> dict[str, str]:
     actors_str = html.escape(", ".join(cast_list[:10]) or "\u2014")
     directors_str = html.escape(", ".join(directors) or "\u2014")
     genres_str = html.escape(", ".join(genres) or "\u2014")
-    plot = html.escape(result.get("imdb_plot_outline") or result.get("imdb_plot_summary") or "\u2014")
+    plot = _extract_plot(result)
     return {"actors_str": actors_str, "directors_str": directors_str, "genres_str": genres_str, "plot": plot}
 
 
@@ -244,12 +248,12 @@ def _build_body(result: ResultDict, config: Config) -> str:
     if f["imdb_id"]:
         imdb_line = f"<p><strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}</p>\n"
     return f"""
-<p><strong>Title:</strong> <a href="{f["imdb_url"]}">{f["title"]} ({f["year"]})</a> \u2014 {f["rating"]} from {f["votes"]} users</p>
+<p><strong>Status:</strong> {f["queue_status"]}</p>
+<p><strong>Score:</strong> {f["rating"]} from {f["votes"]} users</p>
 {imdb_line}<p><strong>Plot:</strong> {f["plot"]}</p>
 <p><strong>Actors:</strong> {f["actors_str"]}</p>
 <p><strong>Directors:</strong> {f["directors_str"]}</p>
 <p><strong>Genres:</strong> {f["genres_str"]}</p>
-<p><strong>Queue Status:</strong> {f["queue_status"]}</p>
 <p><strong>Release:</strong> <a href="{f["index_details"]}">{f["index_title"]}</a></p>
 <p><strong>Size:</strong> {f["index_size_mb"]} MB</p>
 <p><strong>Result Details:</strong></p>
