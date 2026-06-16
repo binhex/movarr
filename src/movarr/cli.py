@@ -112,7 +112,8 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override the PID file directory from config.",
 )
 @click.option(
-    "--library-path-list",
+    "--library-path",
+    "library_path_list",
     default=None,
     show_default=False,
     metavar="<path[,path...]>",

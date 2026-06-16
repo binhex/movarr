@@ -378,15 +378,15 @@ class TestCliOverrides:
         assert cfg.general.db_path == "db/movarr.db"
 
     def test_library_path_list_single_path(self, mocker: MockerFixture) -> None:
-        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies", "--test"])
+        cfg = self._invoke(mocker, ["--library-path", "/media/movies", "--test"])
         assert cfg.general.library_path_list == ["/media/movies"]
 
     def test_library_path_list_multiple_paths(self, mocker: MockerFixture) -> None:
-        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies,/media/4k", "--test"])
+        cfg = self._invoke(mocker, ["--library-path", "/media/movies,/media/4k", "--test"])
         assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
     def test_library_path_list_strips_whitespace(self, mocker: MockerFixture) -> None:
-        cfg = self._invoke(mocker, ["--library-path-list", "/media/movies, /media/4k", "--test"])
+        cfg = self._invoke(mocker, ["--library-path", "/media/movies, /media/4k", "--test"])
         assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
     def test_library_path_list_absent_leaves_config_unchanged(self, mocker: MockerFixture) -> None:
@@ -472,7 +472,7 @@ class TestCliOverrides:
             [
                 "--db-path",
                 "/data/movarr.db",
-                "--library-path-list",
+                "--library-path",
                 "/media/movies,/media/4k",
                 "--qbt-host",
                 "10.0.0.5",
@@ -521,7 +521,7 @@ class TestCliOverrides:
         result = CliRunner().invoke(cli, ["--help"])
         for opt in (
             "--db-path",
-            "--library-path-list",
+            "--library-path",
             "--qbt-host",
             "--qbt-port",
             "--qbt-username",

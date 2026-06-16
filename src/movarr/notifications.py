@@ -246,17 +246,17 @@ def _build_body(result: ResultDict, config: Config) -> str:
 
     imdb_line = ""
     if f["imdb_id"]:
-        imdb_line = f"<p><strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}</p>\n"
+        imdb_line = f"<strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}<br>\n"
     return f"""
-<p><strong>Status:</strong> {f["queue_status"]}</p>
-<p><strong>Score:</strong> {f["rating"]} from {f["votes"]} users</p>
-{imdb_line}<p><strong>Plot:</strong> {f["plot"]}</p>
-<p><strong>Actors:</strong> {f["actors_str"]}</p>
-<p><strong>Directors:</strong> {f["directors_str"]}</p>
-<p><strong>Genres:</strong> {f["genres_str"]}</p>
-<p><strong>Release:</strong> <a href="{f["index_details"]}">{f["index_title"]}</a></p>
-<p><strong>Size:</strong> {f["index_size_mb"]} MB</p>
-<p><strong>Result Details:</strong></p>
+<p><strong>Status:</strong> {f["queue_status"]}<br>
+<strong>Score:</strong> {f["rating"]} from {f["votes"]} users<br>
+{imdb_line}<strong>Plot:</strong> {f["plot"]}<br>
+<strong>Actors:</strong> {f["actors_str"]}<br>
+<strong>Directors:</strong> {f["directors_str"]}<br>
+<strong>Genres:</strong> {f["genres_str"]}<br>
+<strong>Release:</strong> <a href="{f["index_details"]}">{f["index_title"]}</a><br>
+<strong>Size:</strong> {f["index_size_mb"]} MB<br>
+<strong>Result Details:</strong></p>
 {f["result_details_html"]}
 """
 
