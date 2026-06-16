@@ -81,7 +81,7 @@ All options are optional overrides. When an option is omitted, the value from `m
 | `--log-path <dir>` | Override the log directory from config. The file `movarr.log` is created inside. | *(from config)* |
 | `--log-level <level>` | Override the console log level. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. Useful for temporary debugging without editing the config file. | *(from config)* |
 | `--db-path <dir>` | Override the database directory from config. The file `movarr.db` is created inside. | *(from config)* |
-| `--library-path-list <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
+| `--library-path <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
 | `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
@@ -124,7 +124,7 @@ automatically on first run. The file is divided into the sections below.
 | `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). Overridden by `--log-level`. | `info` |
 | `log_level_file` | File logging level. | `info` |
 | `log_path` | Directory for the log file (`movarr.log` is created inside). Empty string disables file logging. Overridden by `--log-path`. | `"logs"` |
-| `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path-list`. | `[]` |
+| `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path`. | `[]` |
 | `db_path` | Directory for the SQLite history database (`movarr.db` is created inside). Overridden by `--db-path`. | `"db"` |
 | `pid_path` | Directory for the PID file (`movarr.pid` is created inside). Empty string disables PID file creation. Overridden by `--pid-path`. | `"pids"` |
 

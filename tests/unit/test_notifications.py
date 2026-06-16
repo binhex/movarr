@@ -106,6 +106,21 @@ class TestBuildBody:
         assert "<strong>Score:</strong> 8.8 from 2000000 users" in body
         assert "<strong>Title:</strong>" not in body
 
+    def test_no_paragraph_breaks_in_body(self) -> None:
+        """All body fields are in a single <p> with <br> — no paragraph spacing anywhere."""
+        cfg = Config()
+        cfg.torrent_client.qbittorrent.add_paused = False
+        body = _build_body(_make_full_result(), cfg)
+        # No <p> separator between ANY fields — everything in one <p>
+        assert "</p>\n<p>" not in body.strip()
+        # <br> breaks exist between fields (including headline fields)
+        assert "<br>\n<strong>Score:</strong>" in body
+        assert "<br>\n<strong>Plot:</strong>" in body
+        assert "<br>\n<strong>Directors:</strong>" in body
+        assert "<br>\n<strong>Genres:</strong>" in body
+        assert "<br>\n<strong>Release:</strong>" in body
+        assert "<br>\n<strong>Size:</strong>" in body
+
     def test_empty_cast_list_shows_dash(self) -> None:
         """Body shows '—' for actors when cast list is empty."""
         cfg = Config()
