@@ -28,8 +28,6 @@ def _apply_general_overrides(config: Config, overrides: dict[str, object]) -> No
         config.general.library_path_list = [
             p.strip() for p in str(overrides["library_path_list"]).split(",") if p.strip()
         ]
-    if overrides.get("daemon"):
-        config.general.daemon_mode = "background"
 
 
 def _apply_qbt_overrides(config: Config, overrides: dict[str, object]) -> None:
@@ -201,12 +199,6 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override Prowlarr API key from config.",
 )
 @click.option(
-    "--daemon",
-    is_flag=True,
-    default=False,
-    help="Run in continuous scheduling mode (long-running foreground process; use systemd or Docker for daemonization).",
-)
-@click.option(
     "--test",
     is_flag=True,
     default=False,
@@ -231,7 +223,6 @@ def cli(
     prowlarr_host: str | None,
     prowlarr_port: int | None,
     prowlarr_api_key: str | None,
-    daemon: bool,
     test: bool,
 ) -> None:
     """movarr — torrent acquisition daemon.
@@ -264,7 +255,6 @@ def cli(
         prowlarr_host=prowlarr_host,
         prowlarr_port=prowlarr_port,
         prowlarr_api_key=prowlarr_api_key,
-        daemon=daemon,
     )
 
     def _log_format(record: dict) -> str:

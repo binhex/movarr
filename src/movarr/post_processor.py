@@ -251,6 +251,39 @@ def _build_dst_dir(db_record: HistoryRecord, dst_base: str) -> str:
     return os.path.join(dst_base, folder_name)
 
 
+def _run_post_copy_hook(config: Config, resolved_dst_dir: str) -> None:
+    """Run the post_copy hook if configured, logging failures without raising."""
+    if not config.post_process.hooks.post_copy:
+        return
+    try:
+        if not _run_hook(
+            config.post_process.hooks.post_copy,
+            resolved_dst_dir,
+            "post_copy",
+            _hook_timeout_secs(config),
+        ):
+            logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
+
+
+def _maybe_delete_superseded(
+    config: Config,
+    dst_dir: str,
+    dst_base: str,
+    canonical_fname: str,
+    copied_fnames: set[str],
+) -> None:
+    """Delete lower-quality superseded files if configured."""
+    if not config.post_process.delete_lower_quality or canonical_fname not in copied_fnames:
+        return
+    deleted = _delete_superseded_files(
+        dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
+    )
+    if deleted:
+        logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
+
+
 def _post_copy_actions(
     config: Config,
     tag: str,
@@ -268,28 +301,41 @@ def _post_copy_actions(
     """Mark the torrent completed and run any configured post-copy operations."""
     db.mark_completed(tag)
     logger.info("Marked tag '{}' as completed.", tag)
-    if config.post_process.hooks.post_copy:
-        try:
-            if not _run_hook(
-                config.post_process.hooks.post_copy,
-                resolved_dst_dir,
-                "post_copy",
-                _hook_timeout_secs(config),
-            ):
-                logger.warning("post_copy hook failed for '{}'; continuing.", resolved_dst_dir)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
+    _run_post_copy_hook(config, resolved_dst_dir)
     # Save poster art
     if db_record and config.post_process.poster_art.filename:
         _save_poster_art(db_record, dst_dir, config)
-    if config.post_process.delete_lower_quality and canonical_fname in copied_fnames:
-        deleted = _delete_superseded_files(
-            dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
-        )
-        if deleted:
-            logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
+    _maybe_delete_superseded(config, dst_dir, dst_base, canonical_fname, copied_fnames)
     if config.post_process.remove_completed:
         qbt.delete_torrent(torrent_hash, delete_data=True, state="completed", name=torrent_name)
+
+
+def _make_safe_poster_path(filename: str) -> str:
+    """Sanitise *filename* to a .jpg path component."""
+    stem = os.path.basename(os.path.splitext(filename)[0])
+    return f"{stem}.jpg" if stem else "poster.jpg"
+
+
+def _download_poster_art(resolved_url: str, dst_path: str) -> None:
+    """Download poster image from *resolved_url* to *dst_path*.
+
+    Logs and returns silently on any failure — does NOT abort post-processing.
+    """
+    try:
+        req = urllib.request.Request(
+            resolved_url,
+            headers={"User-Agent": "movarr/2.21.0"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content_type = (response.headers.get("Content-Type") or "").strip().lower()
+            if not content_type or not content_type.startswith("image/"):
+                logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
+                return
+            with open(dst_path, "wb") as f:
+                shutil.copyfileobj(response, f)
+        logger.info("Saved poster art to '{}'.", dst_path)
+    except OSError as exc:
+        logger.warning("Failed to download/save poster art from '{}': {}.", resolved_url, exc)
 
 
 def _save_poster_art(
@@ -306,37 +352,18 @@ def _save_poster_art(
     if not filename:
         return
 
-    # Force .jpg extension and sanitise to a single filename component
-    stem = os.path.basename(os.path.splitext(filename)[0])
-    safe_name = f"{stem}.jpg" if stem else "poster.jpg"
+    safe_name = _make_safe_poster_path(filename)
 
     poster_url = str(db_record.imdb_poster_url or "")
     if not poster_url:
         logger.debug("No poster URL for '{}'; skipping poster save.", db_record.imdb_title)
         return
 
-    # Resolve width
     from movarr.notifications import _poster_url_with_width  # noqa: PLC0415
 
     resolved_url = _poster_url_with_width(poster_url, poster_cfg.download_width)
-
-    # Download
     dst_path = os.path.join(dst_dir, safe_name)
-    try:
-        req = urllib.request.Request(
-            resolved_url,
-            headers={"User-Agent": "movarr/2.21.0"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            content_type = (response.headers.get("Content-Type") or "").strip().lower()
-            if not content_type or not content_type.startswith("image/"):
-                logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
-                return
-            with open(dst_path, "wb") as f:
-                shutil.copyfileobj(response, f)
-        logger.info("Saved poster art to '{}'.", dst_path)
-    except OSError as exc:
-        logger.warning("Failed to download/save poster art from '{}': {}.", resolved_url, exc)
+    _download_poster_art(resolved_url, dst_path)
 
 
 def _torrent_tag_and_hash(torrent: dict) -> tuple[str, str]:
@@ -372,12 +399,39 @@ def _build_copy_target(
     return src_files, dst_base, dst_dir
 
 
+def _process_one_no_copy(
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+    tag: str,
+    torrent_hash: str,
+    db_record: HistoryRecord | None,
+) -> None:
+    """Handle the case where copy_completed is disabled."""
+    logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
+    db.mark_completed(tag)
+    if db_record and config.post_process.poster_art.filename:
+        poster_dst_base = _resolve_destination(db_record, config)
+        if poster_dst_base:
+            poster_dst_dir = _build_dst_dir(db_record, poster_dst_base)
+            if make_directory(poster_dst_dir):
+                _save_poster_art(db_record, poster_dst_dir, config)
+    if config.post_process.remove_completed:
+        qbt.delete_torrent(
+            torrent_hash,
+            delete_data=False,
+            state="completed",
+            name=str(db_record.index_title or "") if db_record else "",
+        )
+
+
 def _process_one(
     torrent: dict,
     config: Config,
     qbt: QBittorrentClient,
     db: Database,
 ) -> None:
+    """Process a single completed torrent: copy to library, save poster, clean up."""
     tag, torrent_hash = _torrent_tag_and_hash(torrent)
 
     db_record = db.find_by_tag(tag)
@@ -385,25 +439,9 @@ def _process_one(
         logger.warning("No DB record for tag '{}'; skipping.", tag)
         return
 
-    # If copy_completed is disabled, skip the copy path entirely.
-    # movarr assumes the user has configured qBittorrent to download directly
-    # to the final library path, so no file copy is needed.
-    # When remove_completed is also True, remove only the torrent queue entry
-    # (NOT the downloaded files) by passing delete_data=False.
+    # If copy_completed is disabled, handle the non-copy path and return.
     if not config.post_process.copy_completed:
-        logger.debug("copy_completed is False; skipping copy for tag '{}'", tag)
-        db.mark_completed(tag)
-        # Save poster art after marking completed.
-        if db_record and config.post_process.poster_art.filename:
-            poster_dst_base = _resolve_destination(db_record, config)
-            if poster_dst_base:
-                poster_dst_dir = _build_dst_dir(db_record, poster_dst_base)
-                if make_directory(poster_dst_dir):
-                    _save_poster_art(db_record, poster_dst_dir, config)
-        if config.post_process.remove_completed:
-            qbt.delete_torrent(
-                torrent_hash, delete_data=False, state="completed", name=str(db_record.index_title or "")
-            )
+        _process_one_no_copy(config, qbt, db, tag, torrent_hash, db_record)
         return
 
     target = _build_copy_target(torrent, db_record, config)
@@ -737,6 +775,37 @@ def _check_directory_safety(resolved_dst: pathlib.Path, resolved_base: pathlib.P
     return resolved_dst.parent == resolved_base
 
 
+def _list_and_validate_entries(
+    resolved_dst_dir: pathlib.Path,
+    dst_dir: str,
+    new_primary_fname: str,
+) -> list[str] | None:
+    """List directory entries and validate them; return video file list or None to abort."""
+    try:
+        entries = os.listdir(resolved_dst_dir)
+    except OSError:
+        logger.error("Could not list directory '{}'; skipping auto-delete.", dst_dir)
+        return None
+    if new_primary_fname not in entries:
+        logger.warning(
+            "Auto-delete skipped: primary file '{}' not found in '{}'; "
+            "cannot safely distinguish new from old library files.",
+            new_primary_fname,
+            dst_dir,
+        )
+        return None
+    video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
+    if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
+        logger.warning(
+            "Auto-delete skipped: {} video files in '{}' exceeds max {}; no files deleted.",
+            len(video_files),
+            dst_dir,
+            _MAX_VIDEO_FILES_IN_MOVIE_DIR,
+        )
+        return None
+    return video_files
+
+
 def _check_delete_preconditions(
     dst_dir: str,
     dst_base: str,
@@ -760,27 +829,8 @@ def _check_delete_preconditions(
             dst_base,
         )
         return None
-    try:
-        entries = os.listdir(resolved_dst)
-    except OSError:
-        logger.error("Could not list directory '{}'; skipping auto-delete.", dst_dir)
-        return None
-    if new_primary_fname not in entries:
-        logger.warning(
-            "Auto-delete skipped: primary file '{}' not found in '{}'; "
-            "cannot safely distinguish new from old library files.",
-            new_primary_fname,
-            dst_dir,
-        )
-        return None
-    video_files = [f for f in entries if f.lower().endswith(_VIDEO_EXTS)]
-    if len(video_files) > _MAX_VIDEO_FILES_IN_MOVIE_DIR:
-        logger.warning(
-            "Auto-delete skipped: {} video files in '{}' exceeds max {}; no files deleted.",
-            len(video_files),
-            dst_dir,
-            _MAX_VIDEO_FILES_IN_MOVIE_DIR,
-        )
+    video_files = _list_and_validate_entries(resolved_dst, dst_dir, new_primary_fname)
+    if video_files is None:
         return None
     return video_files, resolved_dst
 

@@ -30,8 +30,8 @@ Automated movie downloader based on IMDb criteria filtering.
   (ntfy, Discord, Telegram, email, and more).
 - **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
   configurable interval.
-- **Daemon mode** — runs as a background process with PID file management, or in foreground mode for direct
-  invocation.
+- **Automatic scheduler mode** — runs in continuous scheduling mode when any scheduler task is enabled in the
+  config; falls back to a single pass when all schedulers are disabled.
 - **Automatic config migration** — upgrades the YAML config schema automatically on startup, backing up the
   previous version before applying changes.
 
@@ -82,7 +82,6 @@ All options are optional overrides. When an option is omitted, the value from `m
 | `--log-level <level>` | Override the console log level. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. Useful for temporary debugging without editing the config file. | *(from config)* |
 | `--db-path <dir>` | Override the database directory from config. The file `movarr.db` is created inside. | *(from config)* |
 | `--library-path <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
-| `--daemon` | Run in background daemon mode. Without this flag movarr runs a single pass and exits. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
 
@@ -120,7 +119,6 @@ automatically on first run. The file is divided into the sections below.
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `config_version` | Schema version — managed automatically; do not edit. | *(current)* |
-| `daemon_mode` | `foreground` or `background`. Overridden by `--daemon` CLI flag. | `foreground` |
 | `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). Overridden by `--log-level`. | `info` |
 | `log_level_file` | File logging level. | `info` |
 | `log_path` | Directory for the log file (`movarr.log` is created inside). Empty string disables file logging. Overridden by `--log-path`. | `"logs"` |

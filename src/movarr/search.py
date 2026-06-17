@@ -116,6 +116,17 @@ def _queue_and_persist(result: ResultDict, session: _SearchSession) -> None:
     session.db.write(result)
 
 
+def _validate_metadata_present(result: ResultDict) -> bool:
+    """Return True if result has movie_title and movie_title_year."""
+    if not result.get("movie_title"):
+        logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
+        return False
+    if not result.get("movie_title_year"):
+        logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+        return False
+    return True
+
+
 def _process_single_result(
     result: ResultDict,
     session: _SearchSession,
@@ -141,12 +152,7 @@ def _process_single_result(
             logger.debug("'{}' already in DB; skipping.", index_title)
             return True
 
-        if not result.get("movie_title"):
-            logger.debug("No movie title from '{}'; skipping.", result.get("index_title"))
-            return True
-
-        if not result.get("movie_title_year"):
-            logger.debug("No year from '{}'; skipping.", result.get("index_title"))
+        if not _validate_metadata_present(result):
             return True
 
         logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)

@@ -161,6 +161,18 @@ class ProwlarrClient:
             )
             return False
 
+    @staticmethod
+    def _extract_imdb_id(item: dict) -> str | None:
+        """Extract and normalise an IMDb ID from a Prowlarr result item."""
+        imdb_id_raw = item.get("imdbId")
+        if not imdb_id_raw:
+            return None
+        with contextlib.suppress(ValueError, TypeError):
+            if isinstance(imdb_id_raw, str) and imdb_id_raw.startswith("tt"):
+                return imdb_id_raw
+            return f"tt{int(imdb_id_raw):07d}"
+        return None
+
     def _parse_result(self, item: dict) -> ResultDict | None:
         """Extract a :class:`~movarr.models.ResultDict` from one Prowlarr JSON result."""
         index_title: str | None = item.get("title")
@@ -172,6 +184,7 @@ class ProwlarrClient:
             return None
 
         size_bytes = item.get("size", 0) or 0
+        imdb_id = self._extract_imdb_id(item)
         result: ResultDict = build_result_dict(
             index_title=index_title,
             index_tracker=item.get("indexer", ""),
@@ -185,12 +198,7 @@ class ProwlarrClient:
             magnet_url=item.get("magnetUrl", "") or "",
             category="",
         )
-        imdb_id_raw = item.get("imdbId")
-        if imdb_id_raw:
-            with contextlib.suppress(ValueError, TypeError):
-                if isinstance(imdb_id_raw, str) and imdb_id_raw.startswith("tt"):
-                    result["imdb_id"] = imdb_id_raw
-                else:
-                    result["imdb_id"] = f"tt{int(imdb_id_raw):07d}"
+        if imdb_id:
+            result["imdb_id"] = imdb_id
 
         return result

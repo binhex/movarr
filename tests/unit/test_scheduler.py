@@ -108,27 +108,58 @@ class TestRunOnce:
 
 
 class TestRun:
-    """Tests for run — dispatcher to foreground or daemon mode."""
+    """Tests for run — dispatcher to scheduler or single-pass mode."""
 
-    def test_foreground_mode_delegates_to_run_once(self, mocker: MockerFixture) -> None:
+    def test_runs_daemon_when_acquisition_enabled(self, mocker: MockerFixture) -> None:
+        """When at least one scheduler is enabled, run delegates to _run_daemon."""
         mock_run_once = mocker.patch("movarr.scheduler.run_once")
         mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
-        config = Config()  # daemon_mode="foreground" by default
-
-        run(config)
-
-        mock_run_once.assert_called_once_with(config)
-        mock_run_daemon.assert_not_called()
-
-    def test_background_mode_delegates_to_run_daemon(self, mocker: MockerFixture) -> None:
-        mock_run_once = mocker.patch("movarr.scheduler.run_once")
-        mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
-        config = Config(general=GeneralConfig(daemon_mode="background"))
+        config = Config()  # acquisition.enabled=True by default
 
         run(config)
 
         mock_run_daemon.assert_called_once_with(config)
         mock_run_once.assert_not_called()
+
+    def test_runs_daemon_when_queue_management_enabled(self, mocker: MockerFixture) -> None:
+        """Scheduler mode activates when only queue_management is enabled."""
+        mock_run_once = mocker.patch("movarr.scheduler.run_once")
+        mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
+        config = Config()
+        config.schedule.acquisition.enabled = False
+        config.schedule.post_processing.enabled = False
+
+        run(config)
+
+        mock_run_daemon.assert_called_once_with(config)
+        mock_run_once.assert_not_called()
+
+    def test_runs_daemon_when_post_processing_enabled(self, mocker: MockerFixture) -> None:
+        """Scheduler mode activates when only post_processing is enabled."""
+        mock_run_once = mocker.patch("movarr.scheduler.run_once")
+        mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
+        config = Config()
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+
+        run(config)
+
+        mock_run_daemon.assert_called_once_with(config)
+        mock_run_once.assert_not_called()
+
+    def test_runs_once_when_no_scheduler_enabled(self, mocker: MockerFixture) -> None:
+        """When no scheduler is enabled, run delegates to run_once (single pass)."""
+        mock_run_once = mocker.patch("movarr.scheduler.run_once")
+        mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
+        config = Config()
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+        config.schedule.post_processing.enabled = False
+
+        run(config)
+
+        mock_run_once.assert_called_once_with(config)
+        mock_run_daemon.assert_not_called()
 
     def test_writes_pid_when_pid_path_set_in_config(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """PID file is written when general.pid_path is non-empty in config."""
@@ -136,6 +167,9 @@ class TestRun:
         mocker.patch("movarr.scheduler.run_once")
         pid_path = str(tmp_path / "run" / "movarr.pid")
         config = Config(general=GeneralConfig(pid_path=pid_path))
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+        config.schedule.post_processing.enabled = False
 
         run(config)
 
@@ -146,6 +180,9 @@ class TestRun:
         mock_write_pid = mocker.patch("movarr.scheduler._write_pid")
         mocker.patch("movarr.scheduler.run_once")
         config = Config(general=GeneralConfig(pid_path=""))
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+        config.schedule.post_processing.enabled = False
 
         run(config)
 
@@ -156,6 +193,9 @@ class TestRun:
         mocker.patch("movarr.scheduler.run_once")
         pid_path = str(tmp_path / "run" / "movarr.pid")
         config = Config(general=GeneralConfig(pid_path=pid_path))
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+        config.schedule.post_processing.enabled = False
 
         run(config)
 
@@ -166,6 +206,9 @@ class TestRun:
         mocker.patch("movarr.scheduler.run_once", side_effect=RuntimeError("boom"))
         pid_path = str(tmp_path / "run" / "movarr.pid")
         config = Config(general=GeneralConfig(pid_path=pid_path))
+        config.schedule.acquisition.enabled = False
+        config.schedule.queue_management.enabled = False
+        config.schedule.post_processing.enabled = False
 
         with pytest.raises(RuntimeError):
             run(config)

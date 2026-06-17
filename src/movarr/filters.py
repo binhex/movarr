@@ -280,6 +280,13 @@ def _check_maximum_size(result: ResultDict, index_site: dict) -> ResultDict:
     return _check_size_bound(result, threshold_mb, "maximum")
 
 
+def _size_operator_pairs(bound: str) -> tuple[str, str]:
+    """Return (gte_op, fail_op) for the given *bound* direction."""
+    if bound == "minimum":
+        return ("\u2265", "<")
+    return ("\u2264", ">")
+
+
 def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> ResultDict:
     """Compare raw index size against a threshold."""
     raw_size = result.get("index_size")
@@ -292,7 +299,8 @@ def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> Resu
     except (ValueError, TypeError):
         return _fail(result, f"Could not parse index size '{raw_size}'.")
     ok = (size_mb >= threshold_mb) if bound == "minimum" else (size_mb <= threshold_mb)
-    op = ("\u2265" if bound == "minimum" else "\u2264") if ok else ("<" if bound == "minimum" else ">")
+    gte_op, fail_op = _size_operator_pairs(bound)
+    op = gte_op if ok else fail_op
     msg = f"Size {size_mb} MB {op} {threshold_mb} MB."
     return _pass(result, msg) if ok else _fail(result, msg)
 
@@ -487,22 +495,34 @@ def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
     return _fail(result, f"Runtime {runtime} min < {min_runtime} min.")
 
 
+def _match_allow_list(result: ResultDict, imdb_lower: list[str], allow_lower: list[str], kind: str) -> ResultDict:
+    """Check if any *allow_lower* item is in *imdb_lower*."""
+    for item in allow_lower:
+        if item in imdb_lower:
+            return _pass(result, f"IMDb {kind} list {imdb_lower} matches allowed {kind} list.")
+    return _fail(result, f"IMDb {kind} list {imdb_lower} not in allowed {kind} list {allow_lower}.")
+
+
 def _check_language_country(result: ResultDict, config: Config, kind: str) -> ResultDict:
+    """Return Passed if any allow-list item matches the IMDb data for *kind*."""
     allow_list = getattr(config.filters, f"allow_{kind}_list", []) or []
     if not allow_list:
         return _pass(result, f"No allow {kind} list defined.")
     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
     if not imdb_list:
-        # Fail closed: allow-list is configured but metadata is missing or
-        # unmappable. Passing silently would defeat the allow-list on bad data.
         return _fail(result, f"No IMDb {kind} data available; failing closed (allow_{kind}_list is configured).")
     imdb_lower = [x.lower() for x in imdb_list]
     allow_lower = [x.lower() for x in allow_list]
+    return _match_allow_list(result, imdb_lower, allow_lower, kind)
 
-    for item in allow_lower:
-        if item in imdb_lower:
-            return _pass(result, f"IMDb {kind} list {imdb_lower} matches allowed {kind} list.")
-    return _fail(result, f"IMDb {kind} list {imdb_lower} not in allowed {kind} list {allow_lower}.")
+
+def _match_person_name(config_list: list[str], imdb_lower: list[str], person_type: str) -> bool:
+    """Return True if any name in *config_list* matches *imdb_lower*."""
+    for name in config_list:
+        if name.lower() in imdb_lower:
+            _logger.info("Override {}: '{}' matched.", person_type, name)
+            return True
+    return False
 
 
 def _override_person(result: ResultDict, config: Config, person_type: str) -> bool:
@@ -517,11 +537,7 @@ def _override_person(result: ResultDict, config: Config, person_type: str) -> bo
         return False
 
     imdb_lower = [x.lower() for x in imdb_list]
-    for name in config_list:
-        if name.lower() in imdb_lower:
-            _logger.info("Override {}: '{}' matched.", person_type, name)
-            return True
-    return False
+    return _match_person_name(config_list, imdb_lower, person_type)
 
 
 def _override_movie_title(result: ResultDict, config: Config) -> bool:
@@ -619,9 +635,9 @@ def _check_library_canonical(
     result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]]
 ) -> ResultDict:
     """Library dedup using the canonical IMDb title — cleaner than index title."""
-    imdb_title = result.get("imdb_title") or ""
+    imdb_title = result.get("imdb_title", "")
     imdb_year = str(result.get("imdb_year") or "")
-    index_resolution = result.get("index_title_resolution") or ""
+    index_resolution = result.get("index_title_resolution", "")
     if not (imdb_title and imdb_year and index_resolution):
         return _fail(result, "Insufficient IMDb fields for canonical library check.")
 

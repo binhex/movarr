@@ -102,6 +102,25 @@ def _reset_streak(kv_prefix: str, db: Database) -> None:
     db.kv_delete(f"{kv_prefix}.alert_sent")
 
 
+def _parse_streak_start(ctx: _ServiceHealthCtx, since_raw: str, now: datetime.datetime) -> datetime.datetime | None:
+    """Parse the streak-start timestamp; return the datetime or None to abort (corrupt)."""
+    try:
+        since = datetime.datetime.fromisoformat(since_raw)
+        if since.tzinfo is None:
+            raise ValueError(f"timezone-naive timestamp: {since_raw!r}")
+        return since
+    except ValueError:
+        key_since = f"{ctx.kv_prefix}.unavailable_since"
+        logger.warning(
+            "Corrupt {} value '{}'; resetting streak for '{}'.",
+            key_since,
+            since_raw,
+            ctx.service_name,
+        )
+        ctx.db.kv_set(key_since, now.isoformat())
+        return None
+
+
 def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
     """Record or advance an unavailability streak; fire alert when threshold met."""
     if ctx.alert_hours <= 0:
@@ -121,20 +140,8 @@ def _on_unhealthy(ctx: _ServiceHealthCtx) -> None:
         )
         return
 
-    try:
-        since = datetime.datetime.fromisoformat(since_raw)
-        # If the stored timestamp is timezone-naive, treat it as corrupt
-        # to avoid a TypeError when subtracting from the aware UTC `now`.
-        if since.tzinfo is None:
-            raise ValueError(f"timezone-naive timestamp: {since_raw!r}")
-    except ValueError:
-        logger.warning(
-            "Corrupt {} value '{}'; resetting streak for '{}'.",
-            key_since,
-            since_raw,
-            ctx.service_name,
-        )
-        ctx.db.kv_set(key_since, now.isoformat())
+    since = _parse_streak_start(ctx, since_raw, now)
+    if since is None:
         return
 
     elapsed_seconds = (now - since).total_seconds()
