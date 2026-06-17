@@ -23,14 +23,12 @@ def _make_config_mock(
     log_level_console: str = "info",
     log_path: str = "",
     pid_path: str = "",
-    daemon_mode: str = "foreground",
 ) -> MagicMock:
     """Return a minimal mock Config object accepted by the cli function."""
     cfg = MagicMock()
     cfg.general.log_level_console = log_level_console
     cfg.general.log_path = log_path
     cfg.general.pid_path = pid_path
-    cfg.general.daemon_mode = daemon_mode
     return cfg
 
 
@@ -70,10 +68,6 @@ class TestCliHelp:
     def test_help_mentions_config_path(self) -> None:
         result = CliRunner().invoke(cli, ["--help"])
         assert "--config-path" in result.output
-
-    def test_help_mentions_daemon(self) -> None:
-        result = CliRunner().invoke(cli, ["--help"])
-        assert "--daemon" in result.output
 
     def test_help_mentions_test(self) -> None:
         result = CliRunner().invoke(cli, ["--help"])
@@ -125,23 +119,6 @@ class TestCliStartupVersionLog:
         mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
         result = CliRunner().invoke(cli, ["--test"])
         assert "Test mode" in result.output or "test mode" in result.output.lower()
-
-    def test_foreground_mode_unchanged_without_daemon_flag(self, mocker: MockerFixture) -> None:
-        """Without --daemon, daemon_mode is not overridden by the CLI."""
-        mocker.patch("movarr.cli.create_logger")
-        mock_cfg = _make_config_mock(daemon_mode="foreground")
-        mocker.patch("movarr.config.load_config", return_value=mock_cfg)
-        CliRunner().invoke(cli, ["--test"])
-        # CLI must NOT have changed daemon_mode when --daemon was not passed.
-        assert mock_cfg.general.daemon_mode == "foreground"
-
-    def test_background_mode_set_with_daemon_flag(self, mocker: MockerFixture) -> None:
-        """With --daemon, daemon_mode is overridden to 'background'."""
-        mocker.patch("movarr.cli.create_logger")
-        mock_cfg = _make_config_mock(daemon_mode="foreground")
-        mocker.patch("movarr.config.load_config", return_value=mock_cfg)
-        CliRunner().invoke(cli, ["--daemon", "--test"])
-        assert mock_cfg.general.daemon_mode == "background"
 
     def test_create_logger_called(self, mocker: MockerFixture) -> None:
         mock_logger = mocker.patch("movarr.cli.create_logger")
@@ -341,7 +318,6 @@ class TestCliOverrides:
         log_level_console: str = "info",
         log_path: str = "",
         pid_path: str = "",
-        daemon_mode: str = "foreground",
     ) -> MagicMock:
         """Invoke CLI with *args*, return the config mock that cli() operated on."""
         mocker.patch("movarr.cli.create_logger")
@@ -349,7 +325,6 @@ class TestCliOverrides:
             log_level_console=log_level_console,
             log_path=log_path,
             pid_path=pid_path,
-            daemon_mode=daemon_mode,
         )
         cfg.general.db_path = "db/movarr.db"
         cfg.general.library_path_list = []

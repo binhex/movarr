@@ -41,17 +41,9 @@ if TYPE_CHECKING:
 class TestGeneralConfigDefaults:
     """GeneralConfig must have sane defaults."""
 
-    def test_default_daemon_mode_is_foreground(self) -> None:
-        cfg = GeneralConfig()
-        assert cfg.daemon_mode == "foreground"
-
     def test_default_db_path_is_set(self) -> None:
         cfg = GeneralConfig()
         assert cfg.db_path
-
-    def test_invalid_daemon_mode_raises(self) -> None:
-        with pytest.raises(ValidationError):
-            GeneralConfig(daemon_mode="invalid")
 
     def test_log_level_file_valid_accepted(self) -> None:
         cfg = GeneralConfig.model_validate({"log_level_file": "debug"})
@@ -137,19 +129,12 @@ class TestLoadConfig:
         cfg_file.write_text("general:\n  log_level_console: debug\n")
         cfg = load_config(str(cfg_file))
         assert cfg.general.log_level_console == "DEBUG"
-        assert cfg.general.daemon_mode == "foreground"  # default unchanged
 
     def test_creates_file_if_absent(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yml"
         cfg = load_config(str(cfg_file))
         assert cfg_file.exists()
         assert isinstance(cfg, Config)
-
-    def test_invalid_daemon_mode_in_file_raises(self, tmp_path: Path) -> None:
-        cfg_file = tmp_path / "config.yml"
-        cfg_file.write_text("general:\n  daemon_mode: bad_value\n")
-        with pytest.raises(ValidationError):
-            load_config(str(cfg_file))
 
 
 # Config migration
@@ -1046,7 +1031,7 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
         config_path = tmp_path / "config.yml"
         raw: dict[str, Any] = {
-            "general": {"config_version": _CONFIG_VERSION, "daemon_mode": "foreground"},
+            "general": {"config_version": _CONFIG_VERSION},
         }
         mock_strip = mocker.patch("movarr.config._strip_and_write")
         result = _run_migrations(raw, config_path)

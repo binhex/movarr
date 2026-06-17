@@ -247,6 +247,17 @@ def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _ensure_hooks_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    """Ensure raw["post_process"]["hooks"] is a mutable dict; return it."""
+    if not isinstance(raw.get("post_process"), dict):
+        raw["post_process"] = {}
+    hooks = raw.setdefault("post_process", {}).setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        raw["post_process"]["hooks"] = hooks
+    return hooks
+
+
 def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.17.0 -> v2.18.0: rename hook_timeout_secs -> hook_timeout_mins (seconds to minutes).
 
@@ -254,12 +265,7 @@ def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     (rounding to 1 decimal) and stores it under ``hook_timeout_mins``.
     If neither key exists, defaults to 5.0 minutes.
     """
-    if not isinstance(raw.get("post_process"), dict):
-        raw["post_process"] = {}
-    hooks = raw.setdefault("post_process", {}).setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        hooks = {}
-        raw["post_process"]["hooks"] = hooks
+    hooks = _ensure_hooks_dict(raw)
     if "hook_timeout_secs" in hooks:
         old_secs = hooks.pop("hook_timeout_secs")
         if isinstance(old_secs, (int, float)):
@@ -400,22 +406,12 @@ class GeneralConfig(BaseModel):
     """Top-level general settings."""
 
     config_version: str = _CONFIG_VERSION
-    daemon_mode: str = "foreground"
     log_level_console: str = "info"
     log_level_file: str = "info"
     log_path: str = "logs"
     library_path_list: list[str] = Field(default_factory=list)
     db_path: str = "db"
     pid_path: str = "pids"
-
-    @field_validator("daemon_mode")
-    @classmethod
-    def validate_daemon_mode(cls, value: str) -> str:
-        """Ensure daemon_mode is one of the allowed values."""
-        allowed = {"foreground", "background"}
-        if value not in allowed:
-            raise ValueError(f"daemon_mode must be one of {allowed}")
-        return value
 
     @field_validator("log_level_console", "log_level_file", mode="before")
     @classmethod
@@ -785,18 +781,20 @@ def _strip_none_values(d: dict[str, Any]) -> None:
                     _strip_none_values(item)
 
 
+def _has_none_in_list(items: list[object]) -> bool:
+    """Return True if any dict in *items* contains None-valued keys."""
+    return any(isinstance(item, dict) and _has_none_values(item) for item in items)
+
+
 def _has_none_values(d: dict[str, Any]) -> bool:
     """Return True if *d* contains any None-valued key at any depth."""
     for value in d.values():
         if value is None:
             return True
-        if isinstance(value, dict):
-            if _has_none_values(value):
-                return True
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict) and _has_none_values(item):
-                    return True
+        if isinstance(value, dict) and _has_none_values(value):
+            return True
+        if isinstance(value, list) and _has_none_in_list(value):
+            return True
     return False
 
 

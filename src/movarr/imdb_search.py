@@ -170,24 +170,54 @@ def _resolve_imdb_from_tmdb(
     return imdb_id if imdb_id else None
 
 
-def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
-    api_key = config.credentials.tmdb.api_key
-    if not api_key:
-        _fail(result, "TMDb: no API key configured.")
-        return result
+def _tmdb_search_request(title: str, year: str, api_key: str) -> tuple[dict | None, str | None]:
+    """Execute TMDb search API request; return (data, error_msg).
 
-    title = result.get("movie_title") or ""
-    year = result.get("movie_title_year") or ""
-    movie_title_compare = result.get("movie_title_compare") or ""
-
+    Returns (parsed dict, None) on success, (None, error_string) on failure.
+    """
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?query={encoded_title}&year={year}&api_key={api_key}"
     http = HttpClient()
     try:
         resp = http.get(url)
-        data = json.loads(resp.content)
+        return cast("dict", json.loads(resp.content)), None
     except Exception as exc:  # noqa: BLE001
-        _fail(result, f"TMDb search request failed: {exc}")
+        return None, str(exc)
+
+
+def _apply_tmdb_result(result: ResultDict, tmdb_id: int, api_key: str, title: str, year: str) -> ResultDict:
+    """Resolve IMDb ID from TMDb and apply the match to *result*."""
+    imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, HttpClient(), result)
+    if imdb_id is None:
+        if result.get("result") != "Failed":
+            _apply_imdb_match(result, [], title, year)
+        return result
+    candidates = [{"imdb_id": imdb_id}]
+    _apply_imdb_match(result, candidates, title, year)
+    return result
+
+
+def _str_field(result: ResultDict, key: str) -> str:
+    """Return *result*[*key*] as a non-None str, or empty string."""
+    val: object = result.get(key)
+    return cast("str", val) if val else ""
+
+
+def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
+    """Search TMDb API for an IMDb ID matching the result's title/year."""
+    api_key = config.credentials.tmdb.api_key
+    if not api_key:
+        _fail(result, "TMDb: no API key configured.")
+        return result
+
+    title = _str_field(result, "movie_title")
+    year = _str_field(result, "movie_title_year")
+    movie_title_compare = _str_field(result, "movie_title_compare")
+
+    data, err = _tmdb_search_request(title, year, api_key)
+    if data is None:
+        err_suffix = f": {err}" if err else ""
+        _fail(result, f"TMDb search request failed for '{title}' ({year}){err_suffix}.")
         return result
 
     tmdb_id = _find_tmdb_candidate(data.get("results", []), movie_title_compare, year)
@@ -195,15 +225,7 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
         _apply_imdb_match(result, [], title, year)
         return result
 
-    imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, http, result)
-    if imdb_id is None:
-        if result.get("result") != "Failed":
-            _apply_imdb_match(result, [], title, year)
-        return result
-
-    candidates = [{"imdb_id": imdb_id}]
-    _apply_imdb_match(result, candidates, title, year)
-    return result
+    return _apply_tmdb_result(result, tmdb_id, api_key, title, year)
 
 
 # Strategy 3 — OMDb
@@ -248,24 +270,35 @@ def _validate_omdb_year(data: dict, year: str, result: ResultDict) -> bool:
     return True
 
 
-def _search_omdb(result: ResultDict, config: Config) -> ResultDict:  # noqa: PLR0911
+def _omdb_search_request(title: str, year: str, api_key: str) -> tuple[dict | None, str | None]:
+    """Execute OMDb search API request; return (data, error_msg).
+
+    Returns (parsed dict, None) on success, (None, error_string) on failure.
+    """
+    encoded_title = urllib.parse.quote(title)
+    url = f"https://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
+    try:
+        resp = HttpClient().get(url)
+        return cast("dict", json.loads(resp.content)), None
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
+def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
+    """Search OMDb API for an IMDb ID matching the result's title/year."""
     api_key = config.credentials.omdb.api_key
     if not api_key:
         _fail(result, "OMDb: no API key configured.")
         return result
 
-    title = result.get("movie_title") or ""
-    year = result.get("movie_title_year") or ""
-    movie_title_compare = result.get("movie_title_compare") or ""
+    title = _str_field(result, "movie_title")
+    year = _str_field(result, "movie_title_year")
+    movie_title_compare = _str_field(result, "movie_title_compare")
 
-    encoded_title = urllib.parse.quote(title)
-    url = f"https://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
-    http = HttpClient()
-    try:
-        resp = http.get(url)
-        data = json.loads(resp.content)
-    except Exception as exc:  # noqa: BLE001
-        _fail(result, f"OMDb search request failed: {exc}")
+    data, err = _omdb_search_request(title, year, api_key)
+    if data is None:
+        err_suffix = f": {err}" if err else ""
+        _fail(result, f"OMDb search request failed for '{title}' ({year}){err_suffix}.")
         return result
 
     if _validate_omdb_title(data, title, year, movie_title_compare, result) is None:

@@ -442,16 +442,19 @@ def _safe_str(data: dict, *keys: str | int) -> str | None:
     return str(val) if val is not None else None
 
 
-def _extract_cert_imdbpie(aux: dict) -> str | None:
-    """Try multiple paths in the auxiliary data for a UK certificate."""
+def _extract_cert_from_certificate(aux: dict) -> str | None:
+    """Try extracting certificate from aux["certificate"]["certificate"]."""
     try:
         val = aux["certificate"]["certificate"]
-        # Guard against JSON null (Python None) — str(None) == "None" is wrong.
         if val is None:
             return None
         return str(val)
     except (KeyError, TypeError):
-        pass
+        return None
+
+
+def _extract_cert_from_certificates_list(aux: dict) -> str | None:
+    """Try extracting certificate from aux["certificates"] list."""
     try:
         certs = aux.get("certificates") or []
         uk = next(
@@ -461,6 +464,14 @@ def _extract_cert_imdbpie(aux: dict) -> str | None:
         return uk or (certs[0].get("certificate") if certs else None)
     except (KeyError, IndexError, TypeError):
         return None
+
+
+def _extract_cert_imdbpie(aux: dict) -> str | None:
+    """Try multiple paths in the auxiliary data for a UK certificate."""
+    cert = _extract_cert_from_certificate(aux)
+    if cert is not None:
+        return cert
+    return _extract_cert_from_certificates_list(aux)
 
 
 def _extract_trailer(aux: dict) -> str | None:
@@ -495,26 +506,29 @@ _COUNTRY_ALIASES: dict[str, str] = {
 }
 
 
+def _lookup_country_code(name: str) -> str | None:
+    """Look up *name* against pycountry; return lowercased alpha_2 or None."""
+    for lookup in [
+        lambda n: pycountry.countries.get(name=n),
+        lambda n: pycountry.countries.get(alpha_2=n.upper()),
+        lambda n: pycountry.countries.get(alpha_3=n.upper()),
+    ]:
+        country = lookup(name)
+        if country:
+            return str(country.alpha_2).lower()
+    return None
+
+
 def _convert_countries(raw: str | None) -> list[str] | None:
+    """Convert comma-separated country names/pycountry codes to lowercased alpha_2 codes."""
     if not raw:
         return None
     result = []
     for raw_name in raw.split(","):
         name = raw_name.strip()
-        # 1. Try pycountry's official name (e.g. "United States", "United Kingdom").
-        country = pycountry.countries.get(name=name)
-        if country:
-            result.append(country.alpha_2.lower())
-            continue
-        # 2. Try alpha_2 directly (e.g. "US", "GB").
-        country = pycountry.countries.get(alpha_2=name.upper())
-        if country:
-            result.append(country.alpha_2.lower())
-            continue
-        # 3. Try alpha_3 (e.g. "USA").
-        country = pycountry.countries.get(alpha_3=name.upper())
-        if country:
-            result.append(country.alpha_2.lower())
+        code = _lookup_country_code(name)
+        if code:
+            result.append(code)
             continue
         # 4. Try common_name (e.g. "Iran", "South Korea").
         country = pycountry.countries.get(common_name=name)

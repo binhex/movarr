@@ -49,8 +49,11 @@ def _cleanup_pid_file(pid_path: str | None) -> None:
 def run(config: Config) -> None:
     """Start the scheduler in daemon/foreground mode.
 
-    Reads ``config.general.daemon_mode`` to decide between background and
-    single-pass.  The PID file path is taken from ``config.general.pid_path``;
+    If any scheduler task is enabled in the config the scheduler runs in
+    continuous loop mode (``_run_daemon``).  Otherwise a single pass
+    (``run_once``) is executed.
+
+    The PID file path is taken from ``config.general.pid_path``;
     an empty string means no PID file is written.
 
     Args:
@@ -61,12 +64,21 @@ def run(config: Config) -> None:
         _write_pid(pid_path)
 
     try:
-        if config.general.daemon_mode == "background":
+        if _any_scheduler_enabled(config):
             _run_daemon(config)
         else:
             run_once(config)
     finally:
         _cleanup_pid_file(pid_path)
+
+
+def _any_scheduler_enabled(config: Config) -> bool:
+    """Return True if at least one scheduler task is enabled in *config*."""
+    return (
+        config.schedule.acquisition.enabled
+        or config.schedule.queue_management.enabled
+        or config.schedule.post_processing.enabled
+    )
 
 
 def run_once(config: Config) -> None:
