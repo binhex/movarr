@@ -77,3 +77,4 @@ configs/
 .mypy_cache/
 .ruff_cache/
 .worktrees/
+.superpowers/

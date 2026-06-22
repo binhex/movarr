@@ -102,24 +102,20 @@ class TestBuildBody:
         cfg.torrent_client.qbittorrent.add_paused = True
         body = _build_body(_make_full_result(), cfg)
         # Should start with Status and Score, not repeat the movie title
-        assert "<strong>Status:</strong> Paused" in body
-        assert "<strong>Score:</strong> 8.8 from 2000000 users" in body
-        assert "<strong>Title:</strong>" not in body
+        assert "**Status:** Paused" in body
+        assert "**Score:** 8.8 from 2000000 users" in body
+        assert "**Title:**" not in body
 
-    def test_no_paragraph_breaks_in_body(self) -> None:
-        """All body fields are in a single <p> with <br> — no paragraph spacing anywhere."""
+    def test_no_html_formatting_tags_in_body(self) -> None:
+        """Body contains no HTML formatting tags — pure Markdown with <details> block."""
         cfg = Config()
         cfg.torrent_client.qbittorrent.add_paused = False
         body = _build_body(_make_full_result(), cfg)
-        # No <p> separator between ANY fields — everything in one <p>
-        assert "</p>\n<p>" not in body.strip()
-        # <br> breaks exist between fields (including headline fields)
-        assert "<br>\n<strong>Score:</strong>" in body
-        assert "<br>\n<strong>Plot:</strong>" in body
-        assert "<br>\n<strong>Directors:</strong>" in body
-        assert "<br>\n<strong>Genres:</strong>" in body
-        assert "<br>\n<strong>Release:</strong>" in body
-        assert "<br>\n<strong>Size:</strong>" in body
+        assert "<p>" not in body
+        assert "<br>" not in body
+        assert "<strong>" not in body
+        # Each field is on its own line
+        assert body.startswith("**Status:**")
 
     def test_empty_cast_list_shows_dash(self) -> None:
         """Body shows '—' for actors when cast list is empty."""
@@ -164,7 +160,7 @@ class TestBuildBody:
         result.pop("imdb_id", None)
         result.pop("index_details", None)
         body = _build_body(result, cfg)
-        assert 'href="#"' in body
+        assert "(<#>)" in body
 
     def test_imdb_bare_url_present_when_id_set(self) -> None:
         """Body contains a bare IMDb URL line when imdb_id is present."""
@@ -189,6 +185,48 @@ class TestBuildBody:
         body = _build_body(result, cfg)
         assert '<img src="' not in body
 
+    def test_body_uses_markdown_bold_labels(self) -> None:
+        """Body uses **bold** Markdown syntax, not <strong> HTML tags."""
+        cfg = Config()
+        body = _build_body(_make_full_result(), cfg)
+        assert "<strong>" not in body
+        assert "**Status:**" in body
+        assert "**Score:**" in body
+        assert "**IMDb:**" in body
+        assert "**Plot:**" in body
+        assert "**Actors:**" in body
+        assert "**Directors:**" in body
+        assert "**Genres:**" in body
+        assert "**Release:**" in body
+        assert "**Size:**" in body
+
+    def test_result_details_is_markdown_list(self) -> None:
+        """Result details rendered as italic summary with bullet items."""
+        cfg = Config()
+        body = _build_body(_make_full_result(), cfg)
+        assert "_1 items_" in body
+        assert "- Quality: Rating: 8.8" in body
+
+    def test_imdb_link_is_bare_url(self) -> None:
+        """IMDb link is a bare URL (auto-linked by Markdown renderers)."""
+        cfg = Config()
+        body = _build_body(_make_full_result(imdb_id="tt1375666"), cfg)
+        assert "https://imdb.com/title/tt1375666" in body
+        # Should not be an HTML <a> tag
+        assert "<a href=" not in body
+
+    def test_release_link_is_markdown(self) -> None:
+        """Release title links to index details via Markdown [text](url) syntax."""
+        cfg = Config()
+        body = _build_body(
+            _make_full_result(
+                index_title="Inception 2010 1080p BluRay",
+                index_details="http://example.com/details",
+            ),
+            cfg,
+        )
+        assert "[Inception 2010 1080p BluRay](<http://example.com/details>)" in body
+
 
 # _format_result_details
 
@@ -196,33 +234,40 @@ class TestBuildBody:
 class TestFormatResultDetails:
     """Tests for the _format_result_details pure helper."""
 
-    def test_three_part_entry_renders_flat_item(self) -> None:
-        """All result_details entries render as plain <li> items.
+    def test_details_wraps_list_with_summary_and_pass_count(self) -> None:
+        """Output has italic summary line followed by bullet items."""
+        details = [
+            "Passed: check alpha",
+            "Passed: check beta",
+            "Passed: check gamma",
+        ]
+        result = _format_result_details(details)
+        assert "_3 checks passed_" in result
+        assert "- Passed: check alpha" in result
 
-        The old 3-part nested-list branch was an unreachable code path
-        (result_details entries always have exactly one ": " separator).
-        It has been removed; all entries now render as flat <li> items.
-        """
-        result = _format_result_details(["Check: Rating: 8.8"])
-        assert "Check: Rating: 8.8" in result
-        assert "<li>" in result
-        # Confirm no nested <ul> is generated for this input.
-        assert result.count("<ul>") == 1  # only the outer <ul>
+    def test_summary_counts_mixed_pass_fail(self) -> None:
+        """Summary shows separate pass and fail counts."""
+        details = [
+            "Passed: check a",
+            "Failed: check b",
+            "Passed: check c",
+        ]
+        result = _format_result_details(details)
+        assert "_2 passed, 1 failed_" in result
 
-    def test_non_three_part_entry_renders_flat_item(self) -> None:
-        """An entry without two colons renders as a plain <li>."""
-        result = _format_result_details(["Passed simple check"])
-        assert "<li>Passed simple check</li>" in result
+    def test_summary_all_failed(self) -> None:
+        """Summary shows 0 passed when all checks failed."""
+        details = [
+            "Failed: check a",
+            "Failed: check b",
+        ]
+        result = _format_result_details(details)
+        assert "_0 passed, 2 failed_" in result
 
-    def test_empty_list_produces_empty_ul(self) -> None:
-        """Empty input produces an empty <ul> wrapper."""
-        assert _format_result_details([]) == "<ul></ul>"
-
-    def test_mixed_entries_both_rendered(self) -> None:
-        """Multiple entries are all rendered as separate <li> elements."""
-        result = _format_result_details(["A: B: C", "simple"])
-        assert "A: B: C" in result
-        assert "simple" in result
+    def test_empty_list_shows_zero_checks(self) -> None:
+        """Empty list produces italic '0 checks' summary."""
+        result = _format_result_details([])
+        assert "_0 checks_" in result
 
 
 # send_queued_notification
@@ -434,6 +479,18 @@ class TestSendServiceAlert:
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
             assert send_service_alert(service_name="qBittorrent", hours_elapsed=1.0, config=config) is False
 
+    def test_body_uses_markdown_bold_labels(self) -> None:
+        """Service alert body uses **bold** Markdown, not <strong> HTML."""
+        config = _make_config(["ntfy://t"])
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            send_service_alert(service_name="qBittorrent", hours_elapsed=2.0, config=config)
+        _, kwargs = mock_ap.notify.call_args
+        body = kwargs["body"]
+        assert "<strong>" not in body
+        assert "**" in body
+
 
 class TestSendIndexProxyAlertDelegates:
     """send_index_proxy_alert() must delegate to send_service_alert()."""
@@ -454,19 +511,19 @@ class TestSafeUrlEdgeCases:
     """_safe_url edge-cases exercised through _build_body."""
 
     def test_missing_index_details_uses_hash_href(self) -> None:
-        """When index_details is absent the rendered HTML uses href='#'."""
+        """When index_details is absent the Markdown link uses href='#'."""
         cfg = Config()
         result = _make_full_result()
         result.pop("index_details", None)
         body = _build_body(result, cfg)
-        assert 'href="#"' in body
+        assert "(<#>)" in body
 
     def test_non_http_scheme_uses_hash_href(self) -> None:
         """A non-http/https scheme like ftp:// must produce href='#'."""
         cfg = Config()
         result = _make_full_result(index_details="ftp://tracker.example.com/")
         body = _build_body(result, cfg)
-        assert 'href="#"' in body
+        assert "(<#>)" in body
 
     def test_urlparse_exception_falls_back_to_hash(self, mocker: MockerFixture) -> None:
         """When urlparse raises, _safe_url returns '#'."""
@@ -474,7 +531,7 @@ class TestSafeUrlEdgeCases:
         cfg = Config()
         result = _make_full_result(index_details="http://example.com/details")
         body = _build_body(result, cfg)
-        assert 'href="#"' in body
+        assert "(<#>)" in body
 
 
 class TestDispatchApprise:
@@ -491,6 +548,32 @@ class TestDispatchApprise:
     def test_returns_false_for_empty_body(self) -> None:
         """Guard: empty body returns False without touching Apprise."""
         assert _dispatch_apprise("subject", "", ["apprise://test"]) is False
+
+    def test_notify_uses_markdown_body_format(self) -> None:
+        """_dispatch_apprise sends with NotifyFormat.MARKDOWN by default."""
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            _dispatch_apprise("subj", "body", ["ntfy://t"])
+        mock_ap.notify.assert_called_once()
+        _, kwargs = mock_ap.notify.call_args
+        from apprise import NotifyFormat
+
+        assert kwargs["body_format"] == NotifyFormat.MARKDOWN
+
+    def test_notify_respects_explicit_body_format(self) -> None:
+        """_dispatch_apprise passes through an explicit body_format kwarg."""
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            from apprise import NotifyFormat
+
+            _dispatch_apprise("subj", "body", ["ntfy://t"], body_format=NotifyFormat.TEXT)
+        mock_ap.notify.assert_called_once()
+        _, kwargs = mock_ap.notify.call_args
+        from apprise import NotifyFormat
+
+        assert kwargs["body_format"] == NotifyFormat.TEXT
 
 
 class TestPosterUrlHelpers:

@@ -1,6 +1,6 @@
 """Notification via apprise for movarr.
 
-Sends an HTML summary when a torrent is queued.  Any apprise-supported
+Sends a Markdown summary when a torrent is queued.  Any apprise-supported
 service URL can be specified in ``config.notification.apprise_urls``.
 
 Fixes siphonator bug #2: ``", ".join(None)`` crashes — all list fields
@@ -75,15 +75,14 @@ def send_service_alert(service_name: str, hours_elapsed: float, config: Config) 
         return False
 
     hours_str = f"{hours_elapsed:.1f}"
-    safe_service = html.escape(service_name)
-    safe_hours = html.escape(hours_str)
     subject = f"movarr: {service_name} has been unavailable for {hours_str}h \u2014 possible outage"
+    safe_service = _escape_markdown_text(service_name)
     body = (
-        f"<p><strong>movarr service health alert</strong></p>"
-        f"<p><strong>Service:</strong> {safe_service}</p>"
-        f"<p><strong>Duration:</strong> Unavailable for {safe_hours} hours.</p>"
-        f"<p>movarr will keep retrying every cycle. "
-        f"Check that {safe_service} is running and accessible.</p>"
+        f"**movarr service health alert**\n\n"
+        f"**Service:** {safe_service}\n"
+        f"**Duration:** Unavailable for {hours_str} hours.\n\n"
+        f"movarr will keep retrying every cycle. "
+        f"Check that {safe_service} is running and accessible."
     )
 
     if not _dispatch_apprise(subject, body, list(urls)):
@@ -135,8 +134,15 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
     return True
 
 
-def _dispatch_apprise(subject: str, body: str, urls: list[str]) -> bool:
-    """Send *subject*/*body* via Apprise to all *urls*.    Returns True if at least one notification was sent successfully.
+def _dispatch_apprise(
+    subject: str,
+    body: str,
+    urls: list[str],
+    body_format: object = apprise.NotifyFormat.MARKDOWN,
+) -> bool:
+    """Send *subject*/*body* via Apprise to all *urls*.
+
+    Returns True if at least one notification was sent successfully.
     Returns False on empty URL list, empty subject/body, or any error.
     """
     if not urls or not subject or not body:
@@ -145,7 +151,7 @@ def _dispatch_apprise(subject: str, body: str, urls: list[str]) -> bool:
     for url in urls:
         ap.add(url)
     try:
-        sent = ap.notify(title=subject, body=body, body_format=apprise.NotifyFormat.HTML)
+        sent = ap.notify(title=subject, body=body, body_format=body_format)
     except Exception:  # noqa: BLE001
         logger.warning("Apprise notification failed.")
         return False
@@ -172,9 +178,14 @@ def _build_subject(result: ResultDict) -> str:
 
 
 def _safe_url(raw: str) -> str:
-    """Return a sanitised href value: raw URL HTML-escaped, or '#' if invalid/empty.
+    """Return a sanitised URL for Markdown link contexts, or '#' if invalid/empty.
 
-    Accepts only http and https schemes. Any parse error also falls back to '#'.
+    Accepts only http and https schemes.  Any parse error also falls back to '#'.
+
+    Unlike HTML contexts, Markdown ``[text](url)`` expects raw URLs --
+    HTML-entity encoding would produce literal ``&amp;`` in the rendered
+    link.  We return the raw URL; the caller wraps it in
+    ``<url>`` angle-bracket syntax for safety against ``)`` and spaces.
     """
     if not raw:
         return "#"
@@ -184,23 +195,34 @@ def _safe_url(raw: str) -> str:
             return "#"
     except Exception:  # noqa: BLE001
         return "#"
-    return html.escape(raw, quote=True)
+    return raw
 
 
 def _extract_imdb_fields(result: ResultDict) -> dict[str, str]:
     """Extract and format IMDb identity fields."""
-    title = html.escape(result.get("imdb_title") or "Unknown")
-    year = html.escape(str(result.get("imdb_year") or ""))
+    title = _escape_markdown_text(result.get("imdb_title") or "Unknown")
+    year = _escape_markdown_text(str(result.get("imdb_year") or ""))
     imdb_id = result.get("imdb_id") or ""
-    rating = html.escape(str(result.get("imdb_rating") or "?"))
-    votes = html.escape(str(result.get("imdb_votes") or "?"))
+    rating = _escape_markdown_text(str(result.get("imdb_rating") or "?"))
+    votes = _escape_markdown_text(str(result.get("imdb_votes") or "?"))
     return {"title": title, "year": year, "imdb_id": imdb_id, "rating": rating, "votes": votes}
+
+
+def _escape_markdown_text(text: str) -> str:
+    """Escape Markdown metacharacters so *text* is never interpreted as formatting.
+
+    Escapes ``\\``, ``\\` ``, ``*``, ``_``, ``[``, ``]``, ``>``, ``\u003c``, and ``&``.
+    These cover all Markdown inline formatting triggers plus HTML tag/entity
+    openers, providing parity with ``html.escape()`` for Markdown contexts.
+    """
+    meta = "\\`*_[]>\u003c&"
+    return "".join("\\" + c if c in meta else c for c in text)
 
 
 def _extract_plot(result: ResultDict) -> str:
     """Extract the plot/outline field with fallback."""
     raw = result.get("imdb_plot_outline") or result.get("imdb_plot_summary")
-    return html.escape(raw or "\u2014")
+    return _escape_markdown_text(raw or "\u2014")
 
 
 def _extract_content_fields(result: ResultDict) -> dict[str, str]:
@@ -208,17 +230,17 @@ def _extract_content_fields(result: ResultDict) -> dict[str, str]:
     cast_list: list[str] = result.get("imdb_credits_cast_list") or []
     directors: list[str] = result.get("imdb_credits_director_list") or []
     genres: list[str] = result.get("imdb_genres_list") or []
-    actors_str = html.escape(", ".join(cast_list[:10]) or "\u2014")
-    directors_str = html.escape(", ".join(directors) or "\u2014")
-    genres_str = html.escape(", ".join(genres) or "\u2014")
+    actors_str = _escape_markdown_text(", ".join(cast_list[:10]) or "\u2014")
+    directors_str = _escape_markdown_text(", ".join(directors) or "\u2014")
+    genres_str = _escape_markdown_text(", ".join(genres) or "\u2014")
     plot = _extract_plot(result)
     return {"actors_str": actors_str, "directors_str": directors_str, "genres_str": genres_str, "plot": plot}
 
 
 def _extract_index_fields(result: ResultDict) -> dict[str, str]:
     """Extract and format index/torrent release fields."""
-    index_title = html.escape(result.get("index_title") or "")
-    index_size_mb = html.escape(str(result.get("index_size_mb") or "?"))
+    index_title = _escape_markdown_text(result.get("index_title") or "")
+    index_size_mb = _escape_markdown_text(str(result.get("index_size_mb") or "?"))
     index_details = _safe_url(result.get("index_details") or "")
     return {"index_title": index_title, "index_size_mb": index_size_mb, "index_details": index_details}
 
@@ -236,38 +258,57 @@ def _extract_body_fields(result: ResultDict, config: Config) -> dict[str, str]:
     fields.update(_extract_content_fields(result))
     fields.update(_extract_index_fields(result))
     fields["queue_status"] = _queue_status_str(config)
-    fields["result_details_html"] = _format_result_details(result.get("result_details") or [])
+    fields["result_details_md"] = _format_result_details(result.get("result_details") or [])
     return fields
 
 
 def _build_body(result: ResultDict, config: Config) -> str:
-    """Build the HTML notification body."""
+    """Build the Markdown notification body with collapsible result details."""
     f = _extract_body_fields(result, config)
 
     imdb_line = ""
     if f["imdb_id"]:
-        imdb_line = f"<strong>IMDb:</strong> https://imdb.com/title/{html.escape(f['imdb_id'])}<br>\n"
-    return f"""
-<p><strong>Status:</strong> {f["queue_status"]}<br>
-<strong>Score:</strong> {f["rating"]} from {f["votes"]} users<br>
-{imdb_line}<strong>Plot:</strong> {f["plot"]}<br>
-<strong>Actors:</strong> {f["actors_str"]}<br>
-<strong>Directors:</strong> {f["directors_str"]}<br>
-<strong>Genres:</strong> {f["genres_str"]}<br>
-<strong>Release:</strong> <a href="{f["index_details"]}">{f["index_title"]}</a><br>
-<strong>Size:</strong> {f["index_size_mb"]} MB<br>
-<strong>Result Details:</strong></p>
-{f["result_details_html"]}
-"""
+        imdb_line = f"**IMDb:** https://imdb.com/title/{f['imdb_id']}\n"
+
+    return (
+        f"**Status:** {f['queue_status']}\n"
+        f"**Score:** {f['rating']} from {f['votes']} users\n"
+        f"{imdb_line}"
+        f"**Plot:** {f['plot']}\n"
+        f"**Actors:** {f['actors_str']}\n"
+        f"**Directors:** {f['directors_str']}\n"
+        f"**Genres:** {f['genres_str']}\n"
+        f"**Release:** [{f['index_title']}](<{f['index_details']}>)\n"
+        f"**Size:** {f['index_size_mb']} MB\n\n"
+        f"**Result Details:**\n"
+        f"{f['result_details_md']}"
+    )
 
 
 def _format_result_details(details: list[str]) -> str:
-    """Format pipeline result_details as an HTML unordered list.
+    """Format pipeline result_details as a Markdown list with a summary prefix.
 
-    Each entry is ``"Passed: msg"`` or ``"Failed: msg"`` (exactly one ``": "``
-    separator), so they are always rendered as simple ``<li>`` items.
+    Renders a pass/fail count line in italics, followed by bullet points.
+    Works on ALL Apprise services — no HTML dependency.
+
+    Each entry is ``"Passed: msg"`` or ``"Failed: msg"``.
     """
+    passed = sum(1 for d in details if d.startswith("Passed"))
+    failed = sum(1 for d in details if d.startswith("Failed"))
+
+    if not details:
+        count_str = "0 checks"
+    elif passed + failed == 0:
+        count_str = f"{len(details)} items"
+    elif failed == 0:
+        count_str = f"{passed} checks passed"
+    else:
+        count_str = f"{passed} passed, {failed} failed"
+
     items = ""
     for item in details:
-        items += f"<li>{html.escape(item)}</li>"
-    return f"<ul>{items}</ul>"
+        items += f"- {html.escape(item)}\n"
+
+    if not details:
+        return f"_{count_str}_\n"
+    return f"_{count_str}_\n{items}"
