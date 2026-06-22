@@ -27,7 +27,9 @@ Automated movie downloader based on IMDb criteria filtering.
 - **Genre/certification routing** — routes completed movies to different library paths per viewer profile based
   on genre and age-rating rules.
 - **Notifications** — sends alerts via any [apprise](https://github.com/caronc/apprise)-compatible service
-  (ntfy, Discord, Telegram, email, and more).
+  (ntfy, Discord, Telegram, email, and more).  Notifications use Markdown formatting;
+  **ntfy users** should append `?format=markdown` to their Apprise URL for bold text
+  and links to render correctly (e.g. `ntfy://mytopic?format=markdown`).
 - **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
   configurable interval.
 - **Automatic scheduler mode** — runs in continuous scheduling mode when any scheduler task is enabled in the
