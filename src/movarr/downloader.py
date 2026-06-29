@@ -12,9 +12,9 @@ import requests
 __all__ = ["HttpClient", "HttpError"]
 
 _USER_AGENT_CHROME = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_3) "
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/59.0.3071.115 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 
 _HTTP_OK_MIN = 200
@@ -53,6 +53,12 @@ class HttpClient:
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
             self._session.close()
+
+    def __enter__(self) -> HttpClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._session.close()
 
     @backoff.on_exception(
         backoff.expo,

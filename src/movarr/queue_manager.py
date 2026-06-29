@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from movarr import torrent_client_health
+from movarr.qbittorrent import extract_movarr_tag
 
 if TYPE_CHECKING:
     from movarr.config import Config
@@ -20,8 +21,6 @@ if TYPE_CHECKING:
     from movarr.qbittorrent import QBittorrentClient
 
 __all__ = ["run_queue_management"]
-
-_TAG_PREFIX = "movarr-"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,20 +37,8 @@ class _StuckConfig:
 def _filter_to_movarr_tagged(to_delete: dict[str, Any], torrent_map: dict[str, Any]) -> dict[str, Any]:
     """Return only candidates whose torrent has a movarr- tag in *torrent_map*."""
     return {
-        h: info
-        for h, info in to_delete.items()
-        if any(t.strip().startswith(_TAG_PREFIX) for t in (torrent_map.get(h, {}).get("tags", "") or "").split(","))
+        h: info for h, info in to_delete.items() if extract_movarr_tag(torrent_map.get(h, {}).get("tags", "") or "")
     }
-
-
-def _find_movarr_tag(torrent_map: dict[str, Any], torrent_hash: str) -> str | None:
-    """Return the first movarr- tag found in *torrent_map* for *torrent_hash*, or None."""
-    torrent_info = torrent_map.get(torrent_hash, {})
-    raw_tags: str = torrent_info.get("tags", "") or ""
-    return next(
-        (t.strip() for t in raw_tags.split(",") if t.strip().startswith(_TAG_PREFIX)),
-        None,
-    )
 
 
 def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -125,7 +112,7 @@ def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> No
     deleted_hashes = qbt.delete_stalled(to_delete, state=cfg.state, delete_data=cfg.delete_data)
 
     for torrent_hash in deleted_hashes:
-        tag = _find_movarr_tag(torrent_map, torrent_hash)
+        tag = extract_movarr_tag(torrent_map.get(torrent_hash, {}).get("tags", "") or "")
         if tag:
             db.mark_stalled(tag)
             logger.debug("Marked torrent '{}' (tag='{}') as Stalled in DB.", torrent_hash, tag)

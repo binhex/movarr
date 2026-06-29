@@ -138,7 +138,7 @@ def _dispatch_apprise(
     subject: str,
     body: str,
     urls: list[str],
-    body_format: object = apprise.NotifyFormat.MARKDOWN,
+    body_format: apprise.NotifyFormat = apprise.NotifyFormat.MARKDOWN,
 ) -> bool:
     """Send *subject*/*body* via Apprise to all *urls*.
 
@@ -293,8 +293,12 @@ def _format_result_details(details: list[str]) -> str:
 
     Each entry is ``"Passed: msg"`` or ``"Failed: msg"``.
     """
-    passed = sum(1 for d in details if d.startswith("Passed"))
-    failed = sum(1 for d in details if d.startswith("Failed"))
+    passed = failed = 0
+    for d in details:
+        if d.startswith("Passed"):
+            passed += 1
+        elif d.startswith("Failed"):
+            failed += 1
 
     if not details:
         count_str = "0 checks"
@@ -305,10 +309,5 @@ def _format_result_details(details: list[str]) -> str:
     else:
         count_str = f"{passed} passed, {failed} failed"
 
-    items = ""
-    for item in details:
-        items += f"- {html.escape(item)}\n"
-
-    if not details:
-        return f"_{count_str}_\n"
+    items = "".join(f"- {html.escape(item)}\n" for item in details)
     return f"_{count_str}_\n{items}"

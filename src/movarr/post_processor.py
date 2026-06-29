@@ -30,6 +30,8 @@ from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
+from movarr.filters import _RE_SPECIAL as _RE_EDITION
+from movarr.filters import _UNICODE_APOSTROPHES
 from movarr.parsing import extract_after_year, extract_resolution, sanitise
 
 if TYPE_CHECKING:
@@ -53,9 +55,6 @@ _EXTRAS_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
-# Special-edition tokens — used to prevent cross-edition deletion (e.g. Theatrical
-# must not delete Director's Cut even when resolution differs).
-_RE_EDITION = re.compile(r"\b(extended|director(?:s?['\s]?|['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -1030,8 +1029,9 @@ def _edition_set(san: str) -> frozenset[str]:
     (treated as the base edition).  Returns an empty frozenset when no
     non-theatrical token is found.
     """
+    norm = _UNICODE_APOSTROPHES.sub("'", san)
     tokens: set[str] = set()
-    for m in _RE_EDITION.finditer(san):
+    for m in _RE_EDITION.finditer(norm):
         token = m.group(0).lower()
         if token == "theatrical":
             continue

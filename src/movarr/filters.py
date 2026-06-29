@@ -229,8 +229,7 @@ def filter_by_imdb(
 
 def _group_is_rejected(group: str, reject_list: list[str]) -> bool:
     """Return True if *group* (case-insensitive) is in *reject_list*."""
-    reject_lower = [g.lower() for g in reject_list]
-    return group.lower() in reject_lower
+    return group.lower() in {g.lower() for g in reject_list}
 
 
 def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
