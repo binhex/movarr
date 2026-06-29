@@ -19,8 +19,11 @@ __all__ = ["QBittorrentClient", "QBittorrentError"]
 _TAG_PREFIX = "movarr-"
 
 
-def _extract_movarr_tag(tags_str: str) -> str:
-    """Return the first movarr- tag from *tags_str*, or empty string."""
+def extract_movarr_tag(tags_str: str) -> str:
+    """Return the first ``movarr-`` tag from *tags_str*, or empty string.
+
+    Exported as public API for use by :mod:`movarr.queue_manager`.
+    """
     return next(
         (t.strip() for t in tags_str.split(",") if t.strip().startswith(_TAG_PREFIX)),
         "",
@@ -144,7 +147,7 @@ class QBittorrentClient:
     @staticmethod
     def _torrent_has_movarr_tag(tags_str: str) -> bool:
         """Return True if *tags_str* contains at least one movarr- prefixed tag."""
-        return bool(_extract_movarr_tag(tags_str))
+        return bool(extract_movarr_tag(tags_str))
 
     @staticmethod
     def _build_torrent_entry(torrent: Any, files: Any, props: Any) -> dict[str, Any]:
@@ -152,7 +155,7 @@ class QBittorrentClient:
         return {
             "torrent_name": torrent.name,
             "torrent_hash": torrent.hash,
-            "torrent_tag": _extract_movarr_tag(torrent.tags),
+            "torrent_tag": extract_movarr_tag(torrent.tags),
             "torrent_save_path": props.save_path,
             "torrent_file_list": [{"file_name": f.name, "file_size": f.size} for f in files],
         }

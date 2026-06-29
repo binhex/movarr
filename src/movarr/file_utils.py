@@ -261,9 +261,12 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
 
 
 def resolution_label_from_height(height: str | None) -> str:
-    """Return ``"UHD"`` for 2160p, ``"HD"`` for anything else.
+    """Return ``"UHD"`` for 2160p or higher, ``"HD"`` for anything else.
 
     Args:
-        height: Resolution height string (e.g. ``"1080"`` or ``"2160"``).
+        height: Resolution height string (e.g. ``"1080"``, ``"2160"``, ``"4320"``).
     """
-    return "UHD" if height == "2160" else "HD"
+    try:
+        return "UHD" if int(height or "") >= 2160 else "HD"
+    except (ValueError, TypeError):
+        return "HD"
