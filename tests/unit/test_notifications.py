@@ -269,6 +269,25 @@ class TestFormatResultDetails:
         result = _format_result_details([])
         assert "_0 checks_" in result
 
+    def test_no_html_entities_in_output(self) -> None:
+        """HTML entities like &#x27; must NOT appear in Markdown output.
+
+        The body format is Markdown, not HTML.  html.escape() produces
+        entities such as ``&#x27;`` for apostrophes, which render
+        literally on ntfy and other plain-text consumers.  Only
+        Markdown-compatible escaping should be used.
+        """
+        details = [
+            "Passed: Release group 'byndr' is not in reject list.",
+            "Passed: Found via IMDbPie for 'Obsession 2025'.",
+        ]
+        result = _format_result_details(details)
+        # HTML entities must never appear
+        assert "&#x27;" not in result, "html.escape() entity leaked into Markdown output"
+        # The actual apostrophes must be present
+        assert "'byndr'" in result
+        assert "'Obsession 2025'" in result
+
 
 # send_queued_notification
 
