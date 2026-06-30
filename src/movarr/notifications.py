@@ -9,7 +9,6 @@ are null-guarded here.
 
 from __future__ import annotations
 
-import html
 import re
 import urllib.parse
 from typing import TYPE_CHECKING
@@ -309,5 +308,5 @@ def _format_result_details(details: list[str]) -> str:
     else:
         count_str = f"{passed} passed, {failed} failed"
 
-    items = "".join(f"- {html.escape(item)}\n" for item in details)
+    items = "".join(f"- {_escape_markdown_text(item)}\n" for item in details)
     return f"_{count_str}_\n{items}"
