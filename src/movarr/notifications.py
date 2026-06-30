@@ -148,7 +148,7 @@ def _dispatch_apprise(
         return False
     ap = apprise.Apprise()
     for url in urls:
-        ap.add(url)
+        ap.add(_ensure_ntfy_markdown(url))
     try:
         sent = ap.notify(title=subject, body=body, body_format=body_format)
     except Exception:  # noqa: BLE001
@@ -161,6 +161,23 @@ def _dispatch_apprise(
 
 
 # Internal helpers
+
+
+def _ensure_ntfy_markdown(url: str) -> str:
+    """Append ``?format=markdown`` to an Apprise ntfy URL if not already present.
+
+    Ntfy's Apprise plugin defaults to ``NotifyFormat.TEXT`` unless the
+    URL carries a ``?format=markdown`` query parameter.  Without it,
+    Markdown formatting (bold text, links, etc.) is lost.  Automatically
+    adding the parameter ensures Markdown rendering without requiring
+    the user to remember to append it to every ntfy URL.
+    """
+    if not url.startswith(("ntfy://", "ntfys://")):
+        return url
+    if "format=markdown" in url:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}format=markdown"
 
 
 def _build_subject(result: ResultDict) -> str:

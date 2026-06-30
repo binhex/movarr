@@ -314,7 +314,7 @@ class TestSendQueuedNotification:
 
         assert result is True
         mock_cls.assert_called_once()
-        mock_instance.add.assert_called_once_with("ntfy://topic")
+        mock_instance.add.assert_called_once_with("ntfy://topic?format=markdown")
         mock_instance.notify.assert_called_once()
 
     def test_multiple_urls_all_added(self, mocker: MockerFixture) -> None:
@@ -329,6 +329,8 @@ class TestSendQueuedNotification:
         send_queued_notification(_make_full_result(), cfg)
 
         assert mock_instance.add.call_count == 2
+        mock_instance.add.assert_any_call("ntfy://topic?format=markdown")
+        mock_instance.add.assert_any_call("discord://id/token")
 
     def test_apprise_returns_false_returns_false(self, mocker: MockerFixture) -> None:
         """Returns False when apprise.notify() returns False."""
@@ -551,6 +553,59 @@ class TestSafeUrlEdgeCases:
         result = _make_full_result(index_details="http://example.com/details")
         body = _build_body(result, cfg)
         assert "(<#>)" in body
+
+
+class TestEnsureNtfyMarkdown:
+    """Tests for _ensure_ntfy_markdown URL transformation."""
+
+    def test_ntfy_bare_appends_format_markdown(self) -> None:
+        """Bare ntfy:// URL gets ?format=markdown appended."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic")
+        assert result == "ntfy://topic?format=markdown"
+
+    def test_ntfys_bare_appends_format_markdown(self) -> None:
+        """Secure ntfys:// URL gets ?format=markdown appended."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfys://topic")
+        assert result == "ntfys://topic?format=markdown"
+
+    def test_ntfy_with_existing_params_appends_correctly(self) -> None:
+        """URL with existing query params uses & separator."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?priority=5")
+        assert result == "ntfy://topic?priority=5&format=markdown"
+
+    def test_ntfy_already_has_format_markdown(self) -> None:
+        """URL that already has format=markdown is left unchanged."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?format=markdown")
+        assert result == "ntfy://topic?format=markdown"
+
+    def test_ntfy_with_multiple_params_and_format(self) -> None:
+        """URL with format=markdown among other params is not modified."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?priority=5&format=markdown")
+        assert result == "ntfy://topic?priority=5&format=markdown"
+
+    def test_non_ntfy_url_is_unchanged(self) -> None:
+        """Non-ntfy URLs are returned verbatim."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("discord://webhook/token")
+        assert result == "discord://webhook/token"
+
+    def test_empty_url_returns_empty(self) -> None:
+        """Empty string returns empty string."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("")
+        assert result == ""
 
 
 class TestDispatchApprise:
