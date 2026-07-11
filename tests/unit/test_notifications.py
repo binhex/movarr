@@ -7,10 +7,15 @@ from unittest.mock import MagicMock, patch
 
 from movarr.config import Config, NotificationConfig
 from movarr.notifications import (
-    _build_body,
+    _build_links_section,
+    _build_markdown_body,
     _build_subject,
+    _build_text_body,
     _dispatch_apprise,
+    _extract_body_fields,
     _format_result_details,
+    _format_result_details_text,
+    _is_markdown_service,
     _poster_url_with_width,
     _strip_poster_resolution,
     send_index_proxy_alert,
@@ -80,16 +85,26 @@ class TestBuildSubject:
         assert "Unknown" in _build_subject({})
 
 
-# _build_body
+# _make_fields helper
 
 
-class TestBuildBody:
-    """Tests for the _build_body pure helper."""
+def _make_fields(result: ResultDict, config: Config | None = None) -> dict[str, str]:
+    """Call _extract_body_fields and return the formatted fields dict."""
+    if config is None:
+        config = Config()
+    return _extract_body_fields(result, config)
+
+
+# _build_markdown_body / _build_text_body
+
+
+class TestBuildMarkdownBody:
+    """Tests for the _build_markdown_body pure helper."""
 
     def test_full_result_contains_key_fields(self) -> None:
         """Body contains status, score, actors and directors from a full result."""
-        cfg = Config()
-        body = _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
         assert "Status:" in body
         assert "Score:" in body
         assert "Leonardo DiCaprio" in body
@@ -100,17 +115,19 @@ class TestBuildBody:
         """Body starts with Status and Score lines, not a redundant Title line."""
         cfg = Config()
         cfg.torrent_client.qbittorrent.add_paused = True
-        body = _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result(), cfg)
+        body = _build_markdown_body(fields)
         # Should start with Status and Score, not repeat the movie title
         assert "**Status:** Paused" in body
         assert "**Score:** 8.8 from 2000000 users" in body
         assert "**Title:**" not in body
 
     def test_no_html_formatting_tags_in_body(self) -> None:
-        """Body contains no HTML formatting tags — pure Markdown with <details> block."""
+        """Body contains no HTML formatting tags."""
         cfg = Config()
         cfg.torrent_client.qbittorrent.add_paused = False
-        body = _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result(), cfg)
+        body = _build_markdown_body(fields)
         assert "<p>" not in body
         assert "<br>" not in body
         assert "<strong>" not in body
@@ -119,62 +136,65 @@ class TestBuildBody:
 
     def test_empty_cast_list_shows_dash(self) -> None:
         """Body shows '—' for actors when cast list is empty."""
-        cfg = Config()
         result = _make_full_result(imdb_credits_cast_list=[])
-        assert "—" in _build_body(result, cfg)
+        body = _build_markdown_body(_make_fields(result))
+        assert "—" in body
 
     def test_empty_director_list_shows_dash(self) -> None:
         """Body shows '—' for directors when director list is empty."""
-        cfg = Config()
         result = _make_full_result(imdb_credits_director_list=[])
-        assert "—" in _build_body(result, cfg)
+        body = _build_markdown_body(_make_fields(result))
+        assert "—" in body
 
     def test_none_cast_shows_dash(self) -> None:
         """Body shows '—' for actors when cast list is None (null-guard)."""
-        cfg = Config()
         result = _make_full_result()
         result["imdb_credits_cast_list"] = None
-        assert "—" in _build_body(result, cfg)
+        body = _build_markdown_body(_make_fields(result))
+        assert "—" in body
 
     def test_add_paused_true_shows_paused(self) -> None:
         """Queue status is 'Paused' when add_paused=True."""
         cfg = Config()
         cfg.torrent_client.qbittorrent.add_paused = True
-        assert "Paused" in _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result(), cfg)
+        assert "Paused" in _build_markdown_body(fields)
 
     def test_add_paused_false_shows_started(self) -> None:
         """Queue status is 'Started' when add_paused=False."""
         cfg = Config()
         cfg.torrent_client.qbittorrent.add_paused = False
-        assert "Started" in _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result(), cfg)
+        assert "Started" in _build_markdown_body(fields)
 
-    def test_imdb_url_built_from_id(self) -> None:
-        """Body contains an IMDb URL built from imdb_id."""
-        cfg = Config()
-        assert "tt1375666" in _build_body(_make_full_result(), cfg)
+    def test_imdb_url_in_links_section(self) -> None:
+        """Body contains IMDb URL in the Links section built from imdb_id."""
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
+        assert "tt1375666" in body
+        assert "[IMDb](https://imdb.com/title/tt1375666)" in body
 
-    def test_missing_imdb_id_and_index_details_uses_hash_fallback(self) -> None:
-        """Body uses '#' as href when both imdb_id and index_details are absent."""
-        cfg = Config()
+    def test_no_links_section_when_both_absent(self) -> None:
+        """Links section omitted when both imdb_id and index_details are absent."""
         result = _make_full_result()
         result.pop("imdb_id", None)
         result.pop("index_details", None)
-        body = _build_body(result, cfg)
-        assert "(<#>)" in body
+        body = _build_markdown_body(_make_fields(result))
+        assert "**Links:**" not in body
+        assert "(\u003c#\u003e)" not in body  # no hash fallback leak
 
-    def test_imdb_bare_url_present_when_id_set(self) -> None:
-        """Body contains a bare IMDb URL line when imdb_id is present."""
-        cfg = Config()
+    def test_imdb_url_in_links_when_id_set(self) -> None:
+        """Body contains IMDb URL in Links section when imdb_id is present."""
         result = _make_full_result(imdb_id="tt1375666")
-        body = _build_body(result, cfg)
-        assert "https://imdb.com/title/tt1375666" in body
+        body = _build_markdown_body(_make_fields(result))
+        assert "[IMDb](https://imdb.com/title/tt1375666)" in body
+        assert "**IMDb:**" not in body  # not as a bare URL line
 
-    def test_imdb_bare_url_absent_when_id_missing(self) -> None:
-        """Body omits the IMDb bare URL line when imdb_id is missing."""
-        cfg = Config()
+    def test_imdb_url_absent_when_id_missing(self) -> None:
+        """Body omits the IMDb URL line when imdb_id is missing."""
         result = _make_full_result()
         result.pop("imdb_id", None)
-        body = _build_body(result, cfg)
+        body = _build_markdown_body(_make_fields(result))
         assert "https://imdb.com/title/" not in body
 
     def test_poster_img_never_in_body(self) -> None:
@@ -182,17 +202,17 @@ class TestBuildBody:
         cfg = Config()
         cfg.notification.poster_embed_enabled = True
         result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
-        body = _build_body(result, cfg)
+        body = _build_markdown_body(_make_fields(result, cfg))
         assert '<img src="' not in body
 
     def test_body_uses_markdown_bold_labels(self) -> None:
         """Body uses **bold** Markdown syntax, not <strong> HTML tags."""
-        cfg = Config()
-        body = _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
         assert "<strong>" not in body
         assert "**Status:**" in body
         assert "**Score:**" in body
-        assert "**IMDb:**" in body
+        assert "**Links:**" in body
         assert "**Plot:**" in body
         assert "**Actors:**" in body
         assert "**Directors:**" in body
@@ -200,32 +220,42 @@ class TestBuildBody:
         assert "**Release:**" in body
         assert "**Size:**" in body
 
+    def test_body_has_no_bare_imdb_label(self) -> None:
+        """Body does NOT have a bare **IMDb:** line (IMDb goes into Links section)."""
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
+        assert "**IMDb:**" not in body
+
     def test_result_details_is_markdown_list(self) -> None:
         """Result details rendered as italic summary with bullet items."""
-        cfg = Config()
-        body = _build_body(_make_full_result(), cfg)
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
         assert "_1 items_" in body
         assert "- Quality: Rating: 8.8" in body
 
-    def test_imdb_link_is_bare_url(self) -> None:
-        """IMDb link is a bare URL (auto-linked by Markdown renderers)."""
-        cfg = Config()
-        body = _build_body(_make_full_result(imdb_id="tt1375666"), cfg)
-        assert "https://imdb.com/title/tt1375666" in body
-        # Should not be an HTML <a> tag
-        assert "<a href=" not in body
-
-    def test_release_link_is_markdown(self) -> None:
-        """Release title links to index details via Markdown [text](url) syntax."""
-        cfg = Config()
-        body = _build_body(
+    def test_release_is_plain_text_not_a_link(self) -> None:
+        """Release title is plain text (not a markdown link)."""
+        fields = _make_fields(
             _make_full_result(
                 index_title="Inception 2010 1080p BluRay",
                 index_details="http://example.com/details",
             ),
-            cfg,
         )
-        assert "[Inception 2010 1080p BluRay](<http://example.com/details>)" in body
+        body = _build_markdown_body(fields)
+        # Release title is plain text
+        assert "**Release:** Inception 2010 1080p BluRay" in body
+        # Torrent URL is NOT in the body (proxy URLs are not externally useful)
+        assert "(\u003chttp://example.com/details\u003e)" not in body
+        assert "[Inception 2010 1080p BluRay](" not in body
+
+    def test_links_section_is_single_imdb_link(self) -> None:
+        """Links section contains only the IMDb link (no torrent URL)."""
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
+        assert "**Links:**" in body
+        assert "[IMDb](https://imdb.com/title/tt1375666)" in body
+        assert " | " not in body
+        assert "[Inception" not in body  # no torrent link
 
 
 # _format_result_details
@@ -525,34 +555,90 @@ class TestSendIndexProxyAlertDelegates:
         assert result is True
 
 
-# _safe_url via _build_body — edge cases
+# _safe_url edge-cases — torrent URL intentionally excluded from links section
 
 
 class TestSafeUrlEdgeCases:
-    """_safe_url edge-cases exercised through _build_body."""
+    """_safe_url edge-cases (torrent URLs excluded from links by design)."""
 
-    def test_missing_index_details_uses_hash_href(self) -> None:
-        """When index_details is absent the Markdown link uses href='#'."""
+    def test_missing_index_details_does_not_affect_links(self) -> None:
+        """Missing index_details does not prevent IMDb link from appearing."""
         cfg = Config()
         result = _make_full_result()
         result.pop("index_details", None)
-        body = _build_body(result, cfg)
-        assert "(<#>)" in body
+        fields = _make_fields(result, cfg)
+        links = _build_links_section(fields, use_markdown=True)
+        assert "[IMDb]" in links
 
-    def test_non_http_scheme_uses_hash_href(self) -> None:
-        """A non-http/https scheme like ftp:// must produce href='#'."""
+    def test_non_http_scheme_does_not_affect_links(self) -> None:
+        """Non-http index_details does not prevent IMDb link."""
         cfg = Config()
         result = _make_full_result(index_details="ftp://tracker.example.com/")
-        body = _build_body(result, cfg)
-        assert "(<#>)" in body
+        fields = _make_fields(result, cfg)
+        links = _build_links_section(fields, use_markdown=True)
+        assert "[IMDb]" in links
 
-    def test_urlparse_exception_falls_back_to_hash(self, mocker: MockerFixture) -> None:
-        """When urlparse raises, _safe_url returns '#'."""
+    def test_urlparse_exception_does_not_affect_links(self, mocker: MockerFixture) -> None:
+        """urlparse exception does not prevent IMDb link."""
         mocker.patch("movarr.notifications.urllib.parse.urlparse", side_effect=Exception("parse error"))
         cfg = Config()
         result = _make_full_result(index_details="http://example.com/details")
-        body = _build_body(result, cfg)
-        assert "(<#>)" in body
+        fields = _make_fields(result, cfg)
+        links = _build_links_section(fields, use_markdown=True)
+        assert "[IMDb]" in links
+
+
+class TestEnsureNtfyMarkdown:
+    """Tests for _ensure_ntfy_markdown URL transformation."""
+
+    def test_ntfy_bare_appends_format_markdown(self) -> None:
+        """Bare ntfy:// URL gets ?format=markdown appended."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic")
+        assert result == "ntfy://topic?format=markdown"
+
+    def test_ntfys_bare_appends_format_markdown(self) -> None:
+        """Secure ntfys:// URL gets ?format=markdown appended."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfys://topic")
+        assert result == "ntfys://topic?format=markdown"
+
+    def test_ntfy_with_existing_params_appends_correctly(self) -> None:
+        """URL with existing query params uses & separator."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?priority=5")
+        assert result == "ntfy://topic?priority=5&format=markdown"
+
+    def test_ntfy_already_has_format_markdown(self) -> None:
+        """URL that already has format=markdown is left unchanged."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?format=markdown")
+        assert result == "ntfy://topic?format=markdown"
+
+    def test_ntfy_with_multiple_params_and_format(self) -> None:
+        """URL with format=markdown among other params is not modified."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("ntfy://topic?priority=5&format=markdown")
+        assert result == "ntfy://topic?priority=5&format=markdown"
+
+    def test_non_ntfy_url_is_unchanged(self) -> None:
+        """Non-ntfy URLs are returned verbatim."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("discord://webhook/token")
+        assert result == "discord://webhook/token"
+
+    def test_empty_url_returns_empty(self) -> None:
+        """Empty string returns empty string."""
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        result = _ensure_ntfy_markdown("")
+        assert result == ""
 
 
 class TestEnsureNtfyMarkdown:
@@ -613,41 +699,278 @@ class TestDispatchApprise:
 
     def test_returns_false_for_empty_urls(self) -> None:
         """Guard: empty URL list returns False without touching Apprise."""
-        assert _dispatch_apprise("subject", "body", []) is False
+        assert _dispatch_apprise("subject", [], body_markdown="body", body_text="body") is False
 
     def test_returns_false_for_empty_subject(self) -> None:
         """Guard: empty subject returns False without touching Apprise."""
-        assert _dispatch_apprise("", "body", ["apprise://test"]) is False
+        assert _dispatch_apprise("", ["apprise://test"], body_markdown="body", body_text="body") is False
 
-    def test_returns_false_for_empty_body(self) -> None:
-        """Guard: empty body returns False without touching Apprise."""
-        assert _dispatch_apprise("subject", "", ["apprise://test"]) is False
+    def test_returns_false_for_no_bodies(self) -> None:
+        """Guard: both bodies None returns False."""
+        assert _dispatch_apprise("subject", ["apprise://test"]) is False
 
-    def test_notify_uses_markdown_body_format(self) -> None:
-        """_dispatch_apprise sends with NotifyFormat.MARKDOWN by default."""
+    def test_markdown_urls_receive_markdown_body(self) -> None:
+        """Markdown-capable URLs receive MARKDOWN format."""
+        from apprise import NotifyFormat
+
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
-            _dispatch_apprise("subj", "body", ["ntfy://t"])
-        mock_ap.notify.assert_called_once()
-        _, kwargs = mock_ap.notify.call_args
+            _dispatch_apprise("subject", ["ntfy://t"], body_markdown="**bold**", body_text="plain")
+        mock_ap.notify.assert_called_once_with(
+            title="subject", body="**bold**", body_format=NotifyFormat.MARKDOWN
+        )
+
+    def test_text_urls_receive_text_body(self) -> None:
+        """Plain-text-only URLs receive TEXT format."""
         from apprise import NotifyFormat
 
-        assert kwargs["body_format"] == NotifyFormat.MARKDOWN
-
-    def test_notify_respects_explicit_body_format(self) -> None:
-        """_dispatch_apprise passes through an explicit body_format kwarg."""
         mock_ap = MagicMock()
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
-            from apprise import NotifyFormat
+            _dispatch_apprise("subject", ["json://localhost"], body_markdown="**bold**", body_text="plain")
+        mock_ap.notify.assert_called_once_with(
+            title="subject", body="plain", body_format=NotifyFormat.TEXT
+        )
 
-            _dispatch_apprise("subj", "body", ["ntfy://t"], body_format=NotifyFormat.TEXT)
-        mock_ap.notify.assert_called_once()
-        _, kwargs = mock_ap.notify.call_args
-        from apprise import NotifyFormat
+    def test_sends_to_both_groups_when_mixed(self) -> None:
+        """Mixed markdown+text URLs get two separate Apprise calls."""
+        mock_ap = MagicMock()
+        mock_ap.notify.return_value = True
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            _dispatch_apprise(
+                "subject",
+                ["ntfy://t", "json://localhost"],
+                body_markdown="**bold**",
+                body_text="plain",
+            )
+        assert mock_ap.notify.call_count == 2
 
-        assert kwargs["body_format"] == NotifyFormat.TEXT
+    def test_markdown_exception_caught(self) -> None:
+        """Exception from markdown Apprise is caught and does not propagate."""
+        mock_ap = MagicMock()
+        mock_ap.notify.side_effect = RuntimeError("md failed")
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            # Should not raise, and return False because nothing succeeded
+            result = _dispatch_apprise(
+                "subject",
+                ["ntfy://t"],
+                body_markdown="**bold**",
+            )
+        assert result is False
+
+    def test_text_exception_caught(self) -> None:
+        """Exception from text Apprise is caught and does not propagate."""
+        mock_ap = MagicMock()
+        mock_ap.notify.side_effect = RuntimeError("text failed")
+        with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
+            result = _dispatch_apprise(
+                "subject",
+                ["json://localhost"],
+                body_text="plain",
+            )
+        assert result is False
+
+    def test_markdown_raises_text_succeeds(self) -> None:
+        """When md raises but text succeeds, result is True."""
+        md_ap = MagicMock()
+        md_ap.notify.side_effect = RuntimeError("md failed")
+        text_ap = MagicMock()
+        text_ap.notify.return_value = True
+
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            url_args = kwargs.get("urls") or args[0] if args else None
+            if isinstance(url_args, list):
+                if any("ntfy" in str(u) for u in url_args):
+                    return md_ap
+            return text_ap
+
+        with patch("movarr.notifications.apprise.Apprise", side_effect=_side_effect):
+            result = _dispatch_apprise(
+                "subject",
+                ["ntfy://t", "json://localhost"],
+                body_markdown="**bold**",
+                body_text="plain",
+            )
+        assert result is True
+
+    def test_markdown_fails_text_succeeds(self) -> None:
+        """When md notify returns False but text succeeds, result is True."""
+        md_ap = MagicMock()
+        md_ap.notify.return_value = False
+        text_ap = MagicMock()
+        text_ap.notify.return_value = True
+
+        call_count = [0]
+
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return md_ap
+            return text_ap
+
+        with patch("movarr.notifications.apprise.Apprise", side_effect=_side_effect):
+            result = _dispatch_apprise(
+                "subject",
+                ["ntfy://t", "json://localhost"],
+                body_markdown="**bold**",
+                body_text="plain",
+            )
+        assert result is True
+
+
+class TestBuildLinksSection:
+    """Tests for the _build_links_section pure helper."""
+
+    def test_markdown_imdb_link(self) -> None:
+        """Markdown mode returns IMDb link in [label](url) syntax."""
+        result = _make_full_result(imdb_id="tt1375666")
+        fields = _make_fields(result)
+        assert _build_links_section(fields, use_markdown=True) == (
+            "**Links:** [IMDb](https://imdb.com/title/tt1375666)"
+        )
+
+    def test_text_imdb_link(self) -> None:
+        """Text mode returns bare IMDb URL."""
+        result = _make_full_result(imdb_id="tt1375666")
+        fields = _make_fields(result)
+        assert _build_links_section(fields, use_markdown=False) == (
+            "Links: https://imdb.com/title/tt1375666"
+        )
+
+    def test_missing_imdb_id_returns_empty(self) -> None:
+        """Empty string when no imdb_id."""
+        result = _make_full_result()
+        result.pop("imdb_id", None)
+        fields = _make_fields(result)
+        assert _build_links_section(fields, use_markdown=True) == ""
+        assert _build_links_section(fields, use_markdown=False) == ""
+
+    def test_torrent_url_not_in_links_section(self) -> None:
+        """Torrent/index details URL is NOT included in links section."""
+        result = _make_full_result(
+            imdb_id="tt1375666",
+            index_details="http://example.com/torrent"
+        )
+        fields = _make_fields(result)
+        result_str = _build_links_section(fields, use_markdown=True)
+        assert "example.com" not in result_str
+        assert "[IMDb]" in result_str
+        assert " | " not in result_str
+
+
+class TestBuildTextBody:
+    """Tests for the _build_text_body pure helper."""
+
+    def test_text_body_no_markdown_bold_labels(self) -> None:
+        """Text body uses plain labels, not **bold**."""
+        fields = _make_fields(_make_full_result())
+        body = _build_text_body(fields)
+        assert "**Status:**" not in body
+        assert "Status:" in body
+        assert "**Score:**" not in body
+        assert "Score:" in body
+
+    def test_text_body_links_as_bare_urls(self) -> None:
+        """Text body links are bare URLs, not markdown links."""
+        fields = _make_fields(_make_full_result())
+        body = _build_text_body(fields)
+        assert "[IMDb](" not in body
+        assert "https://imdb.com/title/" in body
+        assert "Links:" in body
+
+    def test_text_body_result_details_no_markdown(self) -> None:
+        """Text body result details have no markdown formatting."""
+        fields = _make_fields(_make_full_result())
+        body = _build_text_body(fields)
+        assert "_1 items_" not in body
+        assert "- Quality" in body or "1 items" in body
+        assert "**Result Details:**" not in body
+        assert "Result Details:" in body
+
+    def test_text_body_status_and_fields_present(self) -> None:
+        """All core fields are present in text body."""
+        cfg = Config()
+        cfg.torrent_client.qbittorrent.add_paused = True
+        fields = _make_fields(_make_full_result(), cfg)
+        body = _build_text_body(fields)
+        assert "Status: Paused" in body
+        assert "Score: 8.8" in body
+        assert "Leonardo DiCaprio" in body
+        assert "Christopher Nolan" in body
+
+
+class TestIsMarkdownService:
+    """Tests for the _is_markdown_service pure helper."""
+
+    def test_ntfy_is_markdown(self) -> None:
+        assert _is_markdown_service("ntfy://host/topic") is True
+
+    def test_ntfys_is_markdown(self) -> None:
+        assert _is_markdown_service("ntfys://host/topic") is True
+
+    def test_discord_is_markdown(self) -> None:
+        assert _is_markdown_service("discord://webhook_id/webhook_token") is True
+
+    def test_slack_is_markdown(self) -> None:
+        assert _is_markdown_service("slack://token/room") is True
+
+    def test_tgram_is_markdown(self) -> None:
+        assert _is_markdown_service("tgram://bot/chat") is True
+
+    def test_tg_is_markdown(self) -> None:
+        assert _is_markdown_service("tg://bot/chat") is True
+
+    def test_matrix_is_markdown(self) -> None:
+        assert _is_markdown_service("matrix://host/room") is True
+
+    def test_matrixs_is_markdown(self) -> None:
+        assert _is_markdown_service("matrixs://host/room") is True
+
+    def test_json_is_not_markdown(self) -> None:
+        assert _is_markdown_service("json://localhost") is False
+
+    def test_mailto_is_not_markdown(self) -> None:
+        assert _is_markdown_service("mailto://user:pass@gmail.com") is False
+
+    def test_malformed_url(self) -> None:
+        assert _is_markdown_service("not-a-url") is False
+
+    def test_non_string_input_returns_false(self) -> None:
+        """Non-string input (e.g. int) triggers the exception handler and returns False."""
+        assert _is_markdown_service(None) is False  # type: ignore[arg-type]
+        assert _is_markdown_service(123) is False  # type: ignore[arg-type]
+
+
+class TestFormatResultDetailsText:
+    """Tests for the _format_result_details_text pure helper."""
+
+    def test_all_passed(self) -> None:
+        details = ["Passed: a", "Passed: b", "Passed: c"]
+        result = _format_result_details_text(details)
+        assert "3 checks passed" in result
+        assert "  - Passed: a" in result
+
+    def test_mixed_pass_fail(self) -> None:
+        details = ["Passed: a", "Failed: b", "Passed: c"]
+        result = _format_result_details_text(details)
+        assert "2 passed, 1 failed" in result
+
+    def test_all_failed(self) -> None:
+        details = ["Failed: a", "Failed: b"]
+        result = _format_result_details_text(details)
+        assert "0 passed, 2 failed" in result
+
+    def test_empty_list(self) -> None:
+        result = _format_result_details_text([])
+        assert "0 checks" in result
+
+    def test_no_markdown_formatting(self) -> None:
+        """Output must not contain markdown formatting like _italic_ or - bullet."""
+        details = ["Passed: check 'byndr'"]
+        result = _format_result_details_text(details)
+        assert "_" not in result
+        # No leading dash bullet (uses two-space indent instead)
 
 
 class TestPosterUrlHelpers:

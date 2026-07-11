@@ -46,6 +46,12 @@ def _poster_url_with_width(url: str, width: int) -> str:
     return _AMAZON_POSTER_V1_RE.sub(f"._V1_SX{width}.", stripped)
 
 
+# Markdown-capable Apprise service schemes
+# These services can render **bold**, [links](url), and other Markdown formatting.
+# Services not in this set receive a plain-text body to avoid garbled output.
+_MARKDOWN_SCHEMES = frozenset({"ntfy", "ntfys", "discord", "slack", "tgram", "tg", "matrix", "matrixs"})
+
+
 if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
@@ -76,15 +82,22 @@ def send_service_alert(service_name: str, hours_elapsed: float, config: Config) 
     hours_str = f"{hours_elapsed:.1f}"
     subject = f"movarr: {service_name} has been unavailable for {hours_str}h \u2014 possible outage"
     safe_service = _escape_markdown_text(service_name)
-    body = (
+    body_md = (
         f"**movarr service health alert**\n\n"
         f"**Service:** {safe_service}\n"
         f"**Duration:** Unavailable for {hours_str} hours.\n\n"
         f"movarr will keep retrying every cycle. "
         f"Check that {safe_service} is running and accessible."
     )
+    body_text = (
+        f"movarr service health alert\n\n"
+        f"Service: {safe_service}\n"
+        f"Duration: Unavailable for {hours_str} hours.\n\n"
+        f"movarr will keep retrying every cycle. "
+        f"Check that {safe_service} is running and accessible."
+    )
 
-    if not _dispatch_apprise(subject, body, list(urls)):
+    if not _dispatch_apprise(subject, list(urls), body_markdown=body_md, body_text=body_text):
         return False
 
     logger.warning("Service alert sent: {}", subject)
@@ -123,38 +136,71 @@ def send_queued_notification(result: ResultDict, config: Config) -> bool:
         logger.debug("No apprise URLs configured; skipping notification.")
         return False
 
-    body = _build_body(result, config)
+    fields = _extract_body_fields(result, config)
+    body_md = _build_markdown_body(fields)
+    body_text = _build_text_body(fields)
     subject = _build_subject(result)
 
-    if not _dispatch_apprise(subject, body, list(urls)):
+    if not _dispatch_apprise(subject, list(urls), body_markdown=body_md, body_text=body_text):
         return False
 
     logger.info("Notification sent: {}", subject)
     return True
 
 
+def _is_markdown_service(url: str) -> bool:
+    """Return True if *url* uses a scheme that supports markdown formatting."""
+    try:
+        scheme = url.split("://", 1)[0].lower()
+    except (ValueError, AttributeError):
+        return False
+    return scheme in _MARKDOWN_SCHEMES
+
+
 def _dispatch_apprise(
     subject: str,
-    body: str,
     urls: list[str],
-    body_format: apprise.NotifyFormat = apprise.NotifyFormat.MARKDOWN,
+    *,
+    body_markdown: str | None = None,
+    body_text: str | None = None,
 ) -> bool:
-    """Send *subject*/*body* via Apprise to all *urls*.
+    """Send notification to markdown-capable and text-only targets separately.
+
+    URLs are split by scheme: markdown-capable services (ntfy, discord, etc.)
+    receive *body_markdown* with ``NotifyFormat.MARKDOWN``; all others receive
+    *body_text* with ``NotifyFormat.TEXT``.
 
     Returns True if at least one notification was sent successfully.
-    Returns False on empty URL list, empty subject/body, or any error.
     """
-    if not urls or not subject or not body:
+    if not urls or not subject:
         return False
-    ap = apprise.Apprise()
-    for url in urls:
-        ap.add(_ensure_ntfy_markdown(url))
-    try:
-        sent = ap.notify(title=subject, body=body, body_format=body_format)
-    except Exception:  # noqa: BLE001
-        logger.warning("Apprise notification failed.")
+    if not body_markdown and not body_text:
         return False
-    if not sent:
+
+    md_urls = [u for u in urls if _is_markdown_service(u)]
+    text_urls = [u for u in urls if not _is_markdown_service(u)]
+
+    total_sent = 0
+
+    if md_urls and body_markdown:
+        ap = apprise.Apprise()
+        for url in md_urls:
+            ap.add(_ensure_ntfy_markdown(url))
+        try:
+            total_sent += sum(1 for _ in [ap.notify(title=subject, body=body_markdown, body_format=apprise.NotifyFormat.MARKDOWN)] if _)
+        except Exception:  # noqa: BLE001
+            logger.warning("Apprise markdown notification failed.")
+
+    if text_urls and body_text:
+        ap = apprise.Apprise()
+        for url in text_urls:
+            ap.add(url)
+        try:
+            total_sent += sum(1 for _ in [ap.notify(title=subject, body=body_text, body_format=apprise.NotifyFormat.TEXT)] if _)
+        except Exception:  # noqa: BLE001
+            logger.warning("Apprise text notification failed.")
+
+    if total_sent == 0:
         logger.warning("Apprise notification was not sent (no valid targets or all failed).")
         return False
     return True
@@ -274,31 +320,84 @@ def _extract_body_fields(result: ResultDict, config: Config) -> dict[str, str]:
     fields.update(_extract_content_fields(result))
     fields.update(_extract_index_fields(result))
     fields["queue_status"] = _queue_status_str(config)
-    fields["result_details_md"] = _format_result_details(result.get("result_details") or [])
+    details = result.get("result_details") or []
+    fields["result_details_md"] = _format_result_details(details)
+    fields["result_details_text"] = _format_result_details_text(details)
     return fields
 
 
-def _build_body(result: ResultDict, config: Config) -> str:
-    """Build the Markdown notification body with collapsible result details."""
-    f = _extract_body_fields(result, config)
+def _build_links_section(f: dict[str, str], *, use_markdown: bool) -> str:
+    """Build the 'Links:' section for the notification body.
 
-    imdb_line = ""
-    if f["imdb_id"]:
-        imdb_line = f"**IMDb:** https://imdb.com/title/{f['imdb_id']}\n"
+    Returns an empty string when no IMDb link is available.
+    Torrent index URLs are intentionally excluded because Jackett/Prowlarr
+    proxy URLs (e.g. ``localhost:9696/api/...``) are not externally useful.
+    """
+    if not f.get("imdb_id"):
+        return ""
 
-    return (
-        f"**Status:** {f['queue_status']}\n"
-        f"**Score:** {f['rating']} from {f['votes']} users\n"
-        f"{imdb_line}"
-        f"**Plot:** {f['plot']}\n"
-        f"**Actors:** {f['actors_str']}\n"
-        f"**Directors:** {f['directors_str']}\n"
-        f"**Genres:** {f['genres_str']}\n"
-        f"**Release:** [{f['index_title']}](<{f['index_details']}>)\n"
-        f"**Size:** {f['index_size_mb']} MB\n\n"
-        f"**Result Details:**\n"
-        f"{f['result_details_md']}"
-    )
+    imdb_url = f"https://imdb.com/title/{f['imdb_id']}"
+    if use_markdown:
+        return f"**Links:** [IMDb]({imdb_url})"
+    return f"Links: {imdb_url}"
+
+
+def _build_markdown_body(f: dict[str, str]) -> str:
+    """Build the Markdown notification body with a Links section at the bottom.
+
+    Args:
+        f: Extracted body fields from :func:`_extract_body_fields`.
+    """
+    lines = [
+        f"**Status:** {f['queue_status']}",
+        f"**Score:** {f['rating']} from {f['votes']} users",
+        f"**Plot:** {f['plot']}",
+        f"**Actors:** {f['actors_str']}",
+        f"**Directors:** {f['directors_str']}",
+        f"**Genres:** {f['genres_str']}",
+        f"**Release:** {f['index_title']}",
+        f"**Size:** {f['index_size_mb']} MB",
+    ]
+
+    links = _build_links_section(f, use_markdown=True)
+    if links:
+        lines.append("")
+        lines.append(links)
+
+    lines.append("")
+    lines.append(f"**Result Details:**")
+    lines.append(f["result_details_md"])
+
+    return "\n".join(lines)
+
+
+def _build_text_body(f: dict[str, str]) -> str:
+    """Build the plain-text notification body (no Markdown formatting).
+
+    Args:
+        f: Extracted body fields from :func:`_extract_body_fields`.
+    """
+    lines = [
+        f"Status: {f['queue_status']}",
+        f"Score: {f['rating']} from {f['votes']} users",
+        f"Plot: {f['plot']}",
+        f"Actors: {f['actors_str']}",
+        f"Directors: {f['directors_str']}",
+        f"Genres: {f['genres_str']}",
+        f"Release: {f['index_title']}",
+        f"Size: {f['index_size_mb']} MB",
+    ]
+
+    links = _build_links_section(f, use_markdown=False)
+    if links:
+        lines.append("")
+        lines.append(links)
+
+    lines.append("")
+    lines.append("Result Details:")
+    lines.append(f["result_details_text"])
+
+    return "\n".join(lines)
 
 
 def _format_result_details(details: list[str]) -> str:
@@ -327,3 +426,25 @@ def _format_result_details(details: list[str]) -> str:
 
     items = "".join(f"- {_escape_markdown_text(item)}\n" for item in details)
     return f"_{count_str}_\n{items}"
+
+
+def _format_result_details_text(details: list[str]) -> str:
+    """Format pipeline result_details as plain text (no markdown)."""
+    passed = failed = 0
+    for d in details:
+        if d.startswith("Passed"):
+            passed += 1
+        elif d.startswith("Failed"):
+            failed += 1
+
+    if not details:
+        count_str = "0 checks"
+    elif passed + failed == 0:
+        count_str = f"{len(details)} items"
+    elif failed == 0:
+        count_str = f"{passed} checks passed"
+    else:
+        count_str = f"{passed} passed, {failed} failed"
+
+    items = "\n".join(f"  - {item}" for item in details)
+    return f"{count_str}\n{items}"
