@@ -13,6 +13,7 @@ from movarr.notifications import (
     _build_text_body,
     _dispatch_apprise,
     _extract_body_fields,
+    _format_detail_md,
     _format_result_details,
     _format_result_details_text,
     _is_markdown_service,
@@ -167,13 +168,6 @@ class TestBuildMarkdownBody:
         fields = _make_fields(_make_full_result(), cfg)
         assert "Started" in _build_markdown_body(fields)
 
-    def test_imdb_url_in_links_section(self) -> None:
-        """Body contains IMDb URL in the Links section built from imdb_id."""
-        fields = _make_fields(_make_full_result())
-        body = _build_markdown_body(fields)
-        assert "tt1375666" in body
-        assert "[IMDb](https://imdb.com/title/tt1375666)" in body
-
     def test_no_links_section_when_both_absent(self) -> None:
         """Links section omitted when both imdb_id and index_details are absent."""
         result = _make_full_result()
@@ -227,10 +221,10 @@ class TestBuildMarkdownBody:
         assert "**IMDb:**" not in body
 
     def test_result_details_is_markdown_list(self) -> None:
-        """Result details rendered as italic summary with bullet items."""
+        """Result details rendered as bold inline summary with bullet items."""
         fields = _make_fields(_make_full_result())
         body = _build_markdown_body(fields)
-        assert "_1 items_" in body
+        assert "**Result Details:** 1 items" in body
         assert "- Quality: Rating: 8.8" in body
 
     def test_release_is_plain_text_not_a_link(self) -> None:
@@ -265,15 +259,15 @@ class TestFormatResultDetails:
     """Tests for the _format_result_details pure helper."""
 
     def test_details_wraps_list_with_summary_and_pass_count(self) -> None:
-        """Output has italic summary line followed by bullet items."""
+        """Output has inline bold summary with bold status prefixes."""
         details = [
             "Passed: check alpha",
             "Passed: check beta",
             "Passed: check gamma",
         ]
         result = _format_result_details(details)
-        assert "_3 checks passed_" in result
-        assert "- Passed: check alpha" in result
+        assert "**Result Details:** 3 checks passed" in result
+        assert "- **Passed:** check alpha" in result
 
     def test_summary_counts_mixed_pass_fail(self) -> None:
         """Summary shows separate pass and fail counts."""
@@ -283,7 +277,7 @@ class TestFormatResultDetails:
             "Passed: check c",
         ]
         result = _format_result_details(details)
-        assert "_2 passed, 1 failed_" in result
+        assert "**Result Details:** 2 passed, 1 failed" in result
 
     def test_summary_all_failed(self) -> None:
         """Summary shows 0 passed when all checks failed."""
@@ -292,12 +286,12 @@ class TestFormatResultDetails:
             "Failed: check b",
         ]
         result = _format_result_details(details)
-        assert "_0 passed, 2 failed_" in result
+        assert "**Result Details:** 0 passed, 2 failed" in result
 
     def test_empty_list_shows_zero_checks(self) -> None:
-        """Empty list produces italic '0 checks' summary."""
+        """Empty list produces bold '0 checks' summary."""
         result = _format_result_details([])
-        assert "_0 checks_" in result
+        assert "**Result Details:** 0 checks" in result
 
     def test_no_html_entities_in_output(self) -> None:
         """HTML entities like &#x27; must NOT appear in Markdown output.
@@ -317,6 +311,15 @@ class TestFormatResultDetails:
         # The actual apostrophes must be present
         assert "'byndr'" in result
         assert "'Obsession 2025'" in result
+        # Items have bold status prefixes
+        assert "- **Passed:**" in result
+
+    def test_format_detail_md_no_colon_fallback(self) -> None:
+        """Items with Passed/Failed prefix but no colon fall back to full escaped text."""
+        assert "- Passed" in _format_detail_md("Passed")
+        assert "- Failed" in _format_detail_md("Failed")
+        assert "**" not in _format_detail_md("Passed")
+        assert "**" not in _format_detail_md("Failed")
 
 
 # send_queued_notification
@@ -717,9 +720,7 @@ class TestDispatchApprise:
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
             _dispatch_apprise("subject", ["ntfy://t"], body_markdown="**bold**", body_text="plain")
-        mock_ap.notify.assert_called_once_with(
-            title="subject", body="**bold**", body_format=NotifyFormat.MARKDOWN
-        )
+        mock_ap.notify.assert_called_once_with(title="subject", body="**bold**", body_format=NotifyFormat.MARKDOWN)
 
     def test_text_urls_receive_text_body(self) -> None:
         """Plain-text-only URLs receive TEXT format."""
@@ -729,9 +730,7 @@ class TestDispatchApprise:
         mock_ap.notify.return_value = True
         with patch("movarr.notifications.apprise.Apprise", return_value=mock_ap):
             _dispatch_apprise("subject", ["json://localhost"], body_markdown="**bold**", body_text="plain")
-        mock_ap.notify.assert_called_once_with(
-            title="subject", body="plain", body_format=NotifyFormat.TEXT
-        )
+        mock_ap.notify.assert_called_once_with(title="subject", body="plain", body_format=NotifyFormat.TEXT)
 
     def test_sends_to_both_groups_when_mixed(self) -> None:
         """Mixed markdown+text URLs get two separate Apprise calls."""
@@ -780,9 +779,8 @@ class TestDispatchApprise:
 
         def _side_effect(*args: object, **kwargs: object) -> MagicMock:
             url_args = kwargs.get("urls") or args[0] if args else None
-            if isinstance(url_args, list):
-                if any("ntfy" in str(u) for u in url_args):
-                    return md_ap
+            if isinstance(url_args, list) and any("ntfy" in str(u) for u in url_args):
+                return md_ap
             return text_ap
 
         with patch("movarr.notifications.apprise.Apprise", side_effect=_side_effect):
@@ -834,9 +832,7 @@ class TestBuildLinksSection:
         """Text mode returns bare IMDb URL."""
         result = _make_full_result(imdb_id="tt1375666")
         fields = _make_fields(result)
-        assert _build_links_section(fields, use_markdown=False) == (
-            "Links: https://imdb.com/title/tt1375666"
-        )
+        assert _build_links_section(fields, use_markdown=False) == ("Links: https://imdb.com/title/tt1375666")
 
     def test_missing_imdb_id_returns_empty(self) -> None:
         """Empty string when no imdb_id."""
@@ -848,10 +844,7 @@ class TestBuildLinksSection:
 
     def test_torrent_url_not_in_links_section(self) -> None:
         """Torrent/index details URL is NOT included in links section."""
-        result = _make_full_result(
-            imdb_id="tt1375666",
-            index_details="http://example.com/torrent"
-        )
+        result = _make_full_result(imdb_id="tt1375666", index_details="http://example.com/torrent")
         fields = _make_fields(result)
         result_str = _build_links_section(fields, use_markdown=True)
         assert "example.com" not in result_str
@@ -883,10 +876,9 @@ class TestBuildTextBody:
         """Text body result details have no markdown formatting."""
         fields = _make_fields(_make_full_result())
         body = _build_text_body(fields)
-        assert "_1 items_" not in body
-        assert "- Quality" in body or "1 items" in body
+        assert "Result Details: 1 items" in body
         assert "**Result Details:**" not in body
-        assert "Result Details:" in body
+        assert "**" not in body
 
     def test_text_body_status_and_fields_present(self) -> None:
         """All core fields are present in text body."""
@@ -948,22 +940,22 @@ class TestFormatResultDetailsText:
     def test_all_passed(self) -> None:
         details = ["Passed: a", "Passed: b", "Passed: c"]
         result = _format_result_details_text(details)
-        assert "3 checks passed" in result
+        assert "Result Details: 3 checks passed" in result
         assert "  - Passed: a" in result
 
     def test_mixed_pass_fail(self) -> None:
         details = ["Passed: a", "Failed: b", "Passed: c"]
         result = _format_result_details_text(details)
-        assert "2 passed, 1 failed" in result
+        assert "Result Details: 2 passed, 1 failed" in result
 
     def test_all_failed(self) -> None:
         details = ["Failed: a", "Failed: b"]
         result = _format_result_details_text(details)
-        assert "0 passed, 2 failed" in result
+        assert "Result Details: 0 passed, 2 failed" in result
 
     def test_empty_list(self) -> None:
         result = _format_result_details_text([])
-        assert "0 checks" in result
+        assert "Result Details: 0 checks" in result
 
     def test_no_markdown_formatting(self) -> None:
         """Output must not contain markdown formatting like _italic_ or - bullet."""
