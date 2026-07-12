@@ -214,6 +214,12 @@ class TestBuildMarkdownBody:
         assert "**Release:**" in body
         assert "**Size:**" in body
 
+    def test_body_has_no_bare_imdb_label(self) -> None:
+        """Body does NOT have a bare **IMDb:** line (IMDb goes into Links section)."""
+        fields = _make_fields(_make_full_result())
+        body = _build_markdown_body(fields)
+        assert "**IMDb:**" not in body
+
     def test_result_details_is_markdown_list(self) -> None:
         """Result details rendered as bold inline summary with bullet items."""
         fields = _make_fields(_make_full_result())
