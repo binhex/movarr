@@ -157,6 +157,30 @@ def _is_markdown_service(url: str) -> bool:
     return scheme in _MARKDOWN_SCHEMES
 
 
+def _send_apprise_group(
+    title: str,
+    urls: list[str],
+    body: str | None,
+    body_format: str,
+    *,
+    group_label: str = "",
+    ensure_ntfy_url: bool = False,
+) -> int:
+    """Send *body* to a group of *urls* and return 1 on success, else 0."""
+    body = body or ""
+    if not urls or not body:
+        return 0
+    ap = apprise.Apprise()
+    for url in urls:
+        ap.add(_ensure_ntfy_markdown(url) if ensure_ntfy_url else url)
+    try:
+        return 1 if ap.notify(title=title, body=body, body_format=body_format) else 0
+    except Exception:  # noqa: BLE001
+        label = f" ({group_label})" if group_label else ""
+        logger.warning(f"Apprise notification failed{label}.")
+        return 0
+
+
 def _dispatch_apprise(
     subject: str,
     urls: list[str],
@@ -172,35 +196,29 @@ def _dispatch_apprise(
 
     Returns True if at least one notification was sent successfully.
     """
-    if not urls or not subject:
+    if not urls:
+        return False
+    if not subject:
         return False
     if not body_markdown and not body_text:
         return False
 
-    md_urls = [u for u in urls if _is_markdown_service(u)]
-    text_urls = [u for u in urls if not _is_markdown_service(u)]
+    md_urls: list[str] = []
+    text_urls: list[str] = []
+    for u in urls:
+        if _is_markdown_service(u):
+            md_urls.append(u)
+        else:
+            text_urls.append(u)
 
-    total_sent = 0
+    total = _send_apprise_group(
+        subject, md_urls, body_markdown, apprise.NotifyFormat.MARKDOWN, group_label="markdown", ensure_ntfy_url=True
+    )
+    total += _send_apprise_group(
+        subject, text_urls, body_text, apprise.NotifyFormat.TEXT, group_label="text", ensure_ntfy_url=False
+    )
 
-    if md_urls and body_markdown:
-        ap = apprise.Apprise()
-        for url in md_urls:
-            ap.add(_ensure_ntfy_markdown(url))
-        try:
-            total_sent += sum(1 for _ in [ap.notify(title=subject, body=body_markdown, body_format=apprise.NotifyFormat.MARKDOWN)] if _)
-        except Exception:  # noqa: BLE001
-            logger.warning("Apprise markdown notification failed.")
-
-    if text_urls and body_text:
-        ap = apprise.Apprise()
-        for url in text_urls:
-            ap.add(url)
-        try:
-            total_sent += sum(1 for _ in [ap.notify(title=subject, body=body_text, body_format=apprise.NotifyFormat.TEXT)] if _)
-        except Exception:  # noqa: BLE001
-            logger.warning("Apprise text notification failed.")
-
-    if total_sent == 0:
+    if total == 0:
         logger.warning("Apprise notification was not sent (no valid targets or all failed).")
         return False
     return True
@@ -350,12 +368,19 @@ def _build_markdown_body(f: dict[str, str]) -> str:
     """
     lines = [
         f"**Status:** {f['queue_status']}",
+        "",
         f"**Score:** {f['rating']} from {f['votes']} users",
+        "",
         f"**Plot:** {f['plot']}",
+        "",
         f"**Actors:** {f['actors_str']}",
+        "",
         f"**Directors:** {f['directors_str']}",
+        "",
         f"**Genres:** {f['genres_str']}",
+        "",
         f"**Release:** {f['index_title']}",
+        "",
         f"**Size:** {f['index_size_mb']} MB",
     ]
 
@@ -365,7 +390,6 @@ def _build_markdown_body(f: dict[str, str]) -> str:
         lines.append(links)
 
     lines.append("")
-    lines.append(f"**Result Details:**")
     lines.append(f["result_details_md"])
 
     return "\n".join(lines)
@@ -379,12 +403,19 @@ def _build_text_body(f: dict[str, str]) -> str:
     """
     lines = [
         f"Status: {f['queue_status']}",
+        "",
         f"Score: {f['rating']} from {f['votes']} users",
+        "",
         f"Plot: {f['plot']}",
+        "",
         f"Actors: {f['actors_str']}",
+        "",
         f"Directors: {f['directors_str']}",
+        "",
         f"Genres: {f['genres_str']}",
+        "",
         f"Release: {f['index_title']}",
+        "",
         f"Size: {f['index_size_mb']} MB",
     ]
 
@@ -394,57 +425,60 @@ def _build_text_body(f: dict[str, str]) -> str:
         lines.append(links)
 
     lines.append("")
-    lines.append("Result Details:")
     lines.append(f["result_details_text"])
 
     return "\n".join(lines)
 
 
+def _count_result_pf(details: list[str]) -> tuple[int, int]:
+    """Return (passed, failed) counts from detail item prefixes."""
+    passed = sum(1 for d in details if d.startswith("Passed"))
+    failed = sum(1 for d in details if d.startswith("Failed"))
+    return passed, failed
+
+
+def _result_count_label(passed: int, failed: int, total: int) -> str:
+    """Build the pass/fail count label for result details."""
+    if not total:
+        return "0 checks"
+    if passed + failed == 0:
+        return f"{total} items"
+    if not failed:
+        return f"{passed} checks passed"
+    return f"{passed} passed, {failed} failed"
+
+
+def _format_detail_md(item: str) -> str:
+    """Format a single result detail item for Markdown output."""
+    if item.startswith("Passed"):
+        _, sep, rest = item.partition(": ")
+        if sep:
+            return f"- **Passed:** {_escape_markdown_text(rest)}"
+        return f"- {_escape_markdown_text(item)}"
+    if item.startswith("Failed"):
+        _, sep, rest = item.partition(": ")
+        if sep:
+            return f"- **Failed:** {_escape_markdown_text(rest)}"
+        return f"- {_escape_markdown_text(item)}"
+    return f"- {_escape_markdown_text(item)}"
+
+
 def _format_result_details(details: list[str]) -> str:
-    """Format pipeline result_details as a Markdown list with a summary prefix.
-
-    Renders a pass/fail count line in italics, followed by bullet points.
-    Works on ALL Apprise services — no HTML dependency.
-
-    Each entry is ``"Passed: msg"`` or ``"Failed: msg"``.
-    """
-    passed = failed = 0
-    for d in details:
-        if d.startswith("Passed"):
-            passed += 1
-        elif d.startswith("Failed"):
-            failed += 1
-
-    if not details:
-        count_str = "0 checks"
-    elif passed + failed == 0:
-        count_str = f"{len(details)} items"
-    elif failed == 0:
-        count_str = f"{passed} checks passed"
-    else:
-        count_str = f"{passed} passed, {failed} failed"
-
-    items = "".join(f"- {_escape_markdown_text(item)}\n" for item in details)
-    return f"_{count_str}_\n{items}"
+    """Format pipeline result_details as a Markdown list with bold label and inline count."""
+    passed, failed = _count_result_pf(details)
+    count_str = _result_count_label(passed, failed, len(details))
+    items_parts = [_format_detail_md(item) for item in details]
+    items = "\n".join(items_parts)
+    if items_parts:
+        items += "\n"
+    sep = "\n\n" if items_parts else ""
+    return f"**Result Details:** {count_str}{sep}{items}"
 
 
 def _format_result_details_text(details: list[str]) -> str:
     """Format pipeline result_details as plain text (no markdown)."""
-    passed = failed = 0
-    for d in details:
-        if d.startswith("Passed"):
-            passed += 1
-        elif d.startswith("Failed"):
-            failed += 1
-
-    if not details:
-        count_str = "0 checks"
-    elif passed + failed == 0:
-        count_str = f"{len(details)} items"
-    elif failed == 0:
-        count_str = f"{passed} checks passed"
-    else:
-        count_str = f"{passed} passed, {failed} failed"
-
+    passed, failed = _count_result_pf(details)
+    count_str = _result_count_label(passed, failed, len(details))
     items = "\n".join(f"  - {item}" for item in details)
-    return f"{count_str}\n{items}"
+    sep = "\n\n" if details else ""
+    return f"Result Details: {count_str}{sep}{items}"
