@@ -1220,3 +1220,286 @@ class TestProcessCriteriaIgnoreList:
         )
 
         assert count == 0
+
+
+# _supersede — in-queue quality supersession
+
+
+class TestSupersede:
+    """Tests for _supersede — in-queue quality supersession."""
+
+    @staticmethod
+    def _make_result(
+        imdb_id: str = "tt0133093",
+        title: str = "The Matrix 1999 2160p BluRay 4K HDR",
+    ) -> ResultDict:
+        from movarr.parsing import sanitise
+
+        san = sanitise(title) or title
+        return {
+            "imdb_id": imdb_id,
+            "index_title": title,
+            "index_title_sanitised": san,
+            "result": "Passed",
+            "result_details": [],
+        }
+
+    @staticmethod
+    def _make_torrent_map(
+        entries: list[tuple[str, str, str, int]],
+    ) -> dict[str, dict[str, str]]:
+        """Build a ``{hash: info}`` torrent map from entry tuples.
+
+        Each entry: ``(hash, name, imdb_id, quality_score)``
+        """
+        from movarr.qbittorrent import _build_supersede_tag
+
+        result: dict[str, dict[str, str]] = {}
+        for h, name, imdb, score in entries:
+            tag = _build_supersede_tag(imdb, score)
+            result[h] = {"name": name, "tags": tag, "hash": h}
+        return result
+
+    def _make_session(self, mocker: MockerFixture, torrent_map: dict | None = None) -> Any:
+        """Create a _SearchSession with mocked qbt and db."""
+        cfg = Config()
+        cfg.queue_management.supersede_enabled = True
+        qbt = mocker.MagicMock()
+        if torrent_map is not None:
+            qbt.list_by_category.return_value = torrent_map
+        else:
+            qbt.list_by_category.return_value = {}
+        db = mocker.MagicMock()
+        return _SearchSession(config=cfg, indexer=mocker.MagicMock(), qbt=qbt, db=db, library_walk=None)
+
+    def test_no_match_when_queue_empty(self, mocker: MockerFixture) -> None:
+        """When list_by_category returns empty dict, _supersede must be a no-op."""
+        from movarr.search import _supersede
+
+        result = self._make_result()
+        session = self._make_session(mocker, torrent_map={})
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        session.qbt.delete_torrent.assert_not_called()
+        session.db.mark_stalled.assert_not_called()
+
+    def test_no_match_when_different_imdb_id(self, mocker: MockerFixture) -> None:
+        """When queue torrent has different IMDb ID, no supersession occurs."""
+        from movarr.search import _supersede
+
+        result = self._make_result(imdb_id="tt0133093")
+        torrent_map = self._make_torrent_map(
+            [
+                ("hash1", "Inception 2010 1080p BluRay", "tt1375666", 70),
+            ]
+        )
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        session.qbt.delete_torrent.assert_not_called()
+
+    def test_no_match_with_old_format_tag(self, mocker: MockerFixture) -> None:
+        """Old-format tags (no imdb- segment) must not match."""
+        from movarr.search import _supersede
+
+        result = self._make_result(imdb_id="tt0133093")
+        # Old-format tag: no imdb- segment
+        qbt = mocker.MagicMock()
+        qbt.list_by_category.return_value = {
+            "hash1": {
+                "name": "The Matrix 1999 1080p BluRay",
+                "tags": "movarr-abc12345",
+                "hash": "hash1",
+            },
+        }
+        cfg = Config()
+        db = mocker.MagicMock()
+        session = _SearchSession(config=cfg, indexer=mocker.MagicMock(), qbt=qbt, db=db, library_walk=None)
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        qbt.delete_torrent.assert_not_called()
+
+    def test_supersedes_when_new_higher_score(self, mocker: MockerFixture) -> None:
+        """When new result has higher quality score, existing torrent is deleted after queue."""
+        from movarr.search import _delete_superseded_matches, _supersede
+
+        # New: 2160p 4K HDR (score 90+), existing: 1080p BluRay (score 70)
+        result = self._make_result(
+            imdb_id="tt0133093",
+            title="The Matrix 1999 2160p BluRay 4K HDR",
+        )
+        torrent_map = self._make_torrent_map(
+            [
+                ("hash1", "The Matrix 1999 1080p BluRay", "tt0133093", 70),
+            ]
+        )
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        to_delete = _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        assert len(to_delete) == 1
+
+        # Deletion happens AFTER queuing (simulated by calling here)
+        _delete_superseded_matches(session, to_delete, "tt0133093", result["index_title"])
+        session.qbt.delete_torrent.assert_called_once_with(
+            "hash1", delete_data=True, state="superseded", name="The Matrix 1999 1080p BluRay"
+        )
+        session.db.mark_stalled.assert_called_once()
+
+    def test_skips_new_when_existing_higher_score(self, mocker: MockerFixture) -> None:
+        """When existing has higher score, new result is marked Failed."""
+        from movarr.search import _supersede
+
+        # New: 1080p BluRay (score 70), existing: 2160p 4K HDR (score 90+)
+        result = self._make_result(
+            imdb_id="tt0133093",
+            title="The Matrix 1999 1080p BluRay",
+        )
+        torrent_map = self._make_torrent_map(
+            [
+                ("hash1", "The Matrix 1999 2160p BluRay 4K HDR", "tt0133093", 90),
+            ]
+        )
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        _supersede(result, session)
+
+        assert result["result"] == "Failed"
+        assert any("Superseded" in d for d in result.get("result_details", []))
+        session.qbt.delete_torrent.assert_not_called()
+
+    def test_graceful_when_qbt_raises(self, mocker: MockerFixture) -> None:
+        """When qbt.list_by_category raises, _supersede logs warning and returns."""
+        from movarr.search import _supersede
+
+        result = self._make_result()
+        qbt = mocker.MagicMock()
+        qbt.list_by_category.side_effect = Exception("Connection refused")
+        cfg = Config()
+        cfg.queue_management.supersede_enabled = True
+        db = mocker.MagicMock()
+        session = _SearchSession(config=cfg, indexer=mocker.MagicMock(), qbt=qbt, db=db, library_walk=None)
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"  # unchanged
+        qbt.delete_torrent.assert_not_called()
+        db.mark_stalled.assert_not_called()
+
+    def test_noop_when_no_imdb_id(self, mocker: MockerFixture) -> None:
+        """When result has no imdb_id, _supersede returns immediately."""
+        from movarr.search import _supersede
+
+        result = self._make_result(imdb_id="")
+        session = self._make_session(mocker, torrent_map={"hash1": {"name": "x", "tags": ""}})
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        session.qbt.list_by_category.assert_not_called()
+
+    def test_multiple_inferiors_all_deleted(self, mocker: MockerFixture) -> None:
+        """When multiple same-IMDb torrents all have lower scores, all are deleted after queue."""
+        from movarr.search import _delete_superseded_matches, _supersede
+
+        # New: 2160p (score 90+)
+        result = self._make_result(
+            imdb_id="tt0133093",
+            title="The Matrix 1999 2160p BluRay 4K HDR",
+        )
+        torrent_map = self._make_torrent_map(
+            [
+                ("hash1", "The Matrix 1999 1080p BluRay", "tt0133093", 70),
+                ("hash2", "The Matrix 1999 720p BluRay", "tt0133093", 60),
+                ("hash3", "The Matrix 1999 1080p WEB-DL", "tt0133093", 60),
+            ]
+        )
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        to_delete = _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        assert len(to_delete) == 3
+
+        _delete_superseded_matches(session, to_delete, "tt0133093", result["index_title"])
+        assert session.qbt.delete_torrent.call_count == 3
+        assert session.db.mark_stalled.call_count == 3
+
+    def test_mixed_superior_inferior_new_blocked(self, mocker: MockerFixture) -> None:
+        """When some existing have higher and some lower scores, new is blocked, nothing deleted."""
+        from movarr.search import _supersede
+
+        # New: 1080p BluRay (score 70)
+        result = self._make_result(
+            imdb_id="tt0133093",
+            title="The Matrix 1999 1080p BluRay",
+        )
+        # One existing is 2160p (score 90), the other is 720p (score 60)
+        torrent_map = self._make_torrent_map(
+            [
+                ("hash1", "The Matrix 1999 2160p BluRay 4K HDR", "tt0133093", 90),
+                ("hash2", "The Matrix 1999 720p BluRay", "tt0133093", 60),
+            ]
+        )
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        _supersede(result, session)
+
+        assert result["result"] == "Failed"
+        assert any("Superseded" in d for d in result.get("result_details", []))
+        session.qbt.delete_torrent.assert_not_called()
+
+    def test_noop_when_supersede_disabled_in_config(self, mocker: MockerFixture) -> None:
+        """When config.supersede_enabled is False, _supersede returns without any action."""
+        from movarr.search import _supersede
+
+        session = self._make_session(mocker)
+        session.config.queue_management.supersede_enabled = False
+        torrent_map = self._make_torrent_map([("hash1", "The Matrix 1999 1080p BluRay", "tt0133093", 60)])
+        session.qbt.list_by_category.return_value = torrent_map
+        result = self._make_result()
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        session.qbt.delete_torrent.assert_not_called()
+
+    def test_skips_match_with_empty_torrent_name(self, mocker: MockerFixture) -> None:
+        """Matching IMDb torrent with empty name is skipped (cannot sanitise)."""
+        from movarr.search import _supersede
+
+        session = self._make_session(mocker)
+        session.qbt.list_by_category.return_value = {
+            "hash1": {"name": "", "tags": "movarr-deadbeef-imdb-tt0133093-score-60"}
+        }
+        result = self._make_result()
+
+        _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        session.qbt.delete_torrent.assert_not_called()
+
+    def test_mark_stalled_exception_handled_gracefully(self, mocker: MockerFixture) -> None:
+        """When mark_stalled raises during deletion, remaining deletions still proceed."""
+        from movarr.search import _delete_superseded_matches, _supersede
+
+        session = self._make_session(mocker)
+        torrent_map = self._make_torrent_map([("hash1", "The Matrix 1999 1080p WebDL", "tt0133093", 60)])
+        session.qbt.list_by_category.return_value = torrent_map
+        session.db.mark_stalled.side_effect = RuntimeError("db down")
+        result = self._make_result()
+
+        to_delete = _supersede(result, session)
+
+        assert result["result"] == "Passed"
+        assert len(to_delete) == 1
+
+        _delete_superseded_matches(session, to_delete, "tt0133093", result["index_title"])
+        session.qbt.delete_torrent.assert_called_once()

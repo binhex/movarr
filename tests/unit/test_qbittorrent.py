@@ -9,7 +9,7 @@ import pytest
 import qbittorrentapi
 
 from movarr.config import Config
-from movarr.qbittorrent import QBittorrentClient
+from movarr.qbittorrent import QBittorrentClient, _build_supersede_tag, _parse_imdb_id_from_tags, _parse_score_from_tags
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -82,8 +82,11 @@ class TestAddTorrent:
     def test_adds_magnet_url_and_sets_tag(self, mocker: MockerFixture) -> None:
         """Adds torrent via magnet_url and stamps result with a movarr- tag."""
         client, mock_api = _make_client(mocker)
+        mock_quality = mocker.patch("movarr.parsing.quality_score", return_value=55)
         result: ResultDict = {
             "index_title": "Test Movie",
+            "imdb_id": "tt1234567",
+            "index_title_sanitised": "Test Movie 2024 1080p WEB-DL",
             "magnet_url": "magnet:?xt=urn:btih:abc123",
             "torrent_url": "",
         }
@@ -91,7 +94,10 @@ class TestAddTorrent:
 
         assert updated is not None
         assert "torrent_tag" in updated
-        assert updated["torrent_tag"].startswith("movarr-")
+        tag = updated["torrent_tag"]
+        assert tag.startswith("movarr-")
+        assert "-imdb-tt1234567-score-55" in tag
+        mock_quality.assert_called_once()
         mock_api.torrents_add.assert_called_once()
         mock_api.torrents_reannounce.assert_called_once()
 
@@ -129,7 +135,7 @@ class TestAddTorrent:
         assert client.add_torrent(result) is None
 
     def test_tag_matches_uuid_format(self, mocker: MockerFixture) -> None:
-        """The generated tag follows 'movarr-<uuid>' pattern."""
+        """The generated tag follows 'movarr-<8hex>' pattern when no imdb_id."""
         import re
 
         client, _ = _make_client(mocker)
@@ -138,7 +144,7 @@ class TestAddTorrent:
 
         assert updated is not None
         tag = updated["torrent_tag"]
-        assert re.match(r"^movarr-[0-9a-f-]{36}$", tag)
+        assert re.match(r"^movarr-[0-9a-f]{8}$", tag)
 
 
 # list_completed
@@ -535,3 +541,102 @@ class TestAddTorrentReannounce:
         assert updated is not None
         mock_warning.assert_called()
         assert any("Reannounce" in str(call) for call in mock_warning.call_args_list)
+
+
+# _build_supersede_tag
+
+
+class TestBuildSupersedeTag:
+    """Tests for _build_supersede_tag — structured movarr torrent tag builder."""
+
+    def test_builds_tag_with_imdb_id_and_score(self) -> None:
+        """Tag contains movarr prefix, 8-char hex, imdb id, and score."""
+        tag = _build_supersede_tag("tt1234567", 45)
+        assert tag.startswith("movarr-")
+        assert "-imdb-tt1234567-score-45" in tag
+
+    def test_tag_format(self) -> None:
+        """Tag matches the expected structured format."""
+        import re
+
+        tag = _build_supersede_tag("tt0000001", 10)
+        assert re.match(r"^movarr-[0-9a-f]{8}-imdb-tt\d+-score-\d+$", tag)
+
+    def test_uuid_part_is_8_hex_chars(self) -> None:
+        """The UUID segment is exactly 8 lowercase hex characters."""
+        tag = _build_supersede_tag("tt9999999", 99)
+        parts = tag.split("-")
+        assert len(parts[1]) == 8
+        int(parts[1], 16)  # raises ValueError if not hex
+
+    def test_different_inputs_produce_different_tags(self) -> None:
+        """Different imdb_id/score combos produce different tags."""
+        tag1 = _build_supersede_tag("tt1234567", 45)
+        tag2 = _build_supersede_tag("tt7654321", 30)
+        assert tag1 != tag2
+
+
+# _parse_imdb_id_from_tags
+
+
+class TestParseImdbIdFromTags:
+    """Tests for _parse_imdb_id_from_tags — IMDb ID extraction from tag strings."""
+
+    def test_returns_imdb_id_when_present(self) -> None:
+        """Extracts tt-id from a complete movarr tag."""
+        assert _parse_imdb_id_from_tags("movarr-abc123-imdb-tt1234567-score-45") == "tt1234567"
+
+    def test_returns_imdb_id_from_comma_separated_tags(self) -> None:
+        """Finds imdb segment even when tag is part of a comma-separated list."""
+        assert _parse_imdb_id_from_tags("tag1, movarr-abc123-imdb-tt1234567-score-45, tag2") == "tt1234567"
+
+    def test_returns_none_when_no_imdb_segment(self) -> None:
+        """Returns None when tag lacks the imdb-ttN segment."""
+        assert _parse_imdb_id_from_tags("movarr-abc123-score-45") is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None for empty input."""
+        assert _parse_imdb_id_from_tags("") is None
+
+    def test_returns_none_for_unrelated_tags(self) -> None:
+        """Returns None when no movarr tag is present."""
+        assert _parse_imdb_id_from_tags("some-random-tag") is None
+
+    def test_handles_8_digit_imdb_id(self) -> None:
+        """Supports 8-digit IMDb IDs (tt12345678)."""
+        assert _parse_imdb_id_from_tags("movarr-abc123-imdb-tt12345678-score-45") == "tt12345678"
+
+
+# _parse_score_from_tags
+
+
+class TestParseScoreFromTags:
+    """Tests for _parse_score_from_tags — score extraction from tag strings."""
+
+    def test_returns_score_when_present(self) -> None:
+        """Extracts score integer from a complete movarr tag."""
+        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-45") == 45
+
+    def test_returns_score_from_comma_separated_tags(self) -> None:
+        """Finds score segment even when tag is part of a comma-separated list."""
+        assert _parse_score_from_tags("tag1, movarr-abc123-imdb-tt1234567-score-45, tag2") == 45
+
+    def test_returns_none_when_no_score_segment(self) -> None:
+        """Returns None when tag lacks the score-NNN segment."""
+        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567") is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None for empty input."""
+        assert _parse_score_from_tags("") is None
+
+    def test_returns_none_for_unrelated_tags(self) -> None:
+        """Returns None when no movarr tag is present."""
+        assert _parse_score_from_tags("some-random-tag") is None
+
+    def test_parses_multidigit_score(self) -> None:
+        """Handles multi-digit scores correctly."""
+        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-130") == 130
+
+    def test_parses_zero_score(self) -> None:
+        """Handles score of zero."""
+        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-0") == 0

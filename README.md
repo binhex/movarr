@@ -246,6 +246,7 @@ Each entry in `search`:
 | `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `true` |
 | `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
 | `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
+| `supersede_enabled` | When a higher-quality torrent for the same IMDb ID is queued, cancel the inferior download and delete its partial data. Requires the IMDb ID in the qBittorrent tag (automatic with v2.22.0+). | `false` |
 
 ### `post_process`
 

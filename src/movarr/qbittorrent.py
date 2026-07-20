@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,52 @@ def extract_movarr_tag(tags_str: str) -> str:
         (t.strip() for t in tags_str.split(",") if t.strip().startswith(_TAG_PREFIX)),
         "",
     )
+
+
+def _build_supersede_tag(imdb_id: str, score: int) -> str:
+    """Build a movarr torrent tag encoding IMDb ID and base quality score.
+
+    Format: ``movarr-<8hex>-imdb-<ttid>-score-<score>``
+
+    Args:
+        imdb_id: IMDb ID (e.g. ``"tt1234567"``).
+        score: Base quality score from :func:`movarr.parsing.quality_score`.
+
+    Returns:
+        A structured tag string.
+    """
+    short_uuid = uuid.uuid4().hex[:8]
+    return f"movarr-{short_uuid}-imdb-{imdb_id}-score-{score}"
+
+
+def _parse_imdb_id_from_tags(tags_str: str) -> str | None:
+    """Extract an IMDb ID from a movarr torrent tag.
+
+    Looks for ``imdb-ttNNNNNNN`` segment. Returns ``None`` if not found.
+
+    Args:
+        tags_str: Comma-separated tag string from qBittorrent.
+
+    Returns:
+        The IMDb ID string (e.g. ``"tt1234567"``) or ``None``.
+    """
+    m = re.search(r"imdb-(tt\d{7,8})", tags_str)
+    return m.group(1) if m else None
+
+
+def _parse_score_from_tags(tags_str: str) -> int | None:
+    """Extract the base quality score from a movarr torrent tag.
+
+    Looks for ``score-NNN`` segment. Returns ``None`` if not found.
+
+    Args:
+        tags_str: Comma-separated tag string from qBittorrent.
+
+    Returns:
+        The integer score or ``None``.
+    """
+    m = re.search(r"score-(\d+)", tags_str)
+    return int(m.group(1)) if m else None
 
 
 class QBittorrentError(Exception):
@@ -82,6 +129,30 @@ class QBittorrentClient:
     # Adding torrents
     # ------------------------------------------------------------------
 
+    def _reannounce_by_tag(self, tag: str, index_title: str) -> None:
+        """Reannounce the torrent identified by *tag*, logging on failure."""
+        try:
+            infos = self._client.torrents_info(tag=tag)
+            new_hash = str(infos[0].hash) if infos else None
+            if new_hash:
+                self._client.torrents_reannounce(torrent_hashes=new_hash)
+            else:
+                _logger.debug("Could not find new torrent by tag '{}' for reannounce.", tag)
+        except qbittorrentapi.APIError as exc:
+            _logger.warning("Reannounce failed for '{}': {}; continuing.", index_title, exc)
+
+    @staticmethod
+    def _build_tag_from_result(result: ResultDict) -> str:
+        """Build a movarr tag from an acquisition pipeline result dict."""
+        from movarr.parsing import quality_score
+
+        imdb_id = result.get("imdb_id") or ""
+        if imdb_id:
+            sanitised = result.get("index_title_sanitised") or ""
+            score = quality_score(sanitised) if sanitised else 0
+            return _build_supersede_tag(imdb_id, score)
+        return f"{_TAG_PREFIX}{uuid.uuid4().hex[:8]}"
+
     def add_torrent(self, result: ResultDict) -> ResultDict | None:
         """Add a torrent to qBittorrent and tag it with a unique identifier.
 
@@ -99,7 +170,7 @@ class QBittorrentClient:
             )
             return None
 
-        tag = f"{_TAG_PREFIX}{uuid.uuid4()}"
+        tag = self._build_tag_from_result(result)
         try:
             self._client.torrents_add(
                 urls=download_url,
@@ -120,15 +191,7 @@ class QBittorrentClient:
 
         # Reannounce only the newly added torrent rather than every active
         # torrent in qBittorrent to avoid violating tracker re-announce intervals.
-        try:
-            infos = self._client.torrents_info(tag=tag)
-            new_hash = str(infos[0].hash) if infos else None
-            if new_hash:
-                self._client.torrents_reannounce(torrent_hashes=new_hash)
-            else:
-                _logger.debug("Could not find new torrent by tag '{}' for reannounce.", tag)
-        except qbittorrentapi.APIError as exc:
-            _logger.warning("Reannounce failed for '{}': {}; continuing.", result.get("index_title"), exc)
+        self._reannounce_by_tag(tag, result.get("index_title") or "")
 
         result["torrent_tag"] = tag
         return result
