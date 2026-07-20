@@ -81,6 +81,16 @@ class TestQueueManagementConfig:
         assert cfg.stalled_delete_torrent_data is True
         assert cfg.metadata_delete_torrent_data is True
 
+    def test_supersede_enabled_defaults_to_false(self) -> None:
+        """supersede_enabled defaults to False when not specified."""
+        cfg = QueueManagementConfig()
+        assert cfg.supersede_enabled is False
+
+    def test_supersede_enabled_is_bool(self) -> None:
+        """supersede_enabled must be a boolean."""
+        cfg = QueueManagementConfig()
+        assert isinstance(cfg.supersede_enabled, bool)
+
 
 # Config construction
 
@@ -161,7 +171,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -186,14 +196,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -204,7 +214,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -215,7 +225,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -226,7 +236,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -242,7 +252,7 @@ class TestConfigMigration:
             assert schedule.get(task, {}).get("run_on_start") is True
 
     def test_v220_to_v221_adds_poster_fields(self, tmp_path: Path) -> None:
-        """Migration to v2.21.0 adds poster_embed and poster_art defaults."""
+        """Migration to v2.22.0 adds poster_embed and poster_art defaults."""
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text(
             "general:\n"
@@ -257,6 +267,14 @@ class TestConfigMigration:
         assert cfg.notification.poster_embed_width == 500
         assert cfg.post_process.poster_art.filename == ""
         assert cfg.post_process.poster_art.download_width == 0
+
+    def test_v221_to_v222_adds_supersede_enabled(self, tmp_path: Path) -> None:
+        """Migration to v2.22.0 adds queue_management.supersede_enabled: false."""
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.21.0'\n")
+        cfg = load_config(cfg_file)
+        assert cfg.general.config_version == "2.22.0"
+        assert cfg.queue_management.supersede_enabled is False
 
 
 # DatabaseConfig defaults
@@ -404,7 +422,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -443,7 +461,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -463,7 +481,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -478,7 +496,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -496,7 +514,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -508,7 +526,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.21.0"
+        assert cfg.general.config_version == "2.22.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -910,12 +928,12 @@ class TestMigrationV216ToV217:
         )
         config = load_config(p)
         # Runtime version bumped
-        assert config.general.config_version == "2.21.0"
+        assert config.general.config_version == "2.22.0"
         # hook_timeout_mins added
         assert config.post_process.hooks.hook_timeout_mins == 5.0
         # Migration persisted to disk
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["general"]["config_version"] == "2.21.0"
+        assert on_disk["general"]["config_version"] == "2.22.0"
         assert on_disk["post_process"]["hooks"].get("hook_timeout_mins") == 5.0
 
 
@@ -1102,7 +1120,7 @@ class TestLoadConfigDirectoryPath:
         config = load_config(str(config_dir))
         assert isinstance(config, Config)
         assert (config_dir / "movarr.yml").exists()
-        assert config.general.config_version == "2.21.0"
+        assert config.general.config_version == "2.22.0"
         assert config.general.log_path == "logs"
         assert config.general.db_path == "db"
         assert config.general.pid_path == "pids"
@@ -1271,7 +1289,7 @@ class TestGeneralNull:
         p.write_text("general:\n")
         config = load_config(p)
         assert isinstance(config, Config)
-        assert config.general.config_version == "2.21.0"
+        assert config.general.config_version == "2.22.0"
 
 
 class TestMigrationV216ToV217Isolated:

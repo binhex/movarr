@@ -170,15 +170,28 @@ def _send_apprise_group(
     body = body or ""
     if not urls or not body:
         return 0
+    return _try_apprise_notify(title, urls, body, body_format, ensure_ntfy_url, group_label)
+
+
+def _try_apprise_notify(
+    title: str,
+    urls: list[str],
+    body: str,
+    body_format: str,
+    ensure_ntfy_url: bool,
+    group_label: str,
+) -> int:
+    """Build an Apprise instance and attempt notification; return 1 or 0."""
     ap = apprise.Apprise()
     for url in urls:
         ap.add(_ensure_ntfy_markdown(url) if ensure_ntfy_url else url)
     try:
-        return 1 if ap.notify(title=title, body=body, body_format=body_format) else 0
+        if ap.notify(title=title, body=body, body_format=body_format):
+            return 1
     except Exception:  # noqa: BLE001
         label = f" ({group_label})" if group_label else ""
-        logger.warning(f"Apprise notification failed{label}.")
-        return 0
+        logger.warning("Apprise notification failed{}.", label)
+    return 0
 
 
 def _dispatch_apprise(

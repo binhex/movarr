@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.21.0"
+_CONFIG_VERSION = "2.22.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 # Hardcoded filenames constructed from directory paths at runtime.
@@ -138,6 +138,13 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
             (("notification", "poster_embed_enabled"), True),
             (("notification", "poster_embed_width"), 500),
             (("post_process", "poster_art"), {"filename": "", "download_width": 0}),
+        ],
+    ),
+    (
+        "2.21.0",
+        "2.22.0",
+        [
+            (("queue_management", "supersede_enabled"), False),
         ],
     ),
 ]
@@ -369,6 +376,7 @@ _migrate_v214_to_v215 = _table_fns["2.14.0"]
 _migrate_v216_to_v217 = _table_fns["2.16.0"]
 _migrate_v219_to_v220 = _table_fns["2.19.0"]
 _migrate_v220_to_v221 = _table_fns["2.20.0"]
+_migrate_v221_to_v222 = _table_fns["2.21.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -394,6 +402,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.18.0": _migrate_v218_to_v219,
     "2.19.0": _migrate_v219_to_v220,
     "2.20.0": _migrate_v220_to_v221,
+    "2.21.0": _migrate_v221_to_v222,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -638,6 +647,7 @@ class QueueManagementConfig(BaseModel):
     metadata_delete_torrent_data: bool = True
     stalled_delete_torrent_max_mins: int = 120
     metadata_delete_torrent_max_mins: int = 30
+    supersede_enabled: bool = False
 
 
 class CopyLibraryRuleConfig(BaseModel):

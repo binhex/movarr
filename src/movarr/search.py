@@ -14,7 +14,7 @@ For each configured search criteria tier:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -34,6 +34,7 @@ from movarr.parsing import (
     normalise_for_compare,
     sanitise,
 )
+from movarr.qbittorrent import extract_movarr_tag
 
 if TYPE_CHECKING:
     from movarr.config import Config, IndexSiteConfig, SearchCriteriaConfig
@@ -127,6 +128,199 @@ def _validate_metadata_present(result: ResultDict) -> bool:
     return True
 
 
+def _collect_supersede_matches(
+    torrent_map: dict[str, Any],
+    new_imdb_id: str,
+    new_san: str,
+    config: Config,
+) -> tuple[list[tuple[str, str, str]], bool, str]:
+    """Scan torrent_map for same-IMDb-ID entries and return matches.
+
+    Returns:
+        (matches, all_new_wins, best_existing_name) where *matches* is
+        ``[(hash, name, tags_str), ...]``, *all_new_wins* is ``True``
+        if new beats every existing torrent, and *best_existing_name*
+        is the name of the highest-scored existing torrent.
+    """
+    from movarr.filters import supersession_quality_score
+    from movarr.qbittorrent import _parse_imdb_id_from_tags
+
+    matches: list[tuple[str, str, str]] = []
+    all_new_wins = True
+    best_existing_name = ""
+    best_existing_score = -1
+
+    for torrent_hash, info in torrent_map.items():
+        tags_str = info.get("tags", "") or ""
+        existing_imdb = _parse_imdb_id_from_tags(tags_str)
+        if existing_imdb != new_imdb_id:
+            continue
+
+        torrent_name = info.get("name", "")
+        existing_san = sanitise(torrent_name) if torrent_name else ""
+        if not existing_san:
+            continue
+
+        new_score = supersession_quality_score(new_san, existing_san, config)
+        existing_score = supersession_quality_score(existing_san, new_san, config)
+
+        matches.append((torrent_hash, torrent_name, tags_str))
+
+        if new_score <= existing_score:
+            all_new_wins = False
+
+        if existing_score > best_existing_score:
+            best_existing_score = existing_score
+            best_existing_name = torrent_name
+
+    return matches, all_new_wins, best_existing_name
+
+
+def _apply_supersede_decision(
+    result: ResultDict,
+    session: _SearchSession,
+    all_new_wins: bool,
+    best_existing_name: str,
+) -> None:
+    """Mark *result* as Failed if new does not beat all existing matches.
+
+    This function does NOT delete any torrents — it only marks the
+    new result as Failed when superseded.  Deletion happens in
+    ``_process_result_body`` only after the new torrent is successfully
+    queued, preventing data loss if ``add_torrent`` fails.
+    """
+    if not all_new_wins:
+        logger.info(
+            "Skipping '{}' \u2014 in-queue torrent '{}' has equal or better score.",
+            result.get("index_title"),
+            best_existing_name,
+        )
+        details: list[str] = result.get("result_details") or []
+        details.append(f"Failed: Superseded by higher-scored in-queue torrent '{best_existing_name}'.")
+        result["result"] = "Failed"
+        result["result_details"] = details
+        session.db.write(result)
+
+
+def _delete_superseded_matches(
+    session: _SearchSession,
+    matches: list[tuple[str, str, str]],
+    new_imdb_id: str,
+    new_title: str,
+) -> None:
+    """Delete all existing same-IMDb torrents (called AFTER new torrent is queued)."""
+    logger.info(
+        "Superseding {} in-queue torrent(s) for IMDb '{}' with '{}'.",
+        len(matches),
+        new_imdb_id,
+        new_title,
+    )
+    for torrent_hash, torrent_name, tags_str in matches:
+        movarr_tag = extract_movarr_tag(tags_str)
+        if movarr_tag:
+            try:
+                session.db.mark_stalled(movarr_tag)
+            except Exception:
+                logger.debug("Could not mark superseded torrent tag '{}' in DB.", movarr_tag)
+        session.qbt.delete_torrent(torrent_hash, delete_data=True, state="superseded", name=torrent_name)
+
+
+def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, str, str]]:
+    """Check for same-IMDb torrents and block new or return matches to delete.
+
+    Returns a list of ``(hash, name, tags_str)`` tuples for same-IMDb
+    torrents that should be deleted AFTER the new torrent is successfully
+    queued.  Returns an empty list if there is nothing to delete or the
+    new result is superseded.
+
+    Marks *result* as Failed (via ``_apply_supersede_decision``) when
+    an existing torrent has equal or better quality.
+    """
+    if not session.config.queue_management.supersede_enabled:
+        return []
+
+    new_imdb_id = result.get("imdb_id")
+    if not new_imdb_id:
+        return []
+
+    new_san = result.get("index_title_sanitised") or ""
+
+    try:
+        torrent_map = session.qbt.list_by_category()
+    except Exception:
+        logger.warning("Failed to query qBittorrent for supersession check; skipping.")
+        return []
+
+    if not torrent_map:
+        return []
+
+    matches, all_new_wins, best_existing_name = _collect_supersede_matches(
+        torrent_map,
+        new_imdb_id,
+        new_san,
+        session.config,
+    )
+
+    if not matches:
+        return []
+
+    _apply_supersede_decision(
+        result,
+        session,
+        all_new_wins,
+        best_existing_name,
+    )
+
+    if result.get("result") == "Failed":
+        return []
+
+    return matches
+
+
+def _process_result_body(
+    result: ResultDict,
+    session: _SearchSession,
+    site_dict: dict,
+    ignore_set: frozenset[str],
+    indexer: str,
+) -> bool:
+    """Run filter/enrich/queue for one result (body of _process_single_result)."""
+    index_title = result.get("index_title", "")
+    tracker = result.get("index_tracker") or indexer
+    if ignore_set and tracker.lower() in ignore_set:
+        logger.debug("Skipping result from ignored indexer '{}'.", tracker)
+        return False
+
+    if session.db.is_duplicate_exact(index_title):
+        logger.debug("'{}' already in DB; skipping.", index_title)
+        return True
+
+    if not _validate_metadata_present(result):
+        return True
+
+    logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
+    result = filter_by_index(result, site_dict, session.config, session.library_walk)
+    if result.get("result") != "Passed":
+        session.db.write(result)
+        return True
+    if not _enrich_result(result, session):
+        return True
+
+    logger.success("'{}' passed all filters.", result.get("index_title"))
+    to_delete = _supersede(result, session)
+    if result.get("result") == "Failed":
+        return True
+    _queue_and_persist(result, session)
+    if to_delete and result.get("result") != "Failed":
+        _delete_superseded_matches(
+            session,
+            to_delete,
+            result.get("imdb_id") or "",
+            result.get("index_title") or "",
+        )
+    return True
+
+
 def _process_single_result(
     result: ResultDict,
     session: _SearchSession,
@@ -141,31 +335,9 @@ def _process_single_result(
     Returns False if it was skipped due to the ignore list.
     """
     result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
-    index_title = result.get("index_title", "")
     tracker = result.get("index_tracker") or indexer
     with logger.contextualize(tracker=tracker):
-        if ignore_set and tracker.lower() in ignore_set:
-            logger.debug("Skipping result from ignored indexer '{}'.", tracker)
-            return False
-
-        if session.db.is_duplicate_exact(index_title):
-            logger.debug("'{}' already in DB; skipping.", index_title)
-            return True
-
-        if not _validate_metadata_present(result):
-            return True
-
-        logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
-        result = filter_by_index(result, site_dict, session.config, session.library_walk)
-        if result.get("result") != "Passed":
-            session.db.write(result)
-            return True
-        if not _enrich_result(result, session):
-            return True
-
-        logger.success("'{}' passed all filters.", result.get("index_title"))
-        _queue_and_persist(result, session)
-    return True
+        return _process_result_body(result, session, site_dict, ignore_set, indexer)
 
 
 def _process_criteria(
