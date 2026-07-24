@@ -1,0 +1,59 @@
+> """Torrent client health monitoring for movarr.
+  
+> Thin wrapper around :mod:`movarr.service_health`.  Monitors whether the
+> configured torrent client (currently qBittorrent) is reachable and fires an
+> alert if it has been unavailable for longer than
+> ``config.notification.torrent_client_alert_hours``.
+  
+> Adding support for a future torrent client requires only:
+>   1. Adding a ``"client_key": "DisplayName"`` entry to ``_CLIENT_DISPLAY_NAMES``.
+>   2. Ensuring the client implements an ``is_connected()`` method.
+> """
+  
+> from __future__ import annotations
+  
+> from typing import TYPE_CHECKING
+  
+> from movarr.service_health import check_service_health
+  
+- if TYPE_CHECKING:
+-     from movarr.config import Config
+-     from movarr.database import Database
+  
+> __all__ = ["check_and_notify"]
+  
+> _KV_PREFIX = "torrent_client"
+  
+  # Maps config.torrent_client.selected values to human-readable display names.
+  # Add entries here when new torrent clients are introduced.
+> _CLIENT_DISPLAY_NAMES: dict[str, str] = {
+>     "qbittorrent": "qBittorrent",
+> }
+  
+  
+> def _display_name(selected: str) -> str:
+>     """Return the display name for *selected*, falling back to .capitalize()."""
+>     return _CLIENT_DISPLAY_NAMES.get(selected, selected.capitalize())
+  
+  
+> def check_and_notify(
+>     is_reachable: bool,
+>     db: Database,
+>     config: Config,
+> ) -> None:
+>     """Update torrent client health streak and alert if threshold exceeded.
+  
+>     Args:
+>         is_reachable: ``True`` if the client API responded this cycle;
+>             ``False`` if the connection attempt failed.
+>         db: Open database instance.
+>         config: Application configuration.
+>     """
+>     check_service_health(
+>         is_healthy=is_reachable,
+>         service_name=_display_name(config.torrent_client.selected),
+>         kv_prefix=_KV_PREFIX,
+>         alert_hours=config.notification.torrent_client_alert_hours,
+>         db=db,
+>         config=config,
+>     )

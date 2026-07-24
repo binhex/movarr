@@ -1,0 +1,929 @@
+> """Two-stage filtering pipeline for movarr.
+  
+> Stage 1 — ``filter_by_index``:
+>   Runs before any IMDb lookup.  Fast, cheap checks on torrent index metadata.
+  
+> Stage 2 — ``filter_by_imdb``:
+>   Runs after IMDb metadata is fetched.  Applies IMDb-based quality/rating gates
+>   and library dedup using the canonical IMDb title.
+  
+> Override chain (stage 2):
+>   character → director → writer → cast → movie title = hard-pass (skip all
+>   rating/votes checks).
+>   genre = relaxed thresholds only (still checks rating/votes).
+> """
+  
+> from __future__ import annotations
+  
+> import os
+> import re
+> from decimal import Decimal, InvalidOperation
+> from typing import TYPE_CHECKING, cast
+  
+> from loguru import logger as _logger
+  
+> from movarr.parsing import (
+>     bad_keyword_search,
+>     dedup_quality_score,
+>     extract_group,
+>     extract_movie_title,
+>     extract_resolution,
+>     extract_year,
+>     is_tv_content,
+>     normalise_for_compare,
+>     quality_score,
+>     sanitise,
+> )
+  
+- if TYPE_CHECKING:
+-     from movarr.config import Config
+-     from movarr.models import ResultDict
+  
+> __all__ = [
+>     "composite_quality_score",
+>     "filter_by_index",
+>     "filter_by_imdb",
+>     "edition_token_set",
+>     "primary_edition_token",
+>     "special_edition_token",
+>     "supersession_quality_score",
+> ]
+  
+> _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
+> _RE_SPECIAL = re.compile(r"\b(extended|director(?:['\s]?s)?\s+cut|unrated|theatrical)\b", re.IGNORECASE)
+> _UNICODE_APOSTROPHES = re.compile(r"[\u2018\u2019\u02bc\u02bb]")
+  
+  
+  # Public entry points
+  
+  
+> def special_edition_token(san: str) -> str:
+>     """Return the special-edition token found in *san* (lowercase), or empty string.
+  
+>     All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+>     Typographic apostrophes are normalized to ASCII before matching.
+>     """
+!     normalized = _UNICODE_APOSTROPHES.sub("'", san)
+!     m = _RE_SPECIAL.search(normalized)
+!     if not m:
+!         return ""
+!     token = m.group(0).lower()
+!     if "director" in token and "cut" in token:
+!         return "directors cut"
+!     return token
+  
+  
+> def primary_edition_token(san: str) -> str:
+>     """Return the primary non-theatrical special-edition token found in *san*.
+  
+>     Unlike ``special_edition_token``, this function iterates over **all** edition
+>     tokens and returns the first one that is not ``theatrical``, which is treated
+>     as the base edition.  Returns empty string when no non-theatrical token is
+>     found (the file is untagged or tagged only as theatrical).
+  
+>     All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
+>     Typographic apostrophes are normalized to ASCII before matching.
+>     """
+!     norm = _UNICODE_APOSTROPHES.sub("'", san)
+!     for m in _RE_SPECIAL.finditer(norm):
+!         token = m.group(0).lower()
+!         if token == "theatrical":
+!             continue
+!         if "director" in token and "cut" in token:
+!             return "directors cut"
+!         return token
+!     return ""
+  
+  
+> def edition_token_set(san: str) -> frozenset[str]:
+>     """Return the set of all non-theatrical special-edition tokens in *san*.
+  
+>     Unlike ``primary_edition_token``, this function returns every non-theatrical
+>     edition token as a frozenset, allowing order-insensitive comparison between
+>     filenames with the same tags in a different order.
+  
+>     ``theatrical`` is excluded (base edition). Director's-cut variants are
+>     canonicalized. Typographic apostrophes are normalized before matching.
+>     """
+!     norm = _UNICODE_APOSTROPHES.sub("'", san)
+!     tokens: set[str] = set()
+!     for m in _RE_SPECIAL.finditer(norm):
+!         token = m.group(0).lower()
+!         if token == "theatrical":
+!             continue
+!         if "director" in token and "cut" in token:
+!             tokens.add("directors cut")
+!         else:
+!             tokens.add(token)
+!     return frozenset(tokens)
+  
+  
+> def filter_by_index(
+>     result: ResultDict,
+>     index_site: dict,
+>     config: Config,
+>     library_walk: list[tuple[str, list[str], list[str]]] | None = None,
+> ) -> ResultDict:
+>     """Apply pre-IMDb index-level filters.
+  
+>     Args:
+>         result: Pipeline dict populated by the Jackett parser.
+>         index_site: The active index site config dict.
+>         config: Application configuration.
+>         library_walk: Pre-built os.walk generator for library dedup (optional).
+  
+>     Returns:
+>         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
+>     """
+!     checks = [
+!         lambda r: _check_reject_index_group(r, config),
+!         lambda r: _check_search_criteria(r, index_site),
+!         lambda r: _check_minimum_size(r, index_site),
+!         lambda r: _check_maximum_size(r, index_site),
+!         lambda r: _check_reject_keywords(r, config),
+!         _check_tv_type,
+!         lambda r: _check_reject_movie_titles(r, config),
+!         lambda r: _check_library(r, config, library_walk),
+!     ]
+!     for check in checks:
+!         result = check(result)
+!         if result.get("result") != "Passed":
+!             return result
+!     return result
+  
+  
+> def _apply_override_gate(result: ResultDict, config: Config) -> tuple[bool, ResultDict]:
+>     """Check all override conditions; return (override_matched, updated_result).
+  
+>     A matched person/title override hard-passes the result (skipping rating/votes).
+>     Genre overrides are not hard-passes — they only relax thresholds.
+>     """
+!     for person_type in ("character", "director", "writer", "cast"):
+!         if _override_person(result, config, person_type):
+!             _pass(result, f"Override {person_type} match; skipping rating/votes gates.")
+!             return True, result
+!     if _override_movie_title(result, config):
+!         return True, result
+!     return False, result
+  
+  
+> def _apply_rating_votes_gate(result: ResultDict, config: Config) -> ResultDict:
+>     """Apply genre-override-relaxed rating and votes gates.
+  
+>     Short-circuits after the first failure: if rating fails, votes check is skipped.
+>     """
+!     override_thresholds = _override_genre(result, config)
+!     if not _check_rating(result, config, override_thresholds):
+!         return result
+!     _check_votes(result, config, override_thresholds)
+!     return result
+  
+  
+> def filter_by_imdb(
+>     result: ResultDict,
+>     config: Config,
+>     library_walk: list[tuple[str, list[str], list[str]]] | None = None,
+> ) -> ResultDict:
+>     """Apply post-IMDb metadata filters.
+  
+>     Args:
+>         result: Pipeline dict fully populated with IMDb metadata.
+>         config: Application configuration.
+>         library_walk: Pre-built os.walk generator for library dedup (optional).
+  
+>     Returns:
+>         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
+>     """
+      # Ordered gate chain — bail as soon as one check fails.
+!     checks = [
+!         lambda r: _check_allow_title_type(r, config),
+!         lambda r: _check_reject_genre(r, config),
+!         lambda r: _check_reject_genre_exclusive(r, config),
+!         _check_bitrate,
+!         lambda r: _check_year(r, config),
+!         lambda r: _check_runtime(r, config),
+!         lambda r: _check_language_country(r, config, "language"),
+!         lambda r: _check_language_country(r, config, "country"),
+!     ]
+!     for check in checks:
+!         result = check(result)
+!         if result.get("result") != "Passed":
+!             return result
+  
+!     override_matched, result = _apply_override_gate(result, config)
+  
+!     if not override_matched:
+!         _apply_rating_votes_gate(result, config)
+!         if result.get("result") != "Passed":
+!             return result
+  
+      # Library dedup post-IMDb using canonical title (runs even on override hard-passes).
+!     if library_walk is not None:
+!         result = _check_library_canonical(result, config, library_walk)
+  
+!     return result
+  
+  
+  # Stage 1 helpers
+  
+  
+> def _group_is_rejected(group: str, reject_list: list[str]) -> bool:
+>     """Return True if *group* (case-insensitive) is in *reject_list*."""
+!     reject_lower = [g.lower() for g in reject_list]
+!     return group.lower() in reject_lower
+  
+  
+> def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
+>     """Reject torrents from specific release groups.
+  
+>     Args:
+>         result: Pipeline dict with ``index_title`` populated.
+>         config: Application configuration.
+  
+>     Returns:
+>         Updated result dict.
+>     """
+!     reject_list = config.filters.reject_index_group_list
+!     if not reject_list:
+!         return _pass(result, "No reject_index_group_list defined.")
+!     index_title = result.get("index_title") or ""
+!     group = extract_group(sanitise(index_title) or "")
+!     if not group:
+!         return _pass(result, "No release group detected; skipping group check.")
+!     if _group_is_rejected(group, reject_list):
+!         return _fail(result, f"Release group '{group}' is in reject_index_group_list.")
+!     return _pass(result, f"Release group '{group}' is not in reject_index_group_list.")
+  
+  
+> def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
+!     index_title = (result.get("index_title") or "").lower()
+!     criteria = (index_site.get("criteria") or "").lower()
+!     for token in criteria.split():
+!         if token not in index_title:
+!             return _fail(result, f"Index title '{index_title}' missing criteria token '{token}'.")
+!     return _pass(result, f"Index title passes search criteria '{criteria}'.")
+  
+  
+> def _check_minimum_size(result: ResultDict, index_site: dict) -> ResultDict:
+>     """Fail if the torrent size (MB) is below the configured minimum."""
+!     threshold_mb = index_site.get("minimum_size_mb")
+!     if not threshold_mb:
+!         return _pass(result, "No minimum size defined; skipping.")
+!     return _check_size_bound(result, threshold_mb, "minimum")
+  
+  
+> def _check_maximum_size(result: ResultDict, index_site: dict) -> ResultDict:
+>     """Fail if the torrent size (MB) exceeds the configured maximum."""
+!     threshold_mb = index_site.get("maximum_size_mb")
+!     if not threshold_mb:
+!         return _pass(result, "No maximum size defined; skipping.")
+!     return _check_size_bound(result, threshold_mb, "maximum")
+  
+  
+> def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> ResultDict:
+>     """Compare raw index size against a threshold."""
+!     raw_size = result.get("index_size")
+!     if not raw_size:
+!         direction = "below minimum" if bound == "minimum" else "unknown (cannot verify maximum)"
+!         return _fail(result, f"No index size available; {direction} threshold assumed.")
+  
+!     try:
+!         size_mb = int(raw_size) // 1_000_000
+!     except (ValueError, TypeError):
+!         return _fail(result, f"Could not parse index size '{raw_size}'.")
+!     ok = (size_mb >= threshold_mb) if bound == "minimum" else (size_mb <= threshold_mb)
+!     op = ("\u2265" if bound == "minimum" else "\u2264") if ok else ("<" if bound == "minimum" else ">")
+!     msg = f"Size {size_mb} MB {op} {threshold_mb} MB."
+!     return _pass(result, msg) if ok else _fail(result, msg)
+  
+  
+> def _check_reject_keywords(result: ResultDict, config: Config) -> ResultDict:
+!     reject_list = config.filters.reject_index_title_list
+!     if not reject_list:
+!         return _pass(result, "No reject index title keywords defined.")
+  
+!     index_title = result.get("index_title") or ""
+!     for keyword in reject_list:
+!         if bad_keyword_search(index_title, keyword):
+!             return _fail(result, f"Index title contains rejected keyword '{keyword}'.")
+!     return _pass(result, "Index title passes reject keyword check.")
+  
+  
+> def _check_tv_type(result: ResultDict) -> ResultDict:
+      # is_tv_content expects a full sanitised title (including year) so that it can
+      # correctly locate the year boundary before searching for TV markers.
+!     sanitised = result.get("index_title_sanitised") or result.get("index_title") or ""
+!     if is_tv_content(sanitised):
+!         return _fail(result, f"Index title appears to be TV content: '{sanitised}'.")
+!     return _pass(result, "Index title is not TV content.")
+  
+  
+> def _check_reject_movie_titles(result: ResultDict, config: Config) -> ResultDict:
+!     reject_list = config.filters.reject_movie_title_list
+!     if not reject_list:
+!         return _pass(result, "No reject movie titles defined.")
+  
+!     title_compare = result.get("movie_title_compare") or ""
+!     title_and_year_compare = result.get("movie_title_and_year_compare") or ""
+!     for reject_title in reject_list:
+!         norm = normalise_for_compare(reject_title)
+!         if not norm:
+!             continue
+          # Require exact match against title or title+year to prevent false
+          # substring rejections (e.g. "Ring" matching "Missing Ring 2022").
+!         if norm in (title_compare, title_and_year_compare):
+!             return _fail(result, f"Index title matches reject movie title '{reject_title}'.")
+!     return _pass(result, "Index title passes reject movie title check.")
+  
+  
+> def _check_library(
+>     result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]] | None
+> ) -> ResultDict:
+>     """Check whether a matching title/year already exists in the library."""
+!     library_paths = config.general.library_path_list
+!     if not library_paths or library_walk is None:
+!         return _pass(result, "No library paths; assuming movie not in library.")
+  
+!     index_title = result.get("index_title") or ""
+!     index_resolution = result.get("index_title_resolution") or ""
+!     if not index_resolution:
+          # No resolution token in the index title — cannot perform library dedup
+          # so the torrent must be rejected.
+!         return _fail(result, f"Cannot determine resolution for '{index_title}'; rejecting.")
+  
+!     matches = _library_files_for_title(result, library_walk)
+!     if not matches:
+!         return _pass(result, "Movie not found in library.")
+  
+!     return _evaluate_library_files(result, matches, index_resolution, config)
+  
+  
+  # Stage 2 helpers
+  
+  
+> def _check_allow_title_type(result: ResultDict, config: Config) -> ResultDict:
+!     allow_types = config.filters.allow_imdb_title_type_list
+!     if not allow_types:
+!         return _pass(result, "No IMDb title type filter defined.")
+  
+!     title_type = result.get("imdb_title_type") or ""
+!     title_type_lower = title_type.lower()  # safe: null-guarded above
+!     allow_lower = [t.lower() for t in allow_types]
+  
+!     if title_type_lower not in allow_lower:
+!         return _fail(result, f"IMDb title type '{title_type_lower}' not in allowed types {allow_lower}.")
+!     return _pass(result, f"IMDb title type '{title_type_lower}' is allowed.")
+  
+  
+> def _check_reject_genre(result: ResultDict, config: Config) -> ResultDict:
+!     reject_list = config.filters.reject_genre_list
+!     if not reject_list:
+!         return _pass(result, "No reject genre list defined.")
+  
+!     genres = result.get("imdb_genres_list") or []
+!     genres_lower = [g.lower() for g in genres]
+!     reject_lower = [r.lower() for r in reject_list]
+  
+!     for reject in reject_lower:
+!         if reject in genres_lower:
+!             return _fail(result, f"Genre '{reject}' is in reject genre list.")
+!     return _pass(result, f"Genres {genres_lower} pass reject genre check.")
+  
+  
+> def _check_reject_genre_exclusive(result: ResultDict, config: Config) -> ResultDict:
+>     """Reject a movie only if ALL of its genres are in the reject-exclusive list.
+  
+>     If the movie has ANY genre that is NOT in this list, it passes this check.
+>     This allows rejecting pure horror while accepting horror/sci-fi hybrids.
+>     """
+!     reject_list = config.filters.reject_genre_exclusive_list
+!     if not reject_list:
+!         return _pass(result, "No reject genre exclusive list defined.")
+  
+!     genres = result.get("imdb_genres_list") or []
+!     if not genres:
+!         return _pass(result, "No genre data; skipping reject genre exclusive check.")
+  
+!     genres_lower = [g.lower() for g in genres]
+!     reject_lower = [r.lower() for r in reject_list]
+  
+!     for genre in genres_lower:
+!         if genre not in reject_lower:
+!             return _pass(
+!                 result,
+!                 f"Genre '{genre}' is not in reject genre exclusive list; movie has non-excluded genre(s).",
+!             )
+  
+!     return _fail(
+!         result,
+!         f"All genres {genres_lower} are in reject genre exclusive list.",
+!     )
+  
+  
+> def _check_bitrate(result: ResultDict) -> ResultDict:
+      # Use the index_site dict attached to the result during Jackett search.
+!     min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
+!     if min_bitrate_mb is None or min_bitrate_mb == 0:
+!         return _pass(result, "No minimum bitrate defined.")
+  
+!     raw_size = result.get("index_size")
+!     runtime = result.get("imdb_running_time_in_minutes")
+!     if not raw_size:
+!         return _fail(result, "No index size available for bitrate check.")
+!     if runtime is None:
+!         return _fail(result, "No runtime available for bitrate check.")
+  
+!     try:
+!         runtime_int = int(runtime)
+!         if runtime_int <= 0:
+!             return _fail(result, f"Invalid runtime '{runtime}' for bitrate check.")
+!         size_mb = int(raw_size) // 1_000_000
+!         bitrate_mb = size_mb // runtime_int
+!     except (ValueError, TypeError):
+!         return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
+!     if bitrate_mb >= int(min_bitrate_mb):
+!         return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {min_bitrate_mb}.")
+!     return _fail(result, f"Bitrate {bitrate_mb} MB/min < {min_bitrate_mb}.")
+  
+  
+> def _check_year(result: ResultDict, config: Config) -> ResultDict:
+!     min_year = config.filters.minimum_year
+!     if not min_year:
+!         return _pass(result, "No minimum year defined.")
+  
+      # Use the canonical IMDb year (available after fetch_metadata) rather than
+      # the year parsed from the torrent release name to avoid mislabelled releases
+      # bypassing or incorrectly failing the year gate.
+!     year = result.get("imdb_year")
+!     if not year:
+!         return _fail(result, "No IMDb year available for year check.")
+  
+!     try:
+!         year_int = int(year)
+!     except (ValueError, TypeError):
+!         return _fail(result, f"Could not parse year '{year}' for year check.")
+  
+!     if year_int >= int(min_year):
+!         return _pass(result, f"Year {year} ≥ {min_year}.")
+!     return _fail(result, f"Year {year} < {min_year}.")
+  
+  
+> def _check_runtime(result: ResultDict, config: Config) -> ResultDict:
+!     min_runtime = config.filters.minimum_runtime_mins
+!     if not min_runtime:
+!         return _pass(result, "No minimum runtime defined.")
+  
+!     runtime = result.get("imdb_running_time_in_minutes")
+!     if runtime is None:
+!         return _fail(result, "No runtime available for runtime check.")
+  
+!     try:
+!         runtime_int = int(runtime)
+!     except (ValueError, TypeError):
+!         return _fail(result, f"Could not parse runtime '{runtime}' for runtime check.")
+  
+!     if runtime_int >= int(min_runtime):
+!         return _pass(result, f"Runtime {runtime} min ≥ {min_runtime} min.")
+!     return _fail(result, f"Runtime {runtime} min < {min_runtime} min.")
+  
+  
+> def _check_language_country(result: ResultDict, config: Config, kind: str) -> ResultDict:
+!     allow_list = getattr(config.filters, f"allow_{kind}_list", []) or []
+!     if not allow_list:
+!         return _pass(result, f"No allow {kind} list defined.")
+!     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_{kind}_list") or [])
+!     if not imdb_list:
+          # Fail closed: allow-list is configured but metadata is missing or
+          # unmappable. Passing silently would defeat the allow-list on bad data.
+!         return _fail(result, f"No IMDb {kind} data available; failing closed (allow_{kind}_list is configured).")
+!     imdb_lower = [x.lower() for x in imdb_list]
+!     allow_lower = [x.lower() for x in allow_list]
+  
+!     for item in allow_lower:
+!         if item in imdb_lower:
+!             return _pass(result, f"IMDb {kind} list {imdb_lower} matches allowed {kind} list.")
+!     return _fail(result, f"IMDb {kind} list {imdb_lower} not in allowed {kind} list {allow_lower}.")
+  
+  
+> def _override_person(result: ResultDict, config: Config, person_type: str) -> bool:
+>     """Return True if any override person matches the IMDb credits list."""
+!     config_list = getattr(config.filters, f"override_{person_type}_list", []) or []
+!     if not config_list:
+!         return False
+  
+!     credits_field = "cast" if person_type == "cast" else person_type
+!     imdb_list: list[str] = cast("list[str]", result.get(f"imdb_credits_{credits_field}_list") or [])
+!     if not imdb_list:
+!         return False
+  
+!     imdb_lower = [x.lower() for x in imdb_list]
+!     for name in config_list:
+!         if name.lower() in imdb_lower:
+!             _logger.info("Override {}: '{}' matched.", person_type, name)
+!             return True
+!     return False
+  
+  
+> def _override_movie_title(result: ResultDict, config: Config) -> bool:
+>     """Return True (and update result) if any override movie title matches.
+  
+>     Uses exact set-membership (title or title+year) to prevent false positives
+>     from partial-word or numeric substring matches.
+>     """
+!     override_list = config.filters.override_movie_title_list or []
+!     if not override_list:
+!         return False
+!     compare_title = result.get("movie_title_compare") or ""
+!     compare_title_year = result.get("movie_title_and_year_compare") or ""
+!     for title in override_list:
+!         norm = normalise_for_compare(title)
+!         if norm and norm in (compare_title, compare_title_year):
+!             _pass(result, f"Override movie title '{title}' matched.")
+!             return True
+!     return False
+  
+  
+> def _override_genre(result: ResultDict, config: Config) -> dict:
+>     """Return a dict with relaxed thresholds if any genre overrides match."""
+!     genres = result.get("imdb_genres_list") or []
+!     override = {}
+!     for genre in genres:
+!         genre_cfg = config.filters.override_genre.get(genre.lower())
+!         if genre_cfg is None:
+!             continue
+          # Use is not None so that an explicit 0 value (meaning "no minimum")
+          # is stored in the override dict rather than being treated as falsy.
+!         if genre_cfg.minimum_rating is not None:
+!             override["minimum_rating"] = genre_cfg.minimum_rating
+!         if genre_cfg.minimum_votes is not None:
+!             override["minimum_votes"] = genre_cfg.minimum_votes
+!     return override
+  
+  
+> def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
+!     min_rating = override.get("minimum_rating", config.filters.minimum_rating)
+!     if not min_rating:
+!         _pass(result, "No minimum rating defined.")
+!         return True
+  
+!     imdb_rating = result.get("imdb_rating")
+!     if not imdb_rating:
+!         _fail(result, "No IMDb rating available; assuming below threshold.")
+!         return False
+  
+!     try:
+!         threshold = Decimal(str(min_rating))
+!         rating_val = Decimal(str(imdb_rating))
+!     except (InvalidOperation, ValueError, TypeError):
+!         _fail(result, f"Could not parse rating '{imdb_rating}' or threshold '{min_rating}'.")
+!         return False
+  
+!     if threshold > Decimal("10.0"):
+!         _pass(result, f"Configured min rating {threshold} > 10.0; treating as no threshold.")
+!         return True
+  
+!     if rating_val >= threshold:
+!         _pass(result, f"Rating {imdb_rating} ≥ {threshold}.")
+!         return True
+  
+!     _fail(result, f"Rating {imdb_rating} < {threshold}.")
+!     return False
+  
+  
+> def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
+!     min_votes = override.get("minimum_votes", config.filters.minimum_votes)
+!     if not min_votes:
+!         _pass(result, "No minimum votes defined.")
+!         return True
+  
+!     imdb_votes = result.get("imdb_votes")
+!     if imdb_votes is None:
+!         _fail(result, "No IMDb votes available; assuming below threshold.")
+!         return False
+  
+!     try:
+!         votes_int = int(imdb_votes)
+!     except (ValueError, TypeError):
+!         _fail(result, f"Could not parse votes '{imdb_votes}' for votes check.")
+!         return False
+  
+!     if votes_int >= int(min_votes):
+!         _pass(result, f"Votes {imdb_votes} ≥ {min_votes}.")
+!         return True
+  
+!     _fail(result, f"Votes {imdb_votes} < {min_votes}.")
+!     return False
+  
+  
+> def _check_library_canonical(
+>     result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]]
+> ) -> ResultDict:
+>     """Library dedup using the canonical IMDb title — cleaner than index title."""
+!     imdb_title = result.get("imdb_title") or ""
+!     imdb_year = str(result.get("imdb_year") or "")
+!     index_resolution = result.get("index_title_resolution") or ""
+!     if not (imdb_title and imdb_year and index_resolution):
+!         return _fail(result, "Insufficient IMDb fields for canonical library check.")
+  
+!     canonical_compare = normalise_for_compare(imdb_title)
+!     if not canonical_compare:
+!         return _fail(result, "Cannot normalise IMDb title for canonical library check.")
+!     matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
+!     if not matches:
+!         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
+  
+!     return _evaluate_library_files(result, matches, index_resolution, config)
+  
+  
+  # Library walk helpers
+  
+  
+> def _match_folder_name(
+>     dir_path: str,
+>     title_compare: str,
+>     year: str,
+> ) -> bool:
+>     """Return True if the last path component of *dir_path* matches *title_compare* and *year*.
+  
+>     Used as a fallback when the library filename itself does not match.
+>     """
+!     if not dir_path:
+!         return False
+!     folder = os.path.basename(dir_path)
+!     if not folder:
+!         return False
+!     san_dir = sanitise(folder)
+!     if not san_dir:
+!         return False
+!     dir_title = extract_movie_title(san_dir)
+!     dir_year = extract_year(san_dir)
+!     if not dir_title or not dir_year:
+!         return False
+!     dir_norm = normalise_for_compare(dir_title)
+!     return bool(dir_norm and dir_norm == title_compare and dir_year == year)
+  
+  
+> def _match_library_file(
+>     fname: str,
+>     title_compare: str,
+>     year: str,
+>     root: str,
+> ) -> str | None:
+>     """Return *fname* if it matches *title_compare* and *year*.
+  
+>     When the filename does not match, falls back to comparing the
+>     parent folder name (last path component of *root*) via ``_match_folder_name``.
+>     This handles cases where the filename is a garbled release-group string but
+>     the containing folder has the full readable movie title.
+  
+>     Note:
+>         Files directly at the library root (no parent folder) silently skip the
+>         fallback since there is no folder name to inspect.
+>     """
+!     if not fname.lower().endswith(_VIDEO_EXTS):
+!         return None
+!     san = sanitise(fname)
+!     if not san:
+!         return None
+!     lib_title = extract_movie_title(san)
+!     lib_year = extract_year(san)
+!     if not lib_title or not lib_year:
+!         return None
+!     norm = normalise_for_compare(lib_title)
+!     if not norm:
+!         return None
+      # title_compare is already normalised; require exact match to prevent
+      # substring false positives (e.g. "rings" matching "thelordoftherings").
+!     if norm == title_compare and lib_year == year:
+!         return fname
+  
+      # Filename did not match — try the parent folder name as a fallback.
+!     return _try_folder_fallback(root, fname, norm, lib_year, title_compare, year)
+  
+  
+> def _try_folder_fallback(
+>     root: str,
+>     fname: str,
+>     norm: str,
+>     lib_year: str | None,
+>     title_compare: str,
+>     year: str,
+> ) -> str | None:
+>     """Return *fname* if the parent folder name matches *title_compare* and *year*.
+  
+>     Used as a fallback when the library filename itself does not match.
+>     Returns ``None`` when the folder name does not match, the year contradicts,
+>     or the filename's title is completely unrelated to the search title.
+>     """
+!     if not _match_folder_name(root, title_compare, year):
+!         return None
+      # Reject if the filename's year contradicts the search year (e.g.
+      # "Matrix Reloaded (2003)" inside a "The Matrix (1999)" folder).
+!     if lib_year != year:
+!         return None
+      # Reject if the filename clearly refers to a different movie with
+      # the same year (e.g. "Fight Club (1999)" inside "The Matrix (1999)").
+      # Accept only when the filename title is a substring of the search
+      # title or vice versa — this allows truncated/reordered titles while
+      # rejecting completely different titles.
+!     if norm not in title_compare and title_compare not in norm:
+!         return None
+!     return fname
+  
+  
+> def _walk_library_files(
+>     title_compare: str, year: str, library_walk: list[tuple[str, list[str], list[str]]]
+> ) -> list[str]:
+>     """Walk *library_walk* and return video-file paths matching *title_compare* and *year*."""
+!     found: list[str] = []
+!     for root, _dirs, files in library_walk:
+!         for fname in files:
+!             if _match_library_file(fname, title_compare, year, root):
+!                 found.append(os.path.join(root, fname))
+!     return found
+  
+  
+> def _library_files_for_title(result: ResultDict, library_walk: list[tuple[str, list[str], list[str]]]) -> list[str]:
+>     """Return absolute paths to library video files matching the index title+year."""
+!     title_compare = result.get("movie_title_compare") or ""
+!     year = result.get("movie_title_year") or ""
+!     return _walk_library_files(title_compare, year, library_walk)
+  
+  
+> def _evaluate_single_library_file(
+>     lib_path: str,
+>     index_resolution: str,
+>     index_san: str,
+>     config: Config,
+> ) -> tuple[str, str] | None:
+>     """Evaluate one library file against the index entry.
+  
+>     Returns:
+>         ("fail", reason) — library is at least as good; caller should fail the result.
+>         ("better", reason) — index is better; continue checking other files.
+>         None — resolution unparseable; skip this file.
+>     """
+!     lib_fname = os.path.basename(lib_path)
+!     lib_san = sanitise(lib_fname) or ""
+!     lib_res = extract_resolution(lib_san)
+  
+!     if not lib_res:
+!         return (
+!             "fail",
+!             f"Library file '{lib_fname}' has no parseable resolution; assuming library copy is present.",
+!         )
+  
+!     try:
+!         idx_res_int = int(index_resolution)
+!         lib_res_int = int(lib_res)
+!     except (ValueError, TypeError):
+!         return None
+  
+!     if idx_res_int < lib_res_int:
+!         return "fail", f"Library has higher resolution ({lib_res}p > {index_resolution}p)."
+  
+!     if idx_res_int > lib_res_int:
+!         reason = f"library file '{lib_fname}' exists at lower resolution ({lib_res}p); index is {index_resolution}p"
+!         return "better", reason
+  
+      # Same resolution — compare quality scores.
+      # Use dedup_quality_score which only considers resolution+source (the reliable
+      # signals). HDR and audio tokens are excluded as they are commonly embellished
+      # by indexers, causing false upgrade detections.
+!     idx_score = dedup_quality_score(index_san) + _group_bonus(index_san, lib_san, config)
+!     lib_score = dedup_quality_score(lib_san) + _group_bonus(lib_san, index_san, config)
+!     idx_score += _special_edition_bonus(index_san, lib_san)
+!     lib_score += _special_edition_bonus(lib_san, index_san)
+  
+!     if lib_score >= idx_score:
+!         return "fail", f"Library file '{lib_fname}': library quality score ({lib_score}) ≥ index ({idx_score})."
+  
+!     reason = (
+!         f"library file '{lib_fname}' at {index_resolution}p found (lib score: {lib_score}, index score: {idx_score})"
+!     )
+!     return "better", reason
+  
+  
+> def _evaluate_library_files(
+>     result: ResultDict,
+>     library_files: list[str],
+>     index_resolution: str,
+>     config: Config,
+> ) -> ResultDict:
+>     """Compare index resolution/quality against each matching library file.
+  
+>     Fails immediately if the library has a higher resolution.  For equal
+>     resolution, computes a composite quality score (including preferred-group
+>     and special-edition bonuses) and fails if the library scores equal or better.
+>     """
+!     index_title = result.get("index_title") or ""
+!     raw_san = result.get("index_title_sanitised") or index_title
+!     index_san = sanitise(raw_san) or ""
+  
+!     best_reason = ""
+  
+!     for lib_path in library_files:
+!         outcome = _evaluate_single_library_file(lib_path, index_resolution, index_san, config)
+!         if outcome is None:
+!             continue
+!         outcome_type, reason = outcome
+!         if outcome_type == "fail":
+!             return _fail(result, reason)
+!         best_reason = reason  # outcome_type == "better"
+  
+!     if best_reason:
+!         return _pass(result, f"Index title '{index_title}' passes library check — {best_reason}.")
+!     return _pass(result, f"Index title '{index_title}' passes library check.")
+  
+  
+> def _group_bonus(candidate_san: str, other_san: str, config: Config) -> int:
+>     """Return +10 if *candidate* is a preferred group and *other* is not."""
+>     preferred_groups = config.filters.preferred_index_group_list or []
+>     if not preferred_groups:
+>         return 0
+>     preferred_lower = [g.lower() for g in preferred_groups]
+>     cand_group = (extract_group(candidate_san) or "").lower()
+>     other_group = (extract_group(other_san) or "").lower()
+>     if cand_group in preferred_lower and other_group not in preferred_lower:
+>         return 10
+>     return 0
+  
+  
+> def _has_non_theatrical_edition(san: str) -> bool:
+>     """Return True if *san* contains any special-edition token that is not ``theatrical``."""
+>     norm = _UNICODE_APOSTROPHES.sub("'", san)
+>     return any(m.group(0).lower() != "theatrical" for m in _RE_SPECIAL.finditer(norm))
+  
+  
+> def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
+>     """Return +10 if *candidate* has a non-theatrical special edition and *other* does not.
+  
+>     ``theatrical`` is treated as the base edition. When the candidate carries multiple
+>     edition tokens (e.g. ``Theatrical Extended``), any non-theatrical token triggers
+>     the bonus.
+>     """
+>     if not _has_non_theatrical_edition(candidate_san):
+>         return 0
+!     if not _has_non_theatrical_edition(other_san):
+!         return 10
+!     return 0
+  
+  
+> def composite_quality_score(san: str, other_san: str, config: Config) -> int:
+>     """Return the composite quality score for *san* relative to *other_san*.
+  
+>     Combines ``quality_score`` with the preferred-group and special-edition
+>     bonuses so callers outside this module get a consistent score without
+>     importing private symbols.
+  
+>     ``quality_score`` is already imported at the module level in this file.
+  
+>     Args:
+>         san: Sanitised title of the candidate file.
+>         other_san: Sanitised title of the file being compared against.
+>         config: Application configuration (used for preferred group list).
+>     """
+>     score = quality_score(san)
+>     score += _group_bonus(san, other_san, config)
+>     score += _special_edition_bonus(san, other_san)
+>     return score
+  
+  
+> def supersession_quality_score(san: str, other_san: str, config: Config) -> int:
+>     """Return the quality score for *san* relative to *other_san* for supersession comparisons.
+  
+>     Like ``composite_quality_score`` but deliberately excludes
+>     ``_special_edition_bonus``. Special-edition tokens (extended, director's cut,
+>     theatrical, unrated) represent different cuts of a film, not superior audio/video
+>     quality. Including them in a deletion-decision score would permanently destroy
+>     alternate editions the user may have intentionally kept.
+  
+>     Args:
+>         san: Sanitised title of the candidate file.
+>         other_san: Sanitised title of the file being compared against.
+>         config: Application configuration (used for preferred group list).
+>     """
+>     score = quality_score(san)
+>     score += _group_bonus(san, other_san, config)
+>     return score
+  
+  
+  # Result helpers
+  
+  
+> def _pass(result: ResultDict, message: str) -> ResultDict:
+!     _logger.info(message)
+!     details: list[str] = result.get("result_details") or []
+!     details.append(f"Passed: {message}")
+!     result["result"] = "Passed"
+!     result["result_details"] = details
+!     return result
+  
+  
+> def _fail(result: ResultDict, message: str) -> ResultDict:
+!     _logger.warning(message)
+!     details: list[str] = result.get("result_details") or []
+!     details.append(f"Failed: {message}")
+!     result["result"] = "Failed"
+!     result["result_details"] = details
+!     return result
