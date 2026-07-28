@@ -1051,6 +1051,28 @@ class TestFilterByImdbCanonicalLibraryEdgeCases:
         out = filter_by_imdb(result, Config(), library_walk=library_walk)
         assert out["result"] == "Passed"
 
+    def test_canonical_finds_library_via_index_year_fallback(self) -> None:
+        """When IMDb year differs from the library file's year, but the index
+        (release) year matches, the canonical check should fall back to the
+        index year and still find the library file."""
+        cfg = Config()
+        result = _imdb_result(
+            index_title="Kill Bill The Whole Bloody Affair 2011 2160p BluRay",
+            index_title_sanitised="Kill Bill The Whole Bloody Affair 2011 2160p BluRay",
+            imdb_title="Kill Bill: The Whole Bloody Affair",
+            imdb_year=2004,
+            movie_title_year="2011",
+            index_title_resolution="2160",
+        )
+        library_walk: list[tuple[str, list[str], list[str]]] = [
+            ("/library", [], ["Kill Bill The Whole Bloody Affair 2011 WEB DL 2160p HDR10+ DV HEVC DDP 5 1.mkv"])
+        ]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+        details = " ".join(out.get("result_details", []))
+        # The canonical check should NOT emit "not found in library"
+        assert "not found in library" not in details
+
 
 # filter_by_index: library walk edge cases
 

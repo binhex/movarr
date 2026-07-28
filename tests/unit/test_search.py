@@ -1471,6 +1471,45 @@ class TestSupersede:
         assert result["result"] == "Passed"
         session.qbt.delete_torrent.assert_not_called()
 
+    def test_finalize_and_queue_calls_delete_on_new_higher_score(self, mocker: MockerFixture) -> None:
+        """When _supersede returns matches, _finalize_and_queue deletes inferior torrents."""
+        from movarr.qbittorrent import _build_supersede_tag
+        from movarr.search import _finalize_and_queue
+
+        result = self._make_result()
+        torrent_map = self._make_torrent_map([("hash1", "The Matrix 1999 1080p BluRay", "tt0133093", 70)])
+        session = self._make_session(mocker, torrent_map=torrent_map)
+        # Simulate add_torrent returning an enriched result
+        session.qbt.add_torrent.return_value = {
+            **result,
+            "movarr_tag": _build_supersede_tag("tt0133093", 90),
+        }
+
+        _finalize_and_queue(result, session)
+
+        session.qbt.add_torrent.assert_called_once()
+        session.db.write.assert_called_once()
+        session.qbt.delete_torrent.assert_called_once_with(
+            "hash1", delete_data=True, state="superseded", name="The Matrix 1999 1080p BluRay"
+        )
+        session.db.mark_stalled.assert_called_once()
+
+    def test_finalize_and_queue_does_not_delete_when_queue_fails(self, mocker: MockerFixture) -> None:
+        """When add_torrent returns None (queue failure), _delete_superseded_matches is NOT called."""
+        from movarr.search import _finalize_and_queue
+
+        result = self._make_result()
+        torrent_map = self._make_torrent_map([("hash1", "The Matrix 1999 1080p BluRay", "tt0133093", 70)])
+        session = self._make_session(mocker, torrent_map=torrent_map)
+        # Simulate add_torrent failing — returns None
+        session.qbt.add_torrent.return_value = None
+
+        _finalize_and_queue(result, session)
+
+        session.qbt.add_torrent.assert_called_once()
+        # Must NOT delete existing torrents when the new one failed to queue
+        session.qbt.delete_torrent.assert_not_called()
+
     def test_skips_match_with_empty_torrent_name(self, mocker: MockerFixture) -> None:
         """Matching IMDb torrent with empty name is skipped (cannot sanitise)."""
         from movarr.search import _supersede

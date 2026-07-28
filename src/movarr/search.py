@@ -277,6 +277,46 @@ def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, s
     return matches
 
 
+def _run_pre_filter_gates(
+    result: ResultDict,
+    session: _SearchSession,
+    ignore_set: frozenset[str],
+    indexer: str,
+    index_title: str,
+) -> bool | None:
+    """Run ignore-set, duplicate, and metadata checks before the filter pipeline.
+
+    Returns:
+        ``None`` — continue to filter/enrich/queue pipeline.
+        ``True`` — skip this result (already processed / no metadata).
+        ``False`` — skip this result (ignored indexer).
+    """
+    tracker: str = result.get("index_tracker") or indexer
+    if ignore_set and tracker.lower() in ignore_set:
+        logger.debug("Skipping result from ignored indexer '{}'.", tracker)
+        return False
+    if session.db.is_duplicate_exact(index_title):
+        logger.debug("'{}' already in DB; skipping.", index_title)
+        return True
+    if not _validate_metadata_present(result):
+        return True
+    return None
+
+
+def _run_filters_and_enrich(result: ResultDict, session: _SearchSession, site_dict: dict) -> bool:
+    """Run filter_by_index and _enrich_result; write to DB on filter failure.
+
+    Returns:
+        ``True`` if the result passed both filter and IMDb enrichment.
+        ``False`` if it failed (result already persisted to DB).
+    """
+    result = filter_by_index(result, site_dict, session.config, session.library_walk)
+    if result.get("result") != "Passed":
+        session.db.write(result)
+        return False
+    return _enrich_result(result, session)
+
+
 def _process_result_body(
     result: ResultDict,
     session: _SearchSession,
@@ -286,27 +326,23 @@ def _process_result_body(
 ) -> bool:
     """Run filter/enrich/queue for one result (body of _process_single_result)."""
     index_title = result.get("index_title", "")
-    tracker = result.get("index_tracker") or indexer
-    if ignore_set and tracker.lower() in ignore_set:
-        logger.debug("Skipping result from ignored indexer '{}'.", tracker)
-        return False
-
-    if session.db.is_duplicate_exact(index_title):
-        logger.debug("'{}' already in DB; skipping.", index_title)
-        return True
-
-    if not _validate_metadata_present(result):
-        return True
+    outcome = _run_pre_filter_gates(result, session, ignore_set, indexer, index_title)
+    if outcome is not None:
+        return outcome
 
     logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
-    result = filter_by_index(result, site_dict, session.config, session.library_walk)
-    if result.get("result") != "Passed":
-        session.db.write(result)
-        return True
-    if not _enrich_result(result, session):
+    if not _run_filters_and_enrich(result, session, site_dict):
         return True
 
     logger.success("'{}' passed all filters.", result.get("index_title"))
+    return _finalize_and_queue(result, session)
+
+
+def _finalize_and_queue(result: ResultDict, session: _SearchSession) -> bool:
+    """Run supersession check, queue the torrent, and delete superseded matches.
+
+    Always returns ``True`` so callers can use ``return _finalize_and_queue(...)``.
+    """
     to_delete = _supersede(result, session)
     if result.get("result") == "Failed":
         return True

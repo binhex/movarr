@@ -630,6 +630,27 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
     return False
 
 
+def _find_canonical_matches(
+    canonical_compare: str,
+    imdb_year: str,
+    library_walk: list[tuple[str, list[str], list[str]]],
+    result: ResultDict,
+) -> list[str]:
+    """Walk library for *canonical_compare* + *imdb_year*, falling back to index year.
+
+    When the exact IMDb year finds nothing, try the index (release/remaster)
+    year from *result* so that library files named with a different year than
+    the original IMDb production still match.
+    """
+    matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
+    if matches:
+        return matches
+    fallback_year = str(result.get("movie_title_year") or "")
+    if not fallback_year or fallback_year == imdb_year:
+        return []
+    return _walk_library_files(canonical_compare, fallback_year, library_walk)
+
+
 def _check_library_canonical(
     result: ResultDict, config: Config, library_walk: list[tuple[str, list[str], list[str]]]
 ) -> ResultDict:
@@ -643,7 +664,7 @@ def _check_library_canonical(
     canonical_compare = normalise_for_compare(imdb_title)
     if not canonical_compare:
         return _fail(result, "Cannot normalise IMDb title for canonical library check.")
-    matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
+    matches = _find_canonical_matches(canonical_compare, imdb_year, library_walk, result)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
 
