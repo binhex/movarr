@@ -139,6 +139,16 @@ def _patch_imdbpie_redirect_check(client: Any) -> None:
     client.is_redirection_title = types.MethodType(_is_redirection_title, client)
 
 
+def _safe_alternate_titles(raw: object) -> list[str]:
+    """Return the first three items from *raw* if it is a list, else an empty list.
+
+    Defensive guard against non-list API responses (string, dict, None).
+    """
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw[:3] if isinstance(item, str)]
+
+
 def _build_imdbpie_payload(client: Any, imdb_id: str) -> dict[str, Any] | None:
     """Fetch all IMDbPie data for *imdb_id* and return as a flat dict.
 
@@ -169,6 +179,8 @@ def _build_imdbpie_payload(client: Any, imdb_id: str) -> dict[str, Any] | None:
         # _convert_languages and _convert_countries accept comma-separated strings.
         "languages": _convert_languages(", ".join(_extract_list_or_none(aux_data, "spokenLanguages") or [])) or None,
         "countries": _convert_countries(", ".join(_extract_list_or_none(aux_data, "origins") or [])) or None,
+        "original_title": aux_data.get("originalTitle"),
+        "alternate_titles": _safe_alternate_titles(aux_data.get("alternateTitlesSample")),
         "directors": _credits_names(credits_data, "director"),
         "writers": _credits_names(credits_data, "writer"),
         "cast": _credits_names(credits_data, "cast"),
@@ -365,6 +377,8 @@ def _apply_metadata(result: ResultDict, data: dict[str, Any]) -> None:
     result.update(
         {
             "imdb_title": data.get("title"),
+            "imdb_original_title": data.get("original_title"),
+            "imdb_alternate_titles": data.get("alternate_titles"),
             "imdb_year": data.get("year"),
             "imdb_poster_url": poster_url,
             "imdb_trailer_url": data.get("trailer_url"),

@@ -1073,6 +1073,99 @@ class TestFilterByImdbCanonicalLibraryEdgeCases:
         # The canonical check should NOT emit "not found in library"
         assert "not found in library" not in details
 
+    # ── Dual-title (alternate) library matching ──────────────────────────────
+
+    def test_dual_title_alternate_title_matches_library_file(self) -> None:
+        """When original title is non-ASCII, library file named with an
+        English alternate should still be found."""
+        cfg = Config()
+        result = _imdb_result(
+            imdb_title="Gisaengchung",
+            imdb_year=2019,
+            imdb_original_title="기생충",
+            imdb_alternate_titles=["寄生上流", "Parasite", "Parazit"],
+            index_title_resolution="1080",
+        )
+        # Library file uses the English alternate "Parasite" at lower quality
+        # (HDTV < index BluRay) so the quality comparison passes.
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["Parasite 2019 1080p HDTV.mkv"])]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+        details = " ".join(out.get("result_details", []))
+        assert "not found in library" not in details
+
+    def test_dual_title_original_title_matches_library_file(self) -> None:
+        """When alternates are present, library file named with the
+        original non-ASCII title should still be found."""
+        cfg = Config()
+        result = _imdb_result(
+            imdb_title="Gisaengchung",
+            imdb_year=2019,
+            imdb_original_title="기생충",
+            imdb_alternate_titles=["寄生上流", "Parasite", "Parazit"],
+            index_title_resolution="1080",
+        )
+        # Library file uses the original title at lower quality
+        # (HDTV < index BluRay) so the quality comparison passes.
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["Gisaengchung 2019 1080p HDTV.mkv"])]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+        details = " ".join(out.get("result_details", []))
+        assert "not found in library" not in details
+
+    def test_ascii_title_skips_alternate_search(self) -> None:
+        """English movies (ASCII title) skip alternate search entirely.
+        Library file named with a foreign translation alternate should NOT match."""
+        cfg = Config()
+        result = _imdb_result(
+            imdb_title="The Matrix",
+            imdb_year=1999,
+            imdb_original_title="The Matrix",
+            imdb_alternate_titles=["Matrix", "La matrice", "Die Matrix"],
+            index_title_resolution="1080",
+        )
+        # Library file uses the German alternate — should NOT match because
+        # alternates are skipped for ASCII-original titles.
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["Die Matrix 1999 1080p BluRay.mkv"])]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        # Should report "not found" since we only search the original (ASCII) title.
+        details = " ".join(out.get("result_details", []))
+        assert "not found in library" in details
+
+    def test_empty_alternates_falls_back_to_single_title(self) -> None:
+        """When imdb_alternate_titles is None (OMDb fallback), single-title
+        behavior is used."""
+        cfg = Config()
+        result = _imdb_result(
+            imdb_title="Gisaengchung",
+            imdb_year=2019,
+            imdb_original_title="Gisaengchung",
+            imdb_alternate_titles=None,
+            index_title_resolution="1080",
+        )
+        # Single-title fallback finds the file at lower quality
+        # (HDTV < index BluRay) so the quality comparison passes.
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["Gisaengchung 2019 1080p HDTV.mkv"])]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+
+    def test_alternate_normalizes_to_same_as_original_is_deduplicated(self) -> None:
+        """When an alternate normalizes to the same string as the original,
+        it is deduplicated by the set — no duplicate search."""
+        cfg = Config()
+        result = _imdb_result(
+            imdb_title="Gisaengchung",
+            imdb_year=2019,
+            imdb_original_title="기생충",
+            imdb_alternate_titles=["Gisaengchung", "Parasite"],
+            index_title_resolution="1080",
+        )
+        # Library file with the deduplicated alternate title at lower quality
+        # (HDTV < index BluRay) so the quality comparison passes.
+        library_walk: list[tuple[str, list[str], list[str]]] = [("/library", [], ["Parasite 2019 1080p HDTV.mkv"])]
+        out = filter_by_imdb(result, cfg, library_walk=library_walk)
+        assert out["result"] == "Passed"
+
 
 # filter_by_index: library walk edge cases
 

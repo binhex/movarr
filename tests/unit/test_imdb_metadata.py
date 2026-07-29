@@ -55,6 +55,12 @@ def _make_imdbpie_data() -> tuple[dict, dict, dict, dict]:
         "origins": ["US"],
         "certificate": {"certificate": "15"},
         "videos": {"mainTrailer": {"id": "vi1234567"}},
+        "originalTitle": "The Matrix",
+        "alternateTitlesSample": [
+            "Matrix",
+            "La matrice",
+            "Die Matrix",
+        ],
     }
     return title_data, genres_data, credits_data, aux_data
 
@@ -158,6 +164,8 @@ class TestFetchImdbpie:
         assert out["imdb_certification"] == "15"
         assert out["imdb_language_list"] == ["en"]
         assert out["imdb_country_list"] == ["us"]
+        assert out["imdb_original_title"] == "The Matrix"
+        assert out["imdb_alternate_titles"] == ["Matrix", "La matrice", "Die Matrix"]
 
     def test_successful_fetch_populates_credits(self, mocker: MockerFixture) -> None:
         _mock_imdbpie_client(mocker)
@@ -197,6 +205,31 @@ class TestFetchImdbpie:
         result = _make_result()
         out = _fetch_imdbpie(result)
         assert out.get("imdb_plot_summary") == "A computer hacker learns the truth about reality."
+
+    def test_non_english_movie_has_different_original_and_alternate_titles(self, mocker: MockerFixture) -> None:
+        """For foreign films, original title differs from English alternates."""
+        title_data, genres_data, credits_data, aux_data = _make_imdbpie_data()
+        title_data["base"]["title"] = "Serbuan maut"
+        aux_data["originalTitle"] = "Serbuan maut"
+        aux_data["alternateTitlesSample"] = [
+            "Operação Invasão",
+            "The Raid",
+            "The Raid: Redemption",
+        ]
+        # Build mock with overridden data
+        mock_imdbpie = mocker.MagicMock()
+        mock_client = mocker.MagicMock()
+        mock_imdbpie.Imdb.return_value = mock_client
+        mock_client.get_title.return_value = title_data
+        mock_client.get_title_genres.return_value = genres_data
+        mock_client.get_title_credits.return_value = credits_data
+        mock_client.get_title_auxiliary.return_value = aux_data
+        mocker.patch.dict("sys.modules", {"imdbpie": mock_imdbpie})
+        result = _make_result()
+        out = _fetch_imdbpie(result)
+        assert out["imdb_title"] == "Serbuan maut"
+        assert out["imdb_original_title"] == "Serbuan maut"
+        assert out["imdb_alternate_titles"] == ["Operação Invasão", "The Raid", "The Raid: Redemption"]
 
     def test_no_cert_sets_cert_source_none(self, mocker: MockerFixture) -> None:
         title_data, genres_data, credits_data, _ = _make_imdbpie_data()

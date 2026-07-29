@@ -48,6 +48,8 @@ class ResultDict(TypedDict, total=False):
     # --- IMDb metadata ---
     imdb_id: str
     imdb_title: str | None
+    imdb_original_title: str | None
+    imdb_alternate_titles: list[str] | None
     imdb_year: int | None
     imdb_rating: float | None
     imdb_votes: int | None

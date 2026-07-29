@@ -630,25 +630,56 @@ def _check_votes(result: ResultDict, config: Config, override: dict) -> bool:
     return False
 
 
+def _contains_non_ascii(text: str) -> bool:
+    """Return True if *text* contains any character outside the ASCII range."""
+    return any(ord(ch) > 127 for ch in text)
+
+
 def _find_canonical_matches(
-    canonical_compare: str,
+    title_compares: set[str],
     imdb_year: str,
     library_walk: list[tuple[str, list[str], list[str]]],
     result: ResultDict,
 ) -> list[str]:
-    """Walk library for *canonical_compare* + *imdb_year*, falling back to index year.
+    """Walk library for any title in *title_compares*, stopping on first match.
 
     When the exact IMDb year finds nothing, try the index (release/remaster)
-    year from *result* so that library files named with a different year than
-    the original IMDb production still match.
+    year from *result* for each title so that library files named with a
+    different year than the original IMDb production still match.
     """
-    matches = _walk_library_files(canonical_compare, imdb_year, library_walk)
-    if matches:
-        return matches
     fallback_year = str(result.get("movie_title_year") or "")
-    if not fallback_year or fallback_year == imdb_year:
-        return []
-    return _walk_library_files(canonical_compare, fallback_year, library_walk)
+    use_fallback = bool(fallback_year and fallback_year != imdb_year)
+
+    for title_compare in title_compares:
+        matches = _walk_library_files(title_compare, imdb_year, library_walk)
+        if matches:
+            return matches
+        if use_fallback:
+            matches = _walk_library_files(title_compare, fallback_year, library_walk)
+            if matches:
+                return matches
+    return []
+
+
+def _build_title_variants(result: ResultDict, canonical_compare: str) -> set[str]:
+    """Return a set of normalised titles to search for in the library.
+
+    Includes the canonical IMDb title plus up to 3 alternate titles from
+    IMDbPie's ``alternateTitlesSample`` when the original title contains
+    non-ASCII characters (indicating a foreign-language film).
+    """
+    title_variants: set[str] = {canonical_compare}
+    alternate_titles = result.get("imdb_alternate_titles")
+    if not alternate_titles:
+        return title_variants
+    original = result.get("imdb_original_title") or result.get("imdb_title") or ""
+    if not _contains_non_ascii(original):
+        return title_variants
+    for alt in alternate_titles:
+        norm = normalise_for_compare(alt)
+        if norm:
+            title_variants.add(norm)
+    return title_variants
 
 
 def _check_library_canonical(
@@ -664,7 +695,9 @@ def _check_library_canonical(
     canonical_compare = normalise_for_compare(imdb_title)
     if not canonical_compare:
         return _fail(result, "Cannot normalise IMDb title for canonical library check.")
-    matches = _find_canonical_matches(canonical_compare, imdb_year, library_walk, result)
+
+    title_variants = _build_title_variants(result, canonical_compare)
+    matches = _find_canonical_matches(title_variants, imdb_year, library_walk, result)
     if not matches:
         return _pass(result, f"'{imdb_title} ({imdb_year})' not found in library.")
 
