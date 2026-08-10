@@ -111,6 +111,7 @@ class TestBuildMarkdownBody:
         assert "Leonardo DiCaprio" in body
         assert "Christopher Nolan" in body
         assert "Action" in body
+        assert "Site:" in body
 
     def test_body_opens_with_status_and_score_not_title(self) -> None:
         """Body starts with Status and Score lines, not a redundant Title line."""
@@ -211,6 +212,7 @@ class TestBuildMarkdownBody:
         assert "**Actors:**" in body
         assert "**Directors:**" in body
         assert "**Genres:**" in body
+        assert "**Site:**" in body
         assert "**Release:**" in body
         assert "**Size:**" in body
 
@@ -250,6 +252,23 @@ class TestBuildMarkdownBody:
         assert "[IMDb](https://imdb.com/title/tt1375666)" in body
         assert " | " not in body
         assert "[Inception" not in body  # no torrent link
+
+    def test_empty_index_tracker_shows_unknown(self) -> None:
+        """Body shows 'Unknown' when index_tracker is empty or missing."""
+        result = _make_full_result()
+        result.pop("index_tracker", None)
+        body_md = _build_markdown_body(_make_fields(result))
+        body_text = _build_text_body(_make_fields(result))
+        assert "**Site:** Unknown" in body_md
+        assert "Site: Unknown" in body_text
+
+    def test_index_tracker_preserved_in_body(self) -> None:
+        """Body shows the actual tracker name when index_tracker is set."""
+        result = _make_full_result(index_tracker="RARBG")
+        body_md = _build_markdown_body(_make_fields(result))
+        body_text = _build_text_body(_make_fields(result))
+        assert "**Site:** RARBG" in body_md
+        assert "Site: RARBG" in body_text
 
 
 # _format_result_details

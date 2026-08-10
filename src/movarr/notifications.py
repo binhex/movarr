@@ -335,7 +335,13 @@ def _extract_index_fields(result: ResultDict) -> dict[str, str]:
     index_title = _escape_markdown_text(result.get("index_title") or "")
     index_size_mb = _escape_markdown_text(str(result.get("index_size_mb") or "?"))
     index_details = _safe_url(result.get("index_details") or "")
-    return {"index_title": index_title, "index_size_mb": index_size_mb, "index_details": index_details}
+    index_tracker = _escape_markdown_text(result.get("index_tracker") or "Unknown")
+    return {
+        "index_title": index_title,
+        "index_size_mb": index_size_mb,
+        "index_details": index_details,
+        "index_tracker": index_tracker,
+    }
 
 
 def _queue_status_str(config: Config) -> str:
@@ -392,6 +398,8 @@ def _build_markdown_body(f: dict[str, str]) -> str:
         "",
         f"**Genres:** {f['genres_str']}",
         "",
+        f"**Site:** {f['index_tracker']}",
+        "",
         f"**Release:** {f['index_title']}",
         "",
         f"**Size:** {f['index_size_mb']} MB",
@@ -426,6 +434,8 @@ def _build_text_body(f: dict[str, str]) -> str:
         f"Directors: {f['directors_str']}",
         "",
         f"Genres: {f['genres_str']}",
+        "",
+        f"Site: {f['index_tracker']}",
         "",
         f"Release: {f['index_title']}",
         "",
