@@ -1115,7 +1115,7 @@ def _process_criteria(  # noqa: PLR0912
         raw_count += 1
         result = _enrich_index_metadata(raw_result)
         # ... rest of existing body unchanged ...
-    
+
     return raw_count
 ```
 

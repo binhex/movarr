@@ -82,7 +82,7 @@ The 1080p library file `Léon.1994.1080p.Bluray.x264.mkv` happened to match beca
 ## Impact
 
 **Any movie where:**
-1. The IMDb title contains accented/special characters (é, ñ, ü, ç, ø, etc.) 
+1. The IMDb title contains accented/special characters (é, ñ, ü, ç, ø, etc.)
 2. AND the library filename uses ASCII equivalents (e → e, ñ → n, etc.)
 → Library dedup will fail.
 
