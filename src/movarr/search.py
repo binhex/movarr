@@ -23,7 +23,12 @@ from movarr.file_utils import walk_library
 from movarr.filters import filter_by_imdb, filter_by_index
 from movarr.imdb_metadata import fetch_metadata
 from movarr.imdb_search import search_for_imdb_id
-from movarr.index_proxy_health import check_and_notify
+from movarr.index_proxy_health import (
+    check_and_notify,
+    is_search_circuit_open,
+    record_search_failure,
+    record_search_success,
+)
 from movarr.indexer import IndexProxyProtocol, get_indexer_client
 from movarr.notifications import send_queued_notification
 from movarr.parsing import (
@@ -59,6 +64,10 @@ class _SearchSession:
 def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     """Run the full search pipeline for all configured criteria tiers.
 
+    If a recent search errored (circuit breaker open), the pipeline is
+    skipped entirely and retries automatically after the configured
+    cooldown window expires.
+
     Args:
         config: Application configuration.
         qbt: An already-connected ``QBittorrentClient`` instance.
@@ -77,12 +86,21 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
 
     proxy_name = config.index_proxy.selected.capitalize()
 
+    if is_search_circuit_open(db, config):
+        logger.warning(
+            "{} search circuit is open — skipping search; will retry automatically.",
+            proxy_name,
+        )
+        return
+
     indexer_client = get_indexer_client(config)
+
     if not indexer_client.is_reachable():
         logger.warning(
             "{} is not reachable; skipping search.",
             proxy_name,
         )
+        record_search_failure(db)
         check_and_notify(has_results=False, proxy_name=proxy_name, db=db, config=config)
         return
 
@@ -98,8 +116,18 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         library_walk=library_walk,
     )
 
+    indexer_client.search_failed = False
     total_raw = _run_search_for_site(session, site_cfg)
-    check_and_notify(has_results=total_raw > 0, proxy_name=proxy_name, db=db, config=config)
+    if indexer_client.search_failed:
+        record_search_failure(db)
+    else:
+        record_search_success(db)
+    check_and_notify(
+        has_results=total_raw > 0 and not indexer_client.search_failed,
+        proxy_name=proxy_name,
+        db=db,
+        config=config,
+    )
 
 
 def _queue_and_persist(result: ResultDict, session: _SearchSession) -> None:

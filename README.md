@@ -36,6 +36,10 @@ Automated movie downloader based on IMDb criteria filtering.
   config; falls back to a single pass when all schedulers are disabled.
 - **Automatic config migration** — upgrades the YAML config schema automatically on startup, backing up the
   previous version before applying changes.
+- **Search circuit breaker** — when the index proxy (Jackett/Prowlarr) search endpoint errors, the acquisition
+  scheduler skips subsequent searches for a configurable cooldown window instead of burning through
+  long retry cycles.  The circuit reopens automatically so movarr resumes as soon as the proxy recovers —
+  no manual restart required.
 
 ## Prerequisites
 
@@ -206,6 +210,7 @@ Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services.
 | `prowlarr.api_key` | Prowlarr API key (found in *Settings → General*). | `""` |
 | `prowlarr.read_timeout` | HTTP read timeout in seconds. | `60.0` |
 | `prowlarr.ignore_list` | Prowlarr indexer names to skip when querying with `prowlarr_indexer: all`. Case-insensitive. | `[]` |
+| `circuit_open_minutes` | Minutes to skip search after a proxy search error (circuit breaker). Set to `0` to disable. | `30` |
 
 ### `credentials`
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -977,6 +978,173 @@ class TestRunSearchHealthMonitor:
             run_search(config, qbt, db)
 
         mock_health.assert_not_called()
+
+
+class TestRunSearchCircuitBreaker:
+    """run_search() must fast-fail via the circuit breaker when Prowlarr search errors.
+
+    Regression for: movarr got 'stuck' for hours — Prowlarr recovered on its own but
+    movarr kept burning 45-min search cycles because is_reachable() (indexer list
+    endpoint) passed while the search endpoint hung, and cycles that yielded any
+    result kept has_results=True, so no fast-fail ever triggered.
+    """
+
+    def _make_config(self) -> Config:
+        return Config()
+
+    def test_skips_search_when_circuit_open(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """When the search circuit is open, _process_criteria must NOT be called."""
+        from unittest.mock import MagicMock
+
+        from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        db.kv_set(_KV_SEARCH_FAILED_AT, datetime.datetime.now(datetime.UTC).isoformat())
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_factory = mocker.patch("movarr.search.get_indexer_client")
+        mock_process = mocker.patch("movarr.search._process_criteria")
+
+        run_search(config, qbt, db)
+
+        mock_factory.assert_not_called()
+        mock_process.assert_not_called()
+
+    def test_search_failure_opens_circuit(self, tmp_path: Path) -> None:
+        """When the indexer search errors, the circuit is opened (timestamp set)."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+
+        def _failing_search(*args, **kwargs):
+            mock_indexer.search_failed = True
+            return iter([])
+
+        mock_indexer.search.side_effect = _failing_search
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify"),
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
+
+    def test_successful_search_closes_circuit(self, tmp_path: Path) -> None:
+        """A successful search clears any stale circuit entry (record_search_success)."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        # Expired failure timestamp: circuit closed, so the search proceeds.
+        stale = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)).isoformat()
+        db.kv_set(_KV_SEARCH_FAILED_AT, stale)
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        raw_result = {
+            "index_title": "Some.Movie.2020.1080p",
+            "result": "Passed",
+            "result_details": [],
+        }
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+        mock_indexer.search_failed = False
+        mock_indexer.search.return_value = iter([raw_result])
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify"),
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        assert db.kv_get(_KV_SEARCH_FAILED_AT) is None
+
+    def test_unreachable_proxy_opens_circuit(self, tmp_path: Path) -> None:
+        """When the proxy is unreachable, the circuit is opened too."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
+        from movarr.search import run_search
+
+        config = self._make_config()
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = False
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify"),
+        ):
+            run_search(config, qbt, db)
+
+        assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
+
+    def test_sticky_flag_across_tiers(self, tmp_path: Path) -> None:
+        """A failure in tier 1 persists even when tier 2 succeeds (sticky flag)."""
+        from unittest.mock import MagicMock, patch
+
+        from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
+        from movarr.search import run_search
+
+        config = Config()
+        config.index_site.search = [
+            SearchCriteriaConfig(criteria="1080p"),
+            SearchCriteriaConfig(criteria="2160p"),
+        ]
+        db = Database(tmp_path / "test.db")
+        qbt = MagicMock()
+        qbt.is_connected.return_value = True
+
+        call_count = 0
+
+        def _toggling_search(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First tier errors — set the sticky flag
+                mock_indexer.search_failed = True
+                return iter([])
+            # Second tier succeeds — flag stays True (sticky)
+            return iter([])
+
+        mock_indexer = MagicMock()
+        mock_indexer.is_reachable.return_value = True
+        mock_indexer.search_failed = False
+        mock_indexer.search.side_effect = _toggling_search
+
+        with (
+            patch("movarr.search.get_indexer_client", return_value=mock_indexer),
+            patch("movarr.search.check_and_notify"),
+            patch("movarr.search.walk_library", return_value=[]),
+        ):
+            run_search(config, qbt, db)
+
+        # Tier 1 set search_failed=True, tier 2 didn't reset it (sticky).
+        # Circuit should be open.
+        assert call_count == 2
+        assert mock_indexer.search_failed is True
+        assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
 
 
 class TestRunSearchTorrentClientHealthMonitor:

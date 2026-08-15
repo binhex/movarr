@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.22.0"
+_CONFIG_VERSION = "2.23.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 # Hardcoded filenames constructed from directory paths at runtime.
@@ -145,6 +145,13 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
         "2.22.0",
         [
             (("queue_management", "supersede_enabled"), False),
+        ],
+    ),
+    (
+        "2.22.0",
+        "2.23.0",
+        [
+            (("index_proxy", "circuit_open_minutes"), 30),
         ],
     ),
 ]
@@ -377,6 +384,7 @@ _migrate_v216_to_v217 = _table_fns["2.16.0"]
 _migrate_v219_to_v220 = _table_fns["2.19.0"]
 _migrate_v220_to_v221 = _table_fns["2.20.0"]
 _migrate_v221_to_v222 = _table_fns["2.21.0"]
+_migrate_v222_to_v223 = _table_fns["2.22.0"]
 
 
 MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -403,6 +411,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.19.0": _migrate_v219_to_v220,
     "2.20.0": _migrate_v220_to_v221,
     "2.21.0": _migrate_v221_to_v222,
+    "2.22.0": _migrate_v222_to_v223,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -572,6 +581,7 @@ class IndexProxyConfig(BaseModel):
     selected: str = "jackett"
     jackett: JackettConfig = Field(default_factory=JackettConfig)
     prowlarr: ProwlarrConfig = Field(default_factory=ProwlarrConfig)
+    circuit_open_minutes: int = Field(default=30, ge=0)
 
     @field_validator("selected")
     @classmethod

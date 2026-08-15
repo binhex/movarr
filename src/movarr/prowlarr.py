@@ -39,6 +39,7 @@ class ProwlarrClient:
             connect_timeout=30.0,
             read_timeout=self._cfg.read_timeout,
         )
+        self.search_failed = False
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -102,6 +103,7 @@ class ProwlarrClient:
         url = base_url if indexer_id is None else f"{base_url}&indexerIds={indexer_id}"
         items = self._fetch_search_results(url, index_site)
         if items is None:
+            self.search_failed = True
             return
 
         for item in items:
@@ -180,7 +182,7 @@ class ProwlarrClient:
             return None
 
         # Skip non-torrent results (e.g. Usenet/NZB from mixed indexer setups).
-        if item.get("protocol", "torrent").lower() != "torrent":
+        if (item.get("protocol") or "torrent").lower() != "torrent":
             return None
 
         size_bytes = item.get("size", 0) or 0
