@@ -15,7 +15,16 @@ __all__ = ["IndexProxyProtocol", "get_indexer_client"]
 
 @runtime_checkable
 class IndexProxyProtocol(Protocol):
-    """Protocol satisfied by any indexer proxy client (Jackett, Prowlarr, …)."""
+    """Protocol satisfied by any indexer proxy client (Jackett, Prowlarr, …).
+
+    Attributes:
+        search_failed: Set to True by ``search()`` when the underlying HTTP
+            request errors (e.g. read timeout).  Sticky across multiple
+            ``search()`` calls within the same cycle — the caller
+            (``run_search``) resets it before starting the tier loop.
+    """
+
+    search_failed: bool
 
     def is_reachable(self) -> bool: ...
 

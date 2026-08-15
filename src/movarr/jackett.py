@@ -42,6 +42,7 @@ class JackettClient:
             connect_timeout=30.0,
             read_timeout=self._cfg.read_timeout,
         )
+        self.search_failed = False
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -114,6 +115,7 @@ class JackettClient:
             )
             items = self._fetch_page(url, index_site)
             if items is None:
+                self.search_failed = True
                 break
             if not items:
                 _logger.debug("Empty page at offset {}; stopping.", offset)
