@@ -168,3 +168,21 @@ class TestSearchCircuitBreaker:
         db = _db(tmp_path)
         record_search_success(db)
         assert db.kv_get(_KV_SEARCH_FAILED_AT) is None
+
+    def test_record_failure_swallows_kv_error(self, tmp_path: Path) -> None:
+        """A KV-store error must never propagate: recording a failure is best-effort."""
+        db = _db(tmp_path)
+        with patch.object(db, "kv_set", side_effect=RuntimeError("kv down")):
+            record_search_failure(db)  # must not raise
+
+    def test_record_success_swallows_kv_error(self, tmp_path: Path) -> None:
+        """A KV-store error must never propagate: clearing the circuit is best-effort."""
+        db = _db(tmp_path)
+        with patch.object(db, "kv_delete", side_effect=RuntimeError("kv down")):
+            record_search_success(db)  # must not raise
+
+    def test_is_open_swallows_kv_error_and_reports_closed(self, tmp_path: Path) -> None:
+        """A KV-store read error must not open the circuit; it reports closed."""
+        db = _db(tmp_path)
+        with patch.object(db, "kv_get", side_effect=RuntimeError("kv down")):
+            assert is_search_circuit_open(db, Config()) is False

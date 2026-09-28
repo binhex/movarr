@@ -66,6 +66,20 @@ class TestHttpClientInit:
         assert HttpClient()._user_agent  # non-empty
 
 
+class TestHttpClientContextManager:
+    """HttpClient is usable as a context manager and closes its session on exit."""
+
+    def test_context_manager_closes_session_on_exit(self, mocker: MockerFixture) -> None:
+        """Entering yields the client; leaving closes the underlying session exactly once."""
+        close = mocker.patch("requests.Session.close")
+
+        with HttpClient() as client:
+            assert client is not None
+            close.assert_not_called()
+
+        close.assert_called_once()
+
+
 # get()
 
 
