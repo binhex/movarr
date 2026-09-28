@@ -32,7 +32,7 @@ from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
 from movarr.filters import _RE_SPECIAL as _RE_EDITION
 from movarr.filters import _UNICODE_APOSTROPHES
-from movarr.parsing import extract_after_year, extract_resolution, sanitise
+from movarr.parsing import extract_movie_title, extract_resolution, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
@@ -45,16 +45,21 @@ _BBFC_ORDER = ["U", "PG", "12", "12A", "15", "18", "R18"]
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _MAX_VIDEO_FILES_IN_MOVIE_DIR = 4  # safety cap: abort deletion if dir contains more than this many video files
 _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
-# Known extras/bonus-content markers — files containing these in the post-year
-# segment are not quality variants of the main feature and must never be deleted.
+# Known extras/bonus-content markers.  Matching is scoped by _title_remainder(), which
+# aligns and removes the movie's own title from the filename first, so a movie whose
+# title contains a marker word (e.g. 'Interview with the Vampire') is not misclassified
+# as bonus content and its superseded library file can still be deleted.
+# 'extras' and 'specials' are deliberately plural-only: their singular forms
+# collide with real titles ('Extra') and edition labels ('Special Edition').
 _EXTRAS_RE = re.compile(
     r"\b(?:behind[\s_.\-]+the[\s_.\-]+scenes|making[\s_.\-]+of|featurettes?"
     r"|deleted[\s_.\-]+scenes?|interviews?|short[\s_.\-]+films?"
-    r"|theatrical[\s_.\-]+trailer|trailer|sample"
-    r"|bonus|extras|special[\s_.\-]+features?|specials)\b",
+    r"|theatrical[\s_.\-]+trailer|trailers?|samples?"
+    r"|bonus(?:es)?|extras|special[\s_.\-]+features?|specials)\b",
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
+_LEADING_ARTICLES = frozenset({"a", "an", "the"})
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -834,22 +839,67 @@ def _check_delete_preconditions(
     return video_files, resolved_dst
 
 
-def _is_extras_file(fname: str, lib_san: str) -> bool:
-    """Return True if *fname* looks like extras/bonus content."""
-    lib_after = extract_after_year(lib_san) or ""
+def _title_remainder(lib_san: str, dir_san: str) -> str | None:
+    """Return the part of *lib_san* that follows the movie's own title.
+
+    The file's title region is aligned with the library folder title, tolerating a
+    release that drops a leading article (folder 'The Making of a Lady' vs file
+    'Making of a Lady 2012').  The title must be followed by a word separator, so a
+    short title such as 'The' cannot match the start of an unrelated word like
+    'Theodore'.
+
+    Returns *None* when the title cannot be aligned, which means the caller cannot
+    tell where the movie's own name ends in the filename.
+    """
+    title = extract_movie_title(dir_san) or ""
+    if not title:
+        return None
+    variants = [title]
+    head, _, tail = title.partition(" ")
+    if tail and head.lower() in _LEADING_ARTICLES:
+        variants.append(tail)
+    lowered = lib_san.lower()
+    for variant in variants:
+        if not lowered.startswith(variant.lower()):
+            continue
+        remainder = lib_san[len(variant) :]
+        if not remainder or remainder.startswith(" "):
+            return remainder
+    return None
+
+
+def _marker_outside_title(lib_san: str, dir_san: str) -> bool:
+    """Return True if *lib_san* holds an extras marker that is not part of the title.
+
+    Used when the movie's title could not be aligned with the filename, so the name
+    may still contain it.  A marker whose matched text appears in the movie's own
+    name (e.g. 'Interview' in 'Interview with the Vampire') belongs to that title,
+    not to bonus content.
+    """
+    haystack = dir_san.lower()
+    return any(match.group(0).lower() not in haystack for match in _EXTRAS_RE.finditer(lib_san.lower()))
+
+
+def _is_extras_file(fname: str, lib_san: str, movie_dir_name: str) -> bool:
+    """Return True if *fname* looks like extras/bonus content for *movie_dir_name*."""
     lib_bracket = " ".join(_BRACKET_RE.findall(fname))
-    # Always check the full sanitised name so that extras keywords are detected
-    # regardless of whether a parseable year is present.
-    full_match = _EXTRAS_RE.search(lib_san)
-    return bool(_EXTRAS_RE.search(lib_after) or (lib_bracket and _EXTRAS_RE.search(lib_bracket.lower())) or full_match)
+    if lib_bracket and _EXTRAS_RE.search(lib_bracket.lower()):
+        return True
+    dir_san = sanitise(movie_dir_name) or ""
+    remainder = _title_remainder(lib_san, dir_san)
+    if remainder is not None:
+        # The movie's own title has been removed, so any marker left in the
+        # remainder is release-name metadata and counts wherever it appears.
+        return bool(_EXTRAS_RE.search(remainder))
+    return _marker_outside_title(lib_san, dir_san)
 
 
-def _is_extras_primary(new_primary_fname: str, new_san: str) -> bool:
-    """Return True if *new_primary_fname* looks like extras/bonus content.
+def _is_extras_primary(new_primary_fname: str, new_san: str, movie_dir_name: str) -> bool:
+    """Return True if *new_primary_fname* looks like extras/bonus content for *movie_dir_name*.
 
     Delegates to ``_is_extras_file`` since the logic is identical.
     """
-    return _is_extras_file(new_primary_fname, new_san)
+    return _is_extras_file(new_primary_fname, new_san, movie_dir_name)
 
 
 def _run_pre_copy_hook(config: Config, resolved_dst_dir: str, dst_dir: str) -> bool:
@@ -939,6 +989,7 @@ def _delete_superseded_files(
     - The newly-copied primary file
     - Files written in the current torrent run (*copied_fnames*)
     - Files matching extras/bonus-content patterns
+    - Files whose edition set differs from the new primary's (different cuts are preserved)
 
     The search pipeline (:func:`movarr.filters._check_library_canonical`) already
     guarantees the newly-downloaded file is strictly better than anything in the
@@ -967,7 +1018,7 @@ def _delete_superseded_files(
     video_files, resolved_dst = preconditions
 
     new_san = sanitise(new_primary_fname) or ""
-    if _is_extras_primary(new_primary_fname, new_san):
+    if _is_extras_primary(new_primary_fname, new_san, resolved_dst.name):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
             new_primary_fname,
@@ -1002,7 +1053,7 @@ def _delete_superseded_loop(
         if fname in protected:
             continue
         lib_san = sanitise(fname) or ""
-        if _is_extras_file(fname, lib_san):
+        if _is_extras_file(fname, lib_san, resolved_dst.name):
             logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
             continue
         if new_editions != _edition_set(lib_san):

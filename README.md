@@ -266,7 +266,7 @@ Each entry in `search`:
 | `copy_library_rules` | Ordered list of routing rules (see below). | `[]` |
 | `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches. | `""` |
 | `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches. | `""` |
-| `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Defaults to `false`. Permanent deletion — use with care. | `false` |
+| `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Files matching known extras/bonus naming patterns, and releases of a different edition or cut, are not deleted. Defaults to `false`. Permanent deletion — use with care. | `false` |
 
 Each entry in `copy_library_rules`:
 
@@ -350,7 +350,8 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 3. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
 4. Falls back to `default_copy_library` if no rule matches.
 5. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
-6. Marks the history record as `Completed`.
+6. Deletes superseded library files when `delete_lower_quality` is enabled.
+7. Marks the history record as `Completed`.
 
 ## Scheduler
 

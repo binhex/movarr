@@ -1678,6 +1678,26 @@ class TestSupersede:
         # Must NOT delete existing torrents when the new one failed to queue
         session.qbt.delete_torrent.assert_not_called()
 
+    def test_finalize_and_queue_skips_queue_when_superseded(self, mocker: MockerFixture) -> None:
+        """A candidate beaten by an in-queue torrent is recorded Failed and never queued.
+
+        Drives the real supersession decision rather than patching ``_supersede``, so the
+        early-return guard and the Failed persistence are both exercised.
+        """
+        from movarr.search import _finalize_and_queue
+
+        # Weaker candidate than the queued torrent, so the real decision marks it Failed.
+        result = self._make_result(title="The Matrix 1999 1080p BluRay")
+        torrent_map = self._make_torrent_map([("hash1", "The Matrix 1999 2160p BluRay REMUX", "tt0133093", 300)])
+        session = self._make_session(mocker, torrent_map=torrent_map)
+
+        assert _finalize_and_queue(result, session) is True
+        assert result["result"] == "Failed"
+        # The real supersession decision persists the Failed result...
+        session.db.write.assert_called_once()
+        # ...and a superseded candidate is never queued.
+        session.qbt.add_torrent.assert_not_called()
+
     def test_skips_match_with_empty_torrent_name(self, mocker: MockerFixture) -> None:
         """Matching IMDb torrent with empty name is skipped (cannot sanitise)."""
         from movarr.search import _supersede

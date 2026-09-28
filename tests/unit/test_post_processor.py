@@ -504,7 +504,11 @@ class TestDeleteSupersededFiles:
         assert not (movie_dir / lib_fname).exists()
 
     def test_skips_deletion_when_new_primary_has_bracketed_extras(self, tmp_path: Path) -> None:
-        """New primary with bracketed extras token in raw filename must not trigger deletion."""
+        """New primary with a bracketed extras token in the raw filename must not trigger deletion.
+
+        Guards the regression where narrowing the extras regex let bracket-wrapped
+        extras slip through and the real feature file was deleted.
+        """
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
         new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
@@ -587,19 +591,236 @@ class TestDeleteSupersededFiles:
         assert count == 1
         assert not (movie_dir / lib_fname).exists()
 
-    def test_bracketed_extras_still_detected(self, tmp_path: Path) -> None:
-        """Bracket-wrapped extras keyword still prevents deletion after false-positive fix."""
-        movie_dir = tmp_path / "The Matrix (1999)"
+    def test_deletes_superseded_when_movie_title_contains_extras_keyword(self, tmp_path: Path) -> None:
+        """A movie titled 'Interview with the Vampire' is not extras content.
+
+        The extras guard matched the word 'Interview' inside the movie's own title,
+        aborted the deletion pass, and left both the new and the superseded file in
+        the library folder (reported from a live run on 2026-09-17).
+        """
+        movie_dir = tmp_path / "Interview with the Vampire The Vampire Chronicles (1994)"
         movie_dir.mkdir()
-        new_fname = "The.Matrix.1999.2160p.[Featurettes].mkv"
+        new_fname = (
+            "Interview.with.the.Vampire.The.Vampire.Chronicles.1994.4K.HDR.DV.2160p.BDRemux Ita Eng Fre x265-NAHOM.mkv"
+        )
         (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The.Matrix.1999.1080p.BluRay.mkv"
+        lib_fname = (
+            "Interview with the Vampire The Vampire Chronicles 1994 UHD BluRay 2160p HDR10 DV"
+            " HEVC TrueHD Atmos 7 1 x265 E.mkv"
+        )
         (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_title_contains_making_of_phrase(self, tmp_path: Path) -> None:
+        """A movie whose own title is 'The Making Of ...' is not extras content."""
+        movie_dir = tmp_path / "Charles R The Making Of A Monarch (2023)"
+        movie_dir.mkdir()
+        new_fname = "Charles.R.The.Making.Of.A.Monarch.2023.1080p.WEBRip.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Charles R The Making Of A Monarch 2023 720p HDTV.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_title_contains_bonus_keyword(self, tmp_path: Path) -> None:
+        """A movie titled 'Bonus Track' is not extras content."""
+        movie_dir = tmp_path / "Bonus Track (2020)"
+        movie_dir.mkdir()
+        new_fname = "Bonus.Track.2020.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Bonus Track 2020 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_library_title_contains_extras_keyword(self, tmp_path: Path) -> None:
+        """A superseded library file is not protected just because its title says 'Interview'."""
+        movie_dir = tmp_path / "Interview with the Vampire (1994)"
+        movie_dir.mkdir()
+        new_fname = "IWTV.1994.2160p.Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Interview.with.the.Vampire.1994.1080p.BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_release_title_shorter_than_folder_title(self, tmp_path: Path) -> None:
+        """A release using a short title form still supersedes the library file.
+
+        The library folder carries the canonical dual title, while the release is
+        named 'Interview With The Vampire'; the two do not share a title prefix, so
+        the extras check must fall back to the release-name segment only.
+        """
+        movie_dir = tmp_path / "Interview with the Vampire The Vampire Chronicles (1994)"
+        movie_dir.mkdir()
+        new_fname = "Interview.With.The.Vampire.1994.2160p.UHD.BluRay.REMUX.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Interview with the Vampire The Vampire Chronicles 1994 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_protects_pre_year_bare_extras_marker(self, tmp_path: Path) -> None:
+        """A bare extras marker before the year stays protected from deletion.
+
+        'Movie Featurettes 2019 1080p.mkv' is bonus content of 'Movie (2019)', not a
+        quality variant of the main feature, so it must never be auto-deleted.
+        """
+        movie_dir = tmp_path / "Movie (2019)"
+        movie_dir.mkdir()
+        new_fname = "Movie 2019 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie Featurettes 2019 1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"extras")
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
 
         assert count == 0
         assert (movie_dir / lib_fname).exists()
+
+    def test_protects_plural_trailers_and_samples(self, tmp_path: Path) -> None:
+        """Plural forms 'trailers' and 'samples' are recognised as extras markers."""
+        for lib_fname in ("The Matrix 1999 Trailers 1080p.mkv", "The Matrix 1999 samples.mkv"):
+            movie_dir = tmp_path / lib_fname.replace(".mkv", "")
+            movie_dir.mkdir()
+            new_fname = "The Matrix 1999 2160p Remux.mkv"
+            (movie_dir / new_fname).write_bytes(b"new")
+            (movie_dir / lib_fname).write_bytes(b"extras")
+
+            count = _delete_superseded_files(str(movie_dir), str(movie_dir.parent), new_fname, Config())
+
+            assert count == 0, f"{lib_fname} must be protected"
+            assert (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_folder_title_has_no_year(self, tmp_path: Path) -> None:
+        """A folder named without a year must not block deletion for a phrase title.
+
+        Without a year in the folder name the movie title cannot be extracted, so a
+        title containing 'Making Of' must not be mistaken for bonus content.
+        """
+        movie_dir = tmp_path / "The Making of a Lady"
+        movie_dir.mkdir()
+        new_fname = "The Making of a Lady 2012 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Making of a Lady 2012 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_deletes_superseded_when_release_drops_leading_article(self, tmp_path: Path) -> None:
+        """A release that drops the leading article of a phrase title still supersedes."""
+        movie_dir = tmp_path / "The Making of a Lady (2012)"
+        movie_dir.mkdir()
+        new_fname = "Making of a Lady 2012 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "The Making of a Lady 2012 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"old")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 1
+        assert not (movie_dir / lib_fname).exists()
+
+    def test_protects_marker_when_release_name_lacks_title_prefix(self, tmp_path: Path) -> None:
+        """An extras file whose name does not start with the folder title is protected.
+
+        'Behind the Scenes 1999 1080p.mkv' shares no title prefix with the folder, so
+        the title cannot be aligned; the marker must still be recognised.
+        """
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Behind the Scenes 1999 1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"extras")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_protects_marker_when_folder_title_has_no_year(self, tmp_path: Path) -> None:
+        """A folder named without a year cannot align the title, so markers still count."""
+        movie_dir = tmp_path / "Movie"
+        movie_dir.mkdir()
+        new_fname = "Movie 2019 2160p Remux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Movie Featurettes 2019 1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"extras")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_protects_deleted_scenes_when_release_name_lacks_title_prefix(self, tmp_path: Path) -> None:
+        """A bonus file of the incident movie is protected even without a title prefix.
+
+        The title ('Interview') is part of the movie's own name, so it must be ignored;
+        the 'Deleted Scenes' phrase is not, so it must still mark the file as extras.
+        """
+        movie_dir = tmp_path / "Interview with the Vampire The Vampire Chronicles (1994)"
+        movie_dir.mkdir()
+        new_fname = "Interview.with.the.Vampire.The.Vampire.Chronicles.1994.4K.HDR.DV.2160p.BDRemux.mkv"
+        (movie_dir / new_fname).write_bytes(b"new")
+        lib_fname = "Interview with the Vampire Deleted Scenes 1994 1080p.mkv"
+        (movie_dir / lib_fname).write_bytes(b"extras")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_primary_guard_fires_when_release_name_lacks_title_prefix(self, tmp_path: Path) -> None:
+        """An extras file as the new primary must abort the pass, protecting the feature."""
+        movie_dir = tmp_path / "The Matrix (1999)"
+        movie_dir.mkdir()
+        new_fname = "Featurettes 1999 1080p.mkv"
+        (movie_dir / new_fname).write_bytes(b"extras")
+        lib_fname = "The Matrix 1999 1080p BluRay.mkv"
+        (movie_dir / lib_fname).write_bytes(b"feature")
+
+        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+        assert count == 0
+        assert (movie_dir / lib_fname).exists()
+
+    def test_protects_bonus_marker_forms(self, tmp_path: Path) -> None:
+        """'Bonus', 'Bonuses' and 'bonus-tracks' are all recognised as extras markers."""
+        for lib_fname in (
+            "Movie 1999 Bonus 1080p.mkv",
+            "Movie 1999 Bonuses 1080p.mkv",
+            "Movie 1999 bonus-tracks 1080p.mkv",
+        ):
+            movie_dir = tmp_path / lib_fname.replace(".mkv", "")
+            movie_dir.mkdir()
+            new_fname = "Movie 1999 2160p Remux.mkv"
+            (movie_dir / new_fname).write_bytes(b"new")
+            (movie_dir / lib_fname).write_bytes(b"extras")
+
+            count = _delete_superseded_files(str(movie_dir), str(movie_dir.parent), new_fname, Config())
+
+            assert count == 0, f"{lib_fname} must be protected"
+            assert (movie_dir / lib_fname).exists()
 
     def test_brace_wrapped_extras_detected(self, tmp_path: Path) -> None:
         """Curly-brace-wrapped extras keyword prevents deletion (sanitise strips braces too)."""
