@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trans"
+version = "2.1.0"
+description = "National characters transcription module (vendored, see README.md)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Alexander Zelenyak", email = "zzz.sochi@gmail.com" },
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+[tool.setuptools]
+py-modules = ["trans"]

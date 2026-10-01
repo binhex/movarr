@@ -1,3 +1,6 @@
+# Vendored third-party code is kept verbatim, so no hook may rewrite it.
+exclude: ^vendor/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

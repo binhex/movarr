@@ -49,9 +49,18 @@ where = ["src"]
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
 
+# `trans` 2.1.0 is only published as a bzip2 sdist, which uv >= 0.12 refuses to
+# extract. Resolve it from the vendored copy instead (see vendor/trans/README.md).
+[tool.uv]
+override-dependencies = ["trans>=2.1.0"]
+
+[tool.uv.sources]
+trans = { path = "vendor/trans" }
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = [
@@ -90,6 +99,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 strict_equality = true
 mypy_path = "src"
+exclude = ["vendor"]
 plugins = ["pydantic.mypy"]
 
 # Relax for tests
