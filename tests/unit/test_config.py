@@ -12,6 +12,7 @@ from movarr.config import (
     Config,
     DatabaseConfig,
     GeneralConfig,
+    JackettConfig,
     ProwlarrConfig,
     QueueManagementConfig,
     ScheduleTaskConfig,
@@ -171,7 +172,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -196,14 +197,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -214,7 +215,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -225,7 +226,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -236,7 +237,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -251,8 +252,8 @@ class TestConfigMigration:
         for task in ("acquisition", "queue_management", "post_processing"):
             assert schedule.get(task, {}).get("run_on_start") is True
 
-    def test_v220_to_v221_adds_poster_fields(self, tmp_path: Path) -> None:
-        """Migration to v2.22.0 adds poster_embed and poster_art defaults."""
+    def test_v220_to_v221_adds_poster_art_and_drops_dead_poster_embed(self, tmp_path: Path) -> None:
+        """The chain adds poster_art defaults and removes the dead poster_embed settings."""
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text(
             "general:\n"
@@ -263,17 +264,37 @@ class TestConfigMigration:
             "  post_process_enabled: true\n"
         )
         cfg = load_config(cfg_file)
-        assert cfg.notification.poster_embed_enabled is True
-        assert cfg.notification.poster_embed_width == 500
         assert cfg.post_process.poster_art.filename == ""
         assert cfg.post_process.poster_art.download_width == 0
+        # poster_embed_* were added in 2.21.0 and removed again in 2.24.0 as dead config.
+        assert not hasattr(cfg.notification, "poster_embed_enabled")
+        assert not hasattr(cfg.notification, "poster_embed_width")
+        on_disk = yaml.safe_load(cfg_file.read_text())
+        assert "poster_embed_enabled" not in on_disk.get("notification", {})
+        assert "poster_embed_width" not in on_disk.get("notification", {})
+
+    def test_v223_to_v224_drops_dead_poster_embed_settings(self, tmp_path: Path) -> None:
+        """A v2.23.0 config loses the dead poster_embed_* keys on migration."""
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text(
+            "general:\n"
+            "  config_version: '2.23.0'\n"
+            "notification:\n"
+            "  poster_embed_enabled: false\n"
+            "  poster_embed_width: 900\n"
+        )
+        cfg = load_config(cfg_file)
+        assert cfg.general.config_version == "2.24.0"
+        on_disk = yaml.safe_load(cfg_file.read_text())
+        assert "poster_embed_enabled" not in on_disk.get("notification", {})
+        assert "poster_embed_width" not in on_disk.get("notification", {})
 
     def test_v221_to_v222_adds_supersede_enabled(self, tmp_path: Path) -> None:
         """Migration to v2.22.0 adds queue_management.supersede_enabled: false."""
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text("general:\n  config_version: '2.21.0'\n")
         cfg = load_config(cfg_file)
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.queue_management.supersede_enabled is False
 
     def test_v222_to_v223_adds_circuit_open_minutes(self, tmp_path: Path) -> None:
@@ -281,7 +302,7 @@ class TestConfigMigration:
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text("general:\n  config_version: '2.22.0'\n")
         cfg = load_config(cfg_file)
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.index_proxy.circuit_open_minutes == 30
 
 
@@ -457,7 +478,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -496,7 +517,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -516,7 +537,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -531,7 +552,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -549,7 +570,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -561,7 +582,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.23.0"
+        assert cfg.general.config_version == "2.24.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -762,8 +783,12 @@ class TestMigrationV211ToV212:
         result = _migrate_v211_to_v212(raw)
         assert result["queue_management"]["metadata_delete_torrent_data"] is True
 
-    def test_overwrites_explicit_false_value(self) -> None:
-        """Migration explicitly sets True even if the config had False."""
+    def test_corrects_the_old_false_default(self) -> None:
+        """``false`` at 2.11.0 is the old default and must be corrected.
+
+        The value is indistinguishable from a deliberate choice, and leaving it
+        would keep the bug this migration exists to fix.
+        """
         raw: dict = {
             "general": {"config_version": "2.11.0"},
             "queue_management": {
@@ -771,6 +796,12 @@ class TestMigrationV211ToV212:
                 "metadata_delete_torrent_data": False,
             },
         }
+        result = _migrate_v211_to_v212(raw)
+        assert result["queue_management"]["stalled_delete_torrent_data"] is True
+        assert result["queue_management"]["metadata_delete_torrent_data"] is True
+
+    def test_fills_in_the_new_default_when_absent(self) -> None:
+        raw: dict = {"general": {"config_version": "2.11.0"}, "queue_management": {}}
         result = _migrate_v211_to_v212(raw)
         assert result["queue_management"]["stalled_delete_torrent_data"] is True
         assert result["queue_management"]["metadata_delete_torrent_data"] is True
@@ -963,12 +994,12 @@ class TestMigrationV216ToV217:
         )
         config = load_config(p)
         # Runtime version bumped
-        assert config.general.config_version == "2.23.0"
+        assert config.general.config_version == "2.24.0"
         # hook_timeout_mins added
         assert config.post_process.hooks.hook_timeout_mins == 5.0
         # Migration persisted to disk
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["general"]["config_version"] == "2.23.0"
+        assert on_disk["general"]["config_version"] == "2.24.0"
         assert on_disk["post_process"]["hooks"].get("hook_timeout_mins") == 5.0
 
 
@@ -1035,7 +1066,9 @@ class TestMigrationInfiniteLoopGuard:
     def test_no_op_migration_does_not_loop_forever(self, tmp_path: Path, mocker: MockerFixture) -> None:
         from movarr.config import _run_migrations
 
-        sentinel_version = "__test_loop_guard__"
+        # Version strings are normalised to X.Y.Z before lookup, so the
+        # sentinel must be a canonical version that the patched table keys on.
+        sentinel_version = "2.23.0"
 
         def _no_op(raw: dict) -> dict:
             # Deliberately does NOT increment config_version.
@@ -1155,7 +1188,7 @@ class TestLoadConfigDirectoryPath:
         config = load_config(str(config_dir))
         assert isinstance(config, Config)
         assert (config_dir / "movarr.yml").exists()
-        assert config.general.config_version == "2.23.0"
+        assert config.general.config_version == "2.24.0"
         assert config.general.log_path == "logs"
         assert config.general.db_path == "db"
         assert config.general.pid_path == "pids"
@@ -1324,17 +1357,22 @@ class TestGeneralNull:
         p.write_text("general:\n")
         config = load_config(p)
         assert isinstance(config, Config)
-        assert config.general.config_version == "2.23.0"
+        assert config.general.config_version == "2.24.0"
 
 
 class TestMigrationV216ToV217Isolated:
     """Direct unit tests for the v2.16.0 -> v2.17.0 migration function."""
 
-    def test_adds_hook_timeout_mins(self) -> None:
-        """Migration inserts hook_timeout_mins into hooks block."""
+    def test_does_not_inject_a_default_that_would_shadow_a_legacy_value(self) -> None:
+        """The 2.16 -> 2.17 step must not pre-seed hook_timeout_mins.
+
+        Seeding the default here made the next step (2.17 -> 2.18) discard a
+        user's converted ``hook_timeout_secs`` value; the key is introduced by
+        that later step instead.
+        """
         raw: dict = {"general": {"config_version": "2.16.0"}}
         result = _migrate_v216_to_v217(raw)
-        assert result["post_process"]["hooks"]["hook_timeout_mins"] == 5.0
+        assert "hook_timeout_mins" not in result.get("post_process", {}).get("hooks", {})
 
     def test_does_not_overwrite_existing_value(self) -> None:
         """Migration preserves a pre-existing hook_timeout_mins value."""
@@ -1608,14 +1646,21 @@ class TestStripNullValues:
 
     def test_null_hooks_stripped_when_already_current_version(self, tmp_path: Path) -> None:
         """Early-return path also strips nulls from already-current configs."""
+        from movarr.config import _CONFIG_VERSION
+
         p = tmp_path / "config.yml"
         p.write_text(
-            "general:\n  config_version: '2.18.0'\npost_process:\n  hooks:\n    pre_copy:\n    post_copy: echo ok\n"
+            f"general:\n  config_version: '{_CONFIG_VERSION}'\n"
+            "post_process:\n  hooks:\n    pre_copy:\n    post_copy: echo ok\n"
         )
         config = load_config(p)
         assert isinstance(config, Config)
+        # The already-current path rewrites the file with nulls removed rather
+        # than merging in defaults, so the empty key is absent (and the loaded
+        # config falls back to the model default).
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["post_process"]["hooks"]["pre_copy"] == ""
+        assert "pre_copy" not in on_disk["post_process"]["hooks"]
+        assert config.post_process.hooks.pre_copy == ""
 
     def test_null_in_list_dict_item_stripped(self, tmp_path: Path) -> None:
         """List-of-dict entries with null values are also cleaned."""
@@ -1634,3 +1679,313 @@ class TestStripNullValues:
         rule = on_disk["post_process"]["copy_library_rules"][0]
         # max_certification null must be stripped from the list-of-dicts entry
         assert "max_certification" not in rule
+
+
+class TestJackettLimitValidation:
+    """jackett.limit must be a positive integer (0 would loop forever)."""
+
+    def test_zero_limit_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            JackettConfig(limit=0)
+
+    def test_negative_limit_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            JackettConfig(limit=-1)
+
+    def test_positive_limit_accepted(self) -> None:
+        assert JackettConfig(limit=100).limit == 100
+
+
+class TestMigrationChainIntegrity:
+    """The migration chain must be complete and terminate at the current version."""
+
+    def test_every_version_links_to_the_next(self) -> None:
+        """Each migration's output version must exist as another migration key or be current."""
+        from movarr.config import _CONFIG_VERSION, MIGRATIONS
+
+        broken = []
+        for from_version in MIGRATIONS:
+            probe = {"general": {"config_version": from_version}}
+            migrated = MIGRATIONS[from_version](probe)
+            to_version = migrated["general"]["config_version"]
+            if to_version == from_version:
+                broken.append((from_version, "no version bump"))
+            elif to_version not in MIGRATIONS and to_version != _CONFIG_VERSION:
+                broken.append((from_version, to_version))
+
+        assert broken == [], f"broken migration links: {broken}"
+
+    def test_chain_from_initial_version_terminates_at_current(self, tmp_path: Path) -> None:
+        """A config at the initial version migrates all the way to _CONFIG_VERSION."""
+        from movarr.config import _CONFIG_VERSION, _INITIAL_CONFIG_VERSION
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text(f"general:\n  config_version: '{_INITIAL_CONFIG_VERSION}'\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == _CONFIG_VERSION
+
+    def test_hook_timeout_secs_survives_the_chain_as_minutes(self, tmp_path: Path) -> None:
+        """A pre-2.17 hook_timeout_secs value must reach hook_timeout_mins converted, not reset."""
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text(
+            "general:\n  config_version: '2.16.0'\npost_process:\n  hooks:\n    hook_timeout_secs: 600\n"
+        )
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.post_process.hooks.hook_timeout_mins == 10.0
+        assert not hasattr(cfg.post_process.hooks, "hook_timeout_secs")
+
+    def test_newer_config_version_is_accepted(self, tmp_path: Path) -> None:
+        """A config written by a newer build loads without crashing."""
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '99.0.0'\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "99.0.0"
+
+
+class TestVersionKey:
+    """_version_key produces comparable numeric tuples."""
+
+    def test_orders_numerically_not_lexically(self) -> None:
+        from movarr.config import _version_key
+
+        assert _version_key("2.9.0") < _version_key("2.10.0")
+
+    def test_non_numeric_components_fall_back_to_zero(self) -> None:
+        from movarr.config import _version_key
+
+        assert _version_key("2.x.0") == (2, 0, 0)
+
+
+class TestMigrationReplacesNonDictValue:
+    """A migration must replace a scalar where a nested block is expected."""
+
+    def test_non_dict_intermediate_value_is_replaced(self) -> None:
+        from movarr.config import _migrate_v213_to_v214
+
+        raw: dict = {"general": {"config_version": "2.13.0"}, "post_process": "not-a-dict"}
+
+        migrated = _migrate_v213_to_v214(raw)
+
+        assert isinstance(migrated["post_process"], dict)
+        assert migrated["general"]["config_version"] == "2.14.0"
+
+
+class TestNullSectionsDuringMigration:
+    """A null YAML section must not crash a hand-written migration."""
+
+    def test_null_filters_section_is_replaced(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.6.0'\nfilters:\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "2.24.0"
+
+    def test_scalar_section_is_replaced(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.11.0'\nqueue_management: nope\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "2.24.0"
+        assert cfg.queue_management.stalled_delete_torrent_data is True
+
+
+class TestNestedUnknownKeys:
+    """Unknown keys are reported with their dotted path, at any depth."""
+
+    def test_nested_typo_is_reported(self) -> None:
+        from movarr.config import _unknown_key_paths
+
+        unknown = _unknown_key_paths(
+            Config,
+            {"filters": {"reject_genres_list": []}, "general": {"log_level_console": "info"}},
+        )
+
+        assert unknown == ["filters.reject_genres_list"]
+
+    def test_typo_inside_list_of_submodels_is_reported(self) -> None:
+        from movarr.config import _unknown_key_paths
+
+        unknown = _unknown_key_paths(Config, {"index_site": {"search": [{"criteria": "1080p", "bogus": 1}]}})
+
+        assert unknown == ["index_site.search[].bogus"]
+
+
+class TestVersionNormalisation:
+    """A hand-edited two-component version still enters the migration chain."""
+
+    def test_two_component_version_is_normalised(self) -> None:
+        from movarr.config import _normalise_version
+
+        assert _normalise_version("2.3") == "2.3.0"
+        assert _normalise_version(2.3) == "2.3.0"
+
+    def test_short_version_migrates(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.23'\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "2.24.0"
+
+
+class TestPaginationAndQueueThresholdValidation:
+    """Pagination and deletion thresholds must reject destructive values."""
+
+    def test_negative_jackett_offset_rejected(self) -> None:
+        from movarr.config import JackettConfig
+
+        with pytest.raises(ValidationError):
+            JackettConfig(offset=-1)
+
+    def test_zero_stalled_threshold_rejected(self) -> None:
+        from movarr.config import QueueManagementConfig
+
+        with pytest.raises(ValidationError):
+            QueueManagementConfig(stalled_delete_torrent_max_mins=0)
+
+    def test_zero_metadata_threshold_rejected(self) -> None:
+        from movarr.config import QueueManagementConfig
+
+        with pytest.raises(ValidationError):
+            QueueManagementConfig(metadata_delete_torrent_max_mins=0)
+
+
+class TestUnknownKeyMappingFields:
+    """Mapping-valued fields must not have their keys treated as model fields."""
+
+    def test_override_genre_entries_are_not_flagged(self) -> None:
+        from movarr.config import _unknown_key_paths
+
+        unknown = _unknown_key_paths(Config, {"filters": {"override_genre": {"action": {"minimum_rating": 5}}}})
+
+        assert unknown == []
+
+    def test_typo_inside_a_mapping_value_is_still_flagged(self) -> None:
+        from movarr.config import _unknown_key_paths
+
+        unknown = _unknown_key_paths(Config, {"filters": {"override_genre": {"action": {"minimum_ratin": 5}}}})
+
+        assert unknown == ["filters.override_genre.minimum_ratin"]
+
+
+class TestRemainingNullSectionMigrations:
+    """The last two hand-written migrations also tolerate null sections."""
+
+    def test_null_index_site_section(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.15.0'\nindex_site:\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "2.24.0"
+
+    def test_scalar_schedule_task(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.3.0'\nschedule:\n  acquisition: false\n")
+
+        cfg = load_config(cfg_file)
+
+        assert cfg.general.config_version == "2.24.0"
+
+
+class TestHookTimeoutValidation:
+    """A negative hook timeout would kill every hook instantly."""
+
+    def test_negative_timeout_rejected(self) -> None:
+        from movarr.config import PostProcessHooksConfig
+
+        with pytest.raises(ValidationError):
+            PostProcessHooksConfig(hook_timeout_mins=-1)
+
+    def test_zero_timeout_allowed(self) -> None:
+        from movarr.config import PostProcessHooksConfig
+
+        assert PostProcessHooksConfig(hook_timeout_mins=0).hook_timeout_mins == 0
+
+
+class TestFloatVersionWarning:
+    """An unquoted float config_version is normalised and warned about."""
+
+    def test_float_version_is_normalised(self) -> None:
+        from movarr.config import _normalise_version
+
+        assert _normalise_version(2.1) == "2.1.0"
+
+
+class TestRoundFiveConfigBranches:
+    """Branches added for the round-five hardening."""
+
+    def test_zero_prowlarr_indexer_rejected(self) -> None:
+        from movarr.config import IndexSiteConfig
+
+        with pytest.raises(ValidationError):
+            IndexSiteConfig(prowlarr_indexer="0")
+
+    def test_negative_prowlarr_indexer_rejected(self) -> None:
+        from movarr.config import IndexSiteConfig
+
+        with pytest.raises(ValidationError):
+            IndexSiteConfig(prowlarr_indexer="-1")
+
+    def test_unknown_older_version_warns(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '0.0.1'\n")
+
+        cfg = load_config(cfg_file)
+
+        # The value is preserved for the operator to inspect.
+        assert cfg.general.config_version == "0.0.1"
+
+
+class TestProwlarrLimit:
+    """Prowlarr requests an explicit page size."""
+
+    def test_zero_limit_rejected(self) -> None:
+        from movarr.config import ProwlarrConfig
+
+        with pytest.raises(ValidationError):
+            ProwlarrConfig(limit=0)
+
+
+class TestMigrationCycleGuard:
+    """A cyclic migration chain aborts instead of looping forever."""
+
+    def test_cycle_is_detected(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        from movarr.config import _run_migrations
+
+        def _a_to_b(raw: dict) -> dict:
+            raw.setdefault("general", {})["config_version"] = "2.23.0"
+            return raw
+
+        def _b_to_a(raw: dict) -> dict:
+            raw.setdefault("general", {})["config_version"] = "2.22.0"
+            return raw
+
+        mocker.patch("movarr.config.MIGRATIONS", {"2.22.0": _a_to_b, "2.23.0": _b_to_a})
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  config_version: '2.22.0'\n")
+        log = mocker.patch("movarr.config.logger")
+
+        _run_migrations({"general": {"config_version": "2.22.0"}}, cfg_file)
+
+        assert any("cycle" in str(c).lower() for c in log.error.call_args_list)
+
+    def test_scalar_where_a_section_is_expected_is_ignored(self) -> None:
+        """A scalar in place of a sub-model yields no nested key paths."""
+        from movarr.config import _unknown_key_paths
+
+        assert _unknown_key_paths(Config, {"filters": "not-a-mapping"}) == []
+
+    def test_scalar_where_a_mapping_is_expected_is_ignored(self) -> None:
+        """A scalar in place of a dict[str, Model] field yields no key paths."""
+        from movarr.config import _unknown_key_paths
+
+        assert _unknown_key_paths(Config, {"filters": {"override_genre": "nope"}}) == []

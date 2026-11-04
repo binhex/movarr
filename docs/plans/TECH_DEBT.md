@@ -48,16 +48,16 @@ refactor with 100% test coverage as the safety net.
 
 ### Problem
 
-`Database` has 26 methods covering six unrelated responsibilities:
+`Database` has 30 methods covering several unrelated responsibilities:
 
 | Responsibility | Methods |
-|---|---|
-| Schema migration | `_migrate`, `_create_tables` |
-| Result persistence | `write`, `find_by_tag`, `mark_completed`, `mark_stalled`, `expire` |
-| Deduplication | `is_duplicate`, `dedup_*` |
-| IMDb metadata cache | `get_imdb_cache`, `set_imdb_cache` |
-| Vacuuming / housekeeping | `vacuum` |
-| Key-value store | `get_kv`, `set_kv`, `delete_kv` |
+| --- | --- |
+| Schema migration | `_ensure_schema`, `_upgrade`, `_upgrade_v7…v13`, `_repair_missing_columns` (plus the module-level `_add_column_if_absent` helper) |
+| Result persistence | `write`, `_result_to_record`, `find_by_tag`, `mark_completed`, `mark_stalled` |
+| Expiry | `_expire_by_result`, `expire_stalled`, `expire_failed`, `expire_passed` |
+| Deduplication | `is_duplicate_exact` |
+| IMDb metadata cache | `find_imdb_metadata`, `_record_to_imdb_dict` |
+| Key-value store | `kv_get`, `kv_set`, `kv_set_if_absent`, `kv_delete` |
 
 Every caller that needs the KV store also drags in all the result-persistence logic
 and vice versa.
@@ -79,4 +79,9 @@ call site.
 
 ---
 
-*Last updated: 2026-05-08 — deferred after tech-debt session, intentional deferral.*
+**CRAP register:** see `docs/agent/plans/2026-11-03-crap-debt-register.md` for the
+functions still at CRAP >= 9 (CC <= 9, accepted debt) and the re-check command.
+
+*Last updated: 2026-11-03 — method inventory refreshed (dead `vacuum`, `has_passed`,
+`is_duplicate_fuzzy`, `set_verified`/`is_verified` and `genres_for_tag` removed; schema
+now at v13). Still an intentional deferral.*

@@ -1,7 +1,12 @@
 # Dual-Title Library Matching
 
 **Date:** 2026-07-28
-**Status:** Approved
+**Status:** Implemented, with deviations:
+
+- the library list is walked once up front, but each title variant is still matched against that
+  cached list (the walk is not short-circuited on first match);
+- the dual-title fields are persisted in history (schema v13), so a metadata cache hit keeps
+  alternate-title matching instead of degrading to the canonical title.
 **Scope:** IMDb metadata, library dedup (filters.py), models
 
 ## Problem
@@ -79,7 +84,7 @@ if imdb_alternate_titles and _contains_non_ascii(imdb_title):
             titles.add(norm)
 ```
 
-Walk the library once. For each file, check against **every** title in the set. First match
+Walk the library once. For each file, check against **every** title in the set. Matches across all variants (not first-match)
 (across any title) wins — stop walking.
 
 The `_match_library_file` helper continues to require both title **and** year to match, so
@@ -100,7 +105,7 @@ with alternate-title names remain discoverable via the dual search.
 ## Edge Cases
 
 | Scenario | Behavior |
-|---|---|
+| --- | --- |
 | English movie (title already ASCII) | Alternate search skipped. Single-title behavior. |
 | OMDb fallback (no alternates) | `imdb_alternate_titles` is `None`. Single-title behavior. |
 | Original and alternate normalize to same string | Deduplicated by the `set` — only one search performed. |
@@ -111,7 +116,7 @@ with alternate-title names remain discoverable via the dual search.
 ## Files Modified
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `src/movarr/imdb_metadata.py` | `_build_imdbpie_payload`: add `original_title`, `alternate_titles` fields. `_apply_metadata`: map to result dict. |
 | `src/movarr/models.py` | Add `imdb_original_title`, `imdb_alternate_titles` to `ResultDict`. |
 | `src/movarr/filters.py` | `_check_library_canonical`: multi-title library check. |

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from movarr.parsing import (
-    all_criteria_present,
     bad_keyword_search,
-    build_sqlite_pattern,
     dedup_quality_score,
     extract_after_year,
     extract_group,
@@ -13,8 +11,8 @@ from movarr.parsing import (
     extract_resolution,
     extract_year,
     is_tv_content,
-    keyword_search,
     normalise_for_compare,
+    normalise_imdb_id,
     quality_score,
     sanitise,
 )
@@ -190,50 +188,6 @@ class TestNormaliseForCompare:
         assert accented == ascii_ver, f"{accented!r} != {ascii_ver!r}"
 
 
-# build_sqlite_pattern
-
-
-class TestBuildSqlitePattern:
-    """Tests for build_sqlite_pattern()."""
-
-    def test_wraps_in_percent_signs(self) -> None:
-        # Needs a title with a year so extract_movie_title succeeds
-        pattern = build_sqlite_pattern("The Dark Knight 2008")
-        assert pattern is not None
-        assert pattern.startswith("%")
-        assert pattern.endswith("%")
-
-    def test_non_empty_returns_non_empty(self) -> None:
-        pattern = build_sqlite_pattern("Test Movie 2020")
-        assert pattern not in ("", None)
-
-    def test_empty_string_returns_none(self) -> None:
-        assert build_sqlite_pattern("") is None
-
-    def test_no_year_in_sanitised_returns_none(self) -> None:
-        # No year in string → extract_movie_title returns None → line 245
-        assert build_sqlite_pattern("NoYearOrTitle") is None
-
-
-# all_criteria_present
-
-
-class TestAllCriteriaPresent:
-    """Tests for all_criteria_present(criteria_str, index_title)."""
-
-    def test_all_present_returns_true(self) -> None:
-        assert all_criteria_present("1080p BluRay", "Movie Title 2020 1080p BluRay x264") is True
-
-    def test_missing_one_returns_false(self) -> None:
-        assert all_criteria_present("1080p BluRay", "Movie Title 2020 1080p x264") is False
-
-    def test_single_criteria_present(self) -> None:
-        assert all_criteria_present("1080p", "Movie 2020 1080p BluRay") is True
-
-    def test_case_insensitive(self) -> None:
-        assert all_criteria_present("1080p BLURAY", "movie 2020 1080p bluray") is True
-
-
 # is_tv_content
 
 
@@ -248,28 +202,6 @@ class TestIsTvContent:
 
     def test_empty_string_returns_false(self) -> None:
         assert is_tv_content("") is False
-
-
-# keyword_search
-
-
-class TestKeywordSearch:
-    """Tests for keyword_search(sanitised, keyword) — single keyword only."""
-
-    def test_finds_matching_keyword(self) -> None:
-        assert keyword_search("Movie 2020 1080p HDR BluRay", "HDR") is True
-
-    def test_returns_false_when_no_match(self) -> None:
-        assert keyword_search("Movie 2020 1080p BluRay", "HDR") is False
-
-    def test_case_insensitive(self) -> None:
-        assert keyword_search("Movie 2020 hdr bluray", "HDR") is True
-
-    def test_no_content_after_year_returns_false(self) -> None:
-        assert keyword_search("NoYearTitle HDR", "HDR") is False
-
-    def test_empty_string_returns_false(self) -> None:
-        assert keyword_search("", "HDR") is False
 
 
 # extract_group
@@ -409,3 +341,171 @@ class TestDedupQualityScore:
         score_a = dedup_quality_score("Movie A 2020 2160p REMUX")
         score_b = dedup_quality_score("Movie B 2020 2160p REMUX")
         assert score_a == score_b
+
+
+class TestNormaliseImdbId:
+    """normalise_imdb_id rejects everything that is not a usable IMDb ID."""
+
+    def test_accepts_canonical_form(self) -> None:
+        assert normalise_imdb_id("tt0133093") == "tt0133093"
+
+    def test_accepts_bare_digits(self) -> None:
+        assert normalise_imdb_id("0133093") == "tt0133093"
+
+    def test_zero_pads_integer_input(self) -> None:
+        assert normalise_imdb_id(113627) == "tt0113627"
+
+    def test_rejects_zero_integer(self) -> None:
+        assert normalise_imdb_id(0) is None
+
+    def test_rejects_none_and_empty(self) -> None:
+        assert normalise_imdb_id(None) is None
+        assert normalise_imdb_id("") is None
+        assert normalise_imdb_id("   ") is None
+
+    def test_rejects_boolean(self) -> None:
+        assert normalise_imdb_id(True) is None
+
+    def test_rejects_markdown_injection_attempt(self) -> None:
+        assert normalise_imdb_id("tt1)](https://evil.example") is None
+
+    def test_rejects_trailing_junk(self) -> None:
+        assert normalise_imdb_id("tt1234567,tag-injected") is None
+
+    def test_rejects_too_short(self) -> None:
+        assert normalise_imdb_id("tt123") is None
+        assert normalise_imdb_id("123") is None
+
+    def test_accepts_nine_digit_ids(self) -> None:
+        assert normalise_imdb_id("tt123456789") == "tt123456789"
+
+
+class TestYearAndTitleSelection:
+    """The release year is the LAST year-shaped token, not the first."""
+
+    def test_title_containing_a_year_number_keeps_it(self) -> None:
+        san = sanitise("Blade Runner 2049 2017 2160p Remux") or ""
+        assert extract_year(san) == "2017"
+        assert extract_movie_title(san) == "Blade Runner 2049"
+
+    def test_year_title_uses_the_real_release_year(self) -> None:
+        san = sanitise("1917 2019 1080p BluRay") or ""
+        assert extract_year(san) == "2019"
+        assert extract_movie_title(san) == "1917"
+
+    def test_no_year_returns_none(self) -> None:
+        assert extract_year("Movie Without Year 1080p") is None
+        assert extract_movie_title("Movie Without Year 1080p") is None
+
+
+class TestNonAsciiTitles:
+    """An unbracketed non-ASCII title is content, not an annotation."""
+
+    def test_multi_word_cyrillic_title_preserved(self) -> None:
+        san = sanitise("Иван Васильевич меняет профессию 1973 1080p") or ""
+        assert extract_movie_title(san) == "Иван Васильевич меняет профессию"
+        assert extract_year(san) == "1973"
+
+    def test_bracketed_non_ascii_annotation_stripped(self) -> None:
+        san = sanitise("Movie 2020 [\u4e2d\u6587] 1080p") or ""
+        assert "\u4e2d\u6587" not in san
+
+
+class TestBracketedTitles:
+    """A leading bracket may be the title itself, not a release tag."""
+
+    def test_bracketed_title_preserved(self) -> None:
+        san = sanitise("[REC] 2007 1080p BluRay") or ""
+        assert extract_movie_title(san) == "REC"
+        assert extract_year(san) == "2007"
+
+    def test_bracketed_title_with_index_preserved(self) -> None:
+        san = sanitise("[REC] 2 2009 1080p") or ""
+        assert extract_movie_title(san) == "REC 2"
+        assert extract_year(san) == "2009"
+
+    def test_bracket_kept_when_stripping_would_lose_the_year(self) -> None:
+        """A candidate with no year left is rejected, keeping the original text."""
+        assert sanitise("[2020] Movie 1080p") == "2020 Movie 1080p"
+
+    def test_group_tag_still_stripped(self) -> None:
+        san = sanitise("[YTS] Movie 2020 1080p") or ""
+        assert extract_movie_title(san) == "Movie"
+
+
+class TestResolutionWords:
+    """4K/UHD is the same routing class as 2160p."""
+
+    def test_4k_maps_to_2160(self) -> None:
+        assert extract_resolution(sanitise("Movie 2020 4K HDR") or "") == "2160"
+
+    def test_uhd_maps_to_2160(self) -> None:
+        assert extract_resolution(sanitise("Movie 2020 UHD BluRay") or "") == "2160"
+
+    def test_1080p_unchanged(self) -> None:
+        assert extract_resolution(sanitise("Movie 2020 1080p") or "") == "1080"
+
+
+class TestTvEpisodeBoundaries:
+    """Episode markers are token-anchored."""
+
+    def test_episode_marker_detected(self) -> None:
+        assert is_tv_content("Show S01E02 1080p") is True
+
+    def test_audio_codec_token_is_not_an_episode(self) -> None:
+        assert is_tv_content("Movie 2020 dts51 1080p") is False
+        assert is_tv_content("Movie 2020 m2ts05 1080p") is False
+
+
+class TestExtrasPredicate:
+    """Extras detection only looks after the release year."""
+
+    def test_post_year_marker_is_extras(self) -> None:
+        from movarr.parsing import is_extras_filename
+
+        assert is_extras_filename("The Matrix 1999 Behind The Scenes 2160p") is True
+
+    def test_title_containing_a_marker_is_not_extras(self) -> None:
+        from movarr.parsing import is_extras_filename
+
+        assert is_extras_filename("Interview with the Vampire 1994 1080p") is False
+
+
+class TestExtrasPredicateEdges:
+    def test_empty_input_is_not_extras(self) -> None:
+        from movarr.parsing import is_extras_filename
+
+        assert is_extras_filename("") is False
+
+
+class TestBadKeywordWithoutYear:
+    """A title with no year is searched in full."""
+
+    def test_no_year_still_matches_keyword(self) -> None:
+        assert bad_keyword_search("Movie CAM 1080p", "CAM") is True
+
+
+class TestFourKScoring:
+    """4K/UHD scores as a UHD resolution."""
+
+    def test_4k_scores_like_2160p(self) -> None:
+        assert quality_score("Movie 2020 4K HDR") >= quality_score("Movie 2020 2160p HDR")
+
+
+class TestEditionTokenNormalisation:
+    """Dotted and bracketed edition tags are recognised."""
+
+    def test_dotted_directors_cut_is_detected(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("The.Matrix.1999.Directors.Cut.2160p") == frozenset({"directors cut"})
+
+    def test_bracketed_extended_is_detected(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Movie.2024.2160p.BluRay.[Extended]") == frozenset({"extended"})
+
+    def test_different_cuts_compare_unequal(self) -> None:
+        from movarr.filters import edition_token_set
+
+        assert edition_token_set("Movie.2024.[Extended]") != edition_token_set("Movie.2024.Theatrical")

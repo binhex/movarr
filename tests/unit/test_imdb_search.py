@@ -786,3 +786,119 @@ class TestSearchDuckDuckGoEdgeCases:
         result = _make_result()
         out = _search_duckduckgo(result, Config())
         assert out["result"] == "Failed"
+
+
+class TestFailRedaction:
+    """A provider failure message must not leak the API key into logs or the DB."""
+
+    def test_fail_redacts_api_key(self) -> None:
+        from movarr.imdb_search import _fail
+
+        result: ResultDict = {"result_details": []}
+        _fail(
+            result, "TMDb search request failed: 401 [Errno None] GET https://api.themoviedb.org/3/x?api_key=topsecret"
+        )
+
+        joined = " ".join(result["result_details"])
+        assert "topsecret" not in joined
+        assert "api_key=REDACTED" in joined
+
+
+class TestNonDictPayloadGuards:
+    """A non-object JSON payload must fail cleanly instead of raising."""
+
+    def test_tmdb_search_rejects_non_dict_payload(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_search import _tmdb_search_request
+
+        resp = mocker.MagicMock()
+        resp.content = b'["not", "an", "object"]'
+        mocker.patch("movarr.imdb_search.HttpClient").return_value.get.return_value = resp
+
+        data, err = _tmdb_search_request("Alien", "1979", "key")
+
+        assert data is None
+        assert err is not None and "shape" in err
+
+    def test_omdb_search_rejects_non_dict_payload(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_search import _omdb_search_request
+
+        resp = mocker.MagicMock()
+        resp.content = b'"just a string"'
+        mocker.patch("movarr.imdb_search.HttpClient").return_value.get.return_value = resp
+
+        data, err = _omdb_search_request("Alien", "1979", "key")
+
+        assert data is None
+        assert err is not None and "shape" in err
+
+    def test_tmdb_detail_fails_cleanly_on_non_dict_payload(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_search import _resolve_imdb_from_tmdb
+
+        resp = mocker.MagicMock()
+        resp.content = b'["nope"]'
+        http = mocker.MagicMock()
+        http.get.return_value = resp
+        result: ResultDict = {"result_details": []}
+
+        assert _resolve_imdb_from_tmdb(603, "key", http, result) is None
+        assert result["result"] == "Failed"
+
+
+class TestProviderPayloadEdgeCases:
+    """Degenerate provider payloads fail cleanly instead of raising."""
+
+    def test_null_results_list_fails_cleanly(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_search import _search_tmdb
+
+        mocker.patch("movarr.imdb_search._tmdb_search_request", return_value=({"results": None}, None))
+        cfg = mocker.MagicMock()
+        cfg.credentials.tmdb.api_key = "key"
+        result: ResultDict = {
+            "movie_title": "Alien",
+            "movie_title_year": "1979",
+            "movie_title_compare": "alien",
+            "result_details": [],
+        }
+
+        out = _search_tmdb(result, cfg)
+
+        assert out["result"] == "Failed"
+
+    def test_non_string_omdb_title_fails_cleanly(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_search import _search_omdb
+
+        mocker.patch("movarr.imdb_search._omdb_search_request", return_value=({"Title": ["Alien"]}, None))
+        cfg = mocker.MagicMock()
+        cfg.credentials.omdb.api_key = "key"
+        result: ResultDict = {
+            "movie_title": "Alien",
+            "movie_title_year": "1979",
+            "movie_title_compare": "alien",
+            "result_details": [],
+        }
+
+        out = _search_omdb(result, cfg)
+
+        assert out["result"] == "Failed"
+
+
+class TestImdbIdValidationAtPass:
+    """Every strategy's ID is normalised before it is stored."""
+
+    def test_malformed_id_is_rejected(self) -> None:
+        from movarr.imdb_search import _pass
+
+        result: ResultDict = {"result_details": []}
+        _pass(result, "tt1)](https://evil.example", "Found.")
+
+        assert result["result"] == "Failed"
+        assert "imdb_id" not in result
+
+    def test_canonical_id_is_stored(self) -> None:
+        from movarr.imdb_search import _pass
+
+        result: ResultDict = {"result_details": []}
+        _pass(result, "tt0133093", "Found.")
+
+        assert result["result"] == "Passed"
+        assert result["imdb_id"] == "tt0133093"

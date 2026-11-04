@@ -1,7 +1,9 @@
 # Notification Format Redesign: Mobile-Readable Markdown
 
 **Date:** 2026-06-22
-**Status:** Approved
+**Status:** Superseded
+**Superseded by:** `2026-07-11-notification-body-formatting-design.md` — the shipped format uses
+an inline result-details count and a `**Links:**` section instead of `<details>/<summary>` wrapping.
 
 ## Problem
 
@@ -73,7 +75,7 @@ movarr: Arlington Road (1999)                    ← plain text subject (unchang
 ## Files Changed
 
 | File | Changes |
-|------|---------|
+| ------ | --------- |
 | `src/movarr/notifications.py` | `body_format`: `HTML` → `MARKDOWN`. `_build_body` rewritten in Markdown + inline HTML. `_format_result_details` unchanged except wrapping. `_extract_body_fields` may need minor adjustments (remove unused `result_details_html`, rename). |
 | `tests/unit/test_notifications.py` | Update all body assertions from HTML to Markdown. Add test for `<details>` wrapper. Add test for pass/fail count in `<summary>`. |
 | `README.md` | Note about `?format=markdown` for ntfy users. |

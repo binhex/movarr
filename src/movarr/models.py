@@ -26,7 +26,6 @@ class ResultDict(TypedDict, total=False):
 
     # --- Parsed index fields ---
     index_title_sanitised: str | None
-    index_title_group: str
     index_title_resolution: str | None
     index_title_after_year_to_end: str | None
 
@@ -47,6 +46,7 @@ class ResultDict(TypedDict, total=False):
 
     # --- IMDb metadata ---
     imdb_id: str
+    _imdb_id_source: str
     imdb_title: str | None
     imdb_original_title: str | None
     imdb_alternate_titles: list[str] | None
@@ -91,8 +91,8 @@ def build_result_dict(
 ) -> ResultDict:
     """Return a base :class:`ResultDict` populated with the shared index fields.
 
-    Both Jackett and Prowlarr parsers produce the same thirteen fields from
-    different source shapes.  This factory centralises construction so that
+    Both Jackett and Prowlarr parsers produce the same eleven index fields
+    from different source shapes.  This factory centralises construction so that
     adding a new shared field only requires one edit.
 
     Args:

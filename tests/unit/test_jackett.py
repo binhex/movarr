@@ -396,6 +396,27 @@ class TestSearch:
 
         assert list(client.search("all", "1080p", "2000")) == []
 
+    def test_pagination_advances_by_actual_page_size(self, mocker: MockerFixture) -> None:
+        """A page shorter than the requested limit must not create a result gap."""
+        client, _ = _make_client(mocker)
+        client._cfg.limit = 500
+        client._cfg.offset = 10  # allow several pages
+
+        fetch_mock = mocker.patch.object(
+            client,
+            "_fetch_page",
+            side_effect=[
+                [{"title": "Movie 1", _NS_ATTR: []}, {"title": "Movie 2", _NS_ATTR: []}],
+                [],  # second page empty → stop
+            ],
+        )
+
+        list(client.search("all", "1080p", "2000"))
+
+        requested_offsets = [call.args[0] for call in fetch_mock.call_args_list]
+        assert any("offset=2&" in url or "offset=2" in url for url in requested_offsets), requested_offsets
+        assert not any(url.endswith("offset=500") or "offset=500&" in url for url in requested_offsets)
+
     def test_stops_on_empty_page(self, mocker: MockerFixture) -> None:
         """Generator terminates when _fetch_page returns an empty list."""
         client, _ = _make_client(mocker)
@@ -498,3 +519,58 @@ class TestIsReachable:
         logged = " ".join(str(a) for a in mock_warn.call_args[0])
         assert "localhost" in logged
         assert "9117" in logged
+
+
+class TestImdbIdIngestValidation:
+    """Indexer-supplied IMDb IDs are normalised or dropped at ingest."""
+
+    def _item(self, imdbid: str) -> dict[str, Any]:
+        return {
+            "title": "Inception 2010 1080p",
+            "link": "http://example.com/inception.torrent",
+            "size": "5368709120",
+            _NS_ATTR: [
+                {"@name": "seeders", "@value": "10"},
+                {"@name": "imdbid", "@value": imdbid},
+            ],
+        }
+
+    def test_valid_tt_id_kept(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+        result = client._parse_item(self._item("tt1375666"))
+        assert result is not None
+        assert result["imdb_id"] == "tt1375666"
+
+    def test_bare_digits_normalised(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+        result = client._parse_item(self._item("1375666"))
+        assert result is not None
+        assert result["imdb_id"] == "tt1375666"
+
+    def test_malformed_id_dropped(self, mocker: MockerFixture) -> None:
+        """A crafted value must not reach the notification body or tag."""
+        client, _ = _make_client(mocker)
+        result = client._parse_item(self._item("tt1)](https://evil.example"))
+        assert result is not None
+        assert "imdb_id" not in result
+
+
+class TestNullChannel:
+    """A feed with a null channel must not abort the search tier."""
+
+    def test_null_channel_returns_empty_page(self, mocker: MockerFixture) -> None:
+        client, mock_http = _make_client(mocker)
+        resp = mocker.MagicMock()
+        resp.content = b"<rss><channel></channel></rss>"
+        mock_http.get.return_value = resp
+
+        assert client._fetch_page("http://x", "all") == []
+
+
+class TestNonDictItem:
+    """A malformed Torznab item is skipped."""
+
+    def test_string_item_is_skipped(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+
+        assert client._parse_item("just text") is None  # type: ignore[arg-type]

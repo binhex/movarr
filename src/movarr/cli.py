@@ -88,7 +88,7 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
 @click.option(
     "--log-level",
     default=None,
-    type=click.Choice(["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"], case_sensitive=False),
+    type=click.Choice(["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
     show_default=False,
     metavar="<level>",
     help="Override the log level from config (useful for debugging).",
@@ -199,6 +199,12 @@ def _apply_cli_overrides(config: Config, **overrides: object) -> None:
     help="Override Prowlarr API key from config.",
 )
 @click.option(
+    "--once",
+    is_flag=True,
+    default=False,
+    help="Run each enabled scheduler task once, then exit (foreground mode).",
+)
+@click.option(
     "--test",
     is_flag=True,
     default=False,
@@ -223,6 +229,7 @@ def cli(
     prowlarr_host: str | None,
     prowlarr_port: int | None,
     prowlarr_api_key: str | None,
+    once: bool,
     test: bool,
 ) -> None:
     """movarr — torrent acquisition daemon.
@@ -259,7 +266,10 @@ def cli(
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")
-        prefix = f"[{tracker}] " if tracker else ""
+        # Braces are format syntax to loguru: an indexer-controlled tracker name
+        # must not be able to corrupt (or break) every log record.
+        safe_tracker = str(tracker).replace("{", "(").replace("}", ")")
+        prefix = f"[{safe_tracker}] " if tracker else ""
         return (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
@@ -280,6 +290,12 @@ def cli(
 
     if test:
         click.echo("Configuration loaded successfully. Test mode — exiting.")
+        return
+
+    if once:
+        from movarr.scheduler import run_once  # noqa: PLC0415
+
+        run_once(config)
         return
 
     from movarr.scheduler import run  # noqa: PLC0415

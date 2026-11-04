@@ -392,3 +392,29 @@ class TestHttpClientRequest:
         result = client._request("get", "https://example.com")
         assert result.status_code == 200
         assert mock_session.request.call_count == 2
+
+
+class TestHttpErrorRedaction:
+    """HttpError messages must never carry an API key into the log."""
+
+    def test_api_key_in_url_is_redacted(self, mocker: MockerFixture) -> None:
+        """A query-string key is masked in the raised message."""
+        _make_session_mock(mocker, status_code=401, content=b"denied")
+        client = HttpClient()
+
+        with pytest.raises(HttpError) as excinfo:
+            client._request("get", "https://api.themoviedb.org/3/movie/603?api_key=supersecret123")
+
+        message = str(excinfo.value)
+        assert "supersecret123" not in message
+        assert "api_key=REDACTED" in message
+
+    def test_key_echoed_in_body_is_redacted(self, mocker: MockerFixture) -> None:
+        """A key echoed in the response preview is masked too."""
+        _make_session_mock(mocker, status_code=500, content=b"bad key apikey=leaked999")
+        client = HttpClient()
+
+        with pytest.raises(HttpError) as excinfo:
+            client._request("get", "https://example.com/search")
+
+        assert "leaked999" not in str(excinfo.value)

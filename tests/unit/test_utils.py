@@ -2,41 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from movarr.utils import bytes_to_mb, get_project_root
-
-
-class TestGetProjectRoot:
-    """Tests for get_project_root()."""
-
-    def test_returns_path_instance(self) -> None:
-        """get_project_root() must return a Path object."""
-        assert isinstance(get_project_root(), Path)
-
-    def test_path_exists(self) -> None:
-        """Returned path must exist on the filesystem."""
-        assert get_project_root().exists()
-
-    def test_path_is_directory(self) -> None:
-        """Returned path must be a directory."""
-        assert get_project_root().is_dir()
-
-    def test_is_absolute(self) -> None:
-        """Returned path must be absolute."""
-        assert get_project_root().is_absolute()
-
-    def test_contains_pyproject_toml(self) -> None:
-        """Repo root must contain pyproject.toml."""
-        assert (get_project_root() / "pyproject.toml").exists()
-
-    def test_contains_src_directory(self) -> None:
-        """Repo root must contain a src/ directory."""
-        assert (get_project_root() / "src").is_dir()
-
-    def test_consistent_on_repeated_calls(self) -> None:
-        """Repeated calls must return the same path."""
-        assert get_project_root() == get_project_root()
+from movarr.utils import bytes_to_mb, redact_secrets
 
 
 class TestBytesToMb:
@@ -77,3 +43,41 @@ class TestBytesToMb:
         """
         # 10**18 bytes = 10**12 MB = 1 000 000 000 000
         assert bytes_to_mb(10**18) == str(10**18 // 1_000_000)
+
+
+class TestRedactSecrets:
+    """Tests for redact_secrets - credential scrubbing for logs and stored details."""
+
+    def test_redacts_tmdb_api_key(self) -> None:
+        msg = "HTTP 401 for 'https://api.themoviedb.org/3/movie/603?api_key=abc123def': denied"
+        assert "abc123def" not in redact_secrets(msg)
+        assert "api_key=REDACTED" in redact_secrets(msg)
+
+    def test_redacts_jackett_apikey(self) -> None:
+        url = "http://jackett:9117/api/v2.0/indexers/all/results/torznab/api?apikey=s3cr3t&t=search"
+        assert "s3cr3t" not in redact_secrets(url)
+
+    def test_redacts_omdb_apikey(self) -> None:
+        url = "https://www.omdbapi.com/?apikey=deadbeef&t=Alien&y=1979"
+        assert "deadbeef" not in redact_secrets(url)
+
+    def test_redacts_token_and_password_parameters(self) -> None:
+        msg = "https://host/path?token=abc&password=hunter2&safe=1"
+        redacted = redact_secrets(msg)
+        assert "abc" not in redacted.replace("REDACTED", "")
+        assert "hunter2" not in redacted
+        assert "safe=1" in redacted
+
+    def test_leaves_ordinary_text_unchanged(self) -> None:
+        assert redact_secrets("Searching Jackett indexer 'all'.") == "Searching Jackett indexer 'all'."
+
+    def test_accepts_non_string_input(self) -> None:
+        assert "REDACTED" in redact_secrets(ValueError("?apikey=zzz"))
+
+
+class TestNegativeSize:
+    """Negative sizes are invalid input and yield "0"."""
+
+    def test_negative_returns_zero(self) -> None:
+        assert bytes_to_mb(-3) == "0"
+        assert bytes_to_mb("-3000000") == "0"

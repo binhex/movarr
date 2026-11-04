@@ -12,7 +12,6 @@ from movarr.file_utils import (
     copy_with_verify,
     delete_file,
     make_directory,
-    resolution_label_from_height,
     walk_library,
 )
 
@@ -192,92 +191,57 @@ class TestCopyWithVerify:
         assert result is True
         assert dst.parent.is_dir()
 
-    def test_accepts_existing_dst_when_delete_of_mismatched_dst_fails(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
-        """When dst exists with wrong checksum but delete_file fails (e.g. immutable file),
-        accept existing destination to prevent infinite loop in post-processing."""
-        content_src = b"source data"
-        content_dst = b"different data"
+    def test_keeps_existing_dst_when_replacement_cannot_be_swapped(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A destination that cannot be replaced must not be destroyed or reported as success."""
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst.mkv"
-        src.write_bytes(content_src)
-        dst.write_bytes(content_dst)
-        # delete_file fails (simulating EPERM on immutable file)
-        mocker.patch("movarr.file_utils.delete_file", return_value=False)
-        # chattr -i also fails (simulating missing LINUX_IMMUTABLE capability)
-        mocker.patch("movarr.file_utils.subprocess.run", side_effect=FileNotFoundError("chattr not found"))
-        result = copy_with_verify(src, dst)
-        assert result is True
-        # Destination file should remain untouched
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        # The swap fails even after the immutable-flag retry.
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch("movarr.file_utils._try_clear_immutable")
+
+        assert copy_with_verify(src, dst) is False
+        assert dst.read_bytes() == b"different data"
+        assert not (tmp_path / "dst.mkv.part").exists()
+
+    def test_failed_copy_leaves_previous_destination_intact(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A copy failure must not remove the file it was going to replace."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils._perform_copy", return_value=False)
+
+        assert copy_with_verify(src, dst) is False
         assert dst.read_bytes() == b"different data"
 
-    def test_retries_delete_after_chattr_when_delete_of_mismatched_dst_fails(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
-        """When delete_file fails, try chattr -i first, then retry delete.
-        If chattr succeeds and retry delete succeeds, re-copy proceeds."""
-        content_src = b"source data"
-        content_dst = b"different data"
+    def test_replacement_clears_immutable_flag_and_retries(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A PermissionError on the swap triggers one chattr -i retry."""
         src = tmp_path / "src.mkv"
         dst = tmp_path / "dst.mkv"
-        src.write_bytes(content_src)
-        dst.write_bytes(content_dst)
-        # delete_file fails first time (immutable), succeeds after chattr
-        delete_calls: list[int] = [0]
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        replace = mocker.patch(
+            "movarr.file_utils.os.replace",
+            side_effect=[PermissionError("immutable"), None],
+        )
+        clear = mocker.patch("movarr.file_utils._try_clear_immutable")
 
-        def fake_delete(_path: str | Path) -> bool:
-            delete_calls[0] += 1
-            return delete_calls[0] > 1  # first call fails, subsequent succeed
+        assert copy_with_verify(src, dst) is True
+        clear.assert_called_once()
+        assert replace.call_count == 2
 
-        mocker.patch("movarr.file_utils.delete_file", side_effect=fake_delete)
-        # chattr succeeds
-        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
-        mock_run.return_value.returncode = 0
-        result = copy_with_verify(src, dst)
-        assert result is True
-        # File was re-copied with source content
+    def test_mismatched_destination_is_replaced_atomically(self, tmp_path: Path) -> None:
+        """The swapped-in file holds the verified source content."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+
+        assert copy_with_verify(src, dst) is True
         assert dst.read_bytes() == b"source data"
-        assert delete_calls[0] == 2  # first delete + retry after chattr
-
-    def test_chattr_succeeds_but_retry_delete_still_fails_accepts_existing(
-        self, tmp_path: Path, mocker: MockerFixture
-    ) -> None:
-        """When chattr -i succeeds but the retry delete still fails, accept existing."""
-        content_src = b"source data"
-        content_dst = b"different data"
-        src = tmp_path / "src.mkv"
-        dst = tmp_path / "dst.mkv"
-        src.write_bytes(content_src)
-        dst.write_bytes(content_dst)
-        # delete_file always fails (even after chattr)
-        mocker.patch("movarr.file_utils.delete_file", return_value=False)
-        # chattr succeeds (returncode 0)
-        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
-        mock_run.return_value.returncode = 0
-        result = copy_with_verify(src, dst)
-        assert result is True
-        # Destination file should remain untouched
-        assert dst.read_bytes() == b"different data"
-
-    def test_chattr_returns_nonzero_exit_still_accepts_existing(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        """When chattr -i runs but returns non-zero, log stderr and accept existing."""
-        content_src = b"source data"
-        content_dst = b"different data"
-        src = tmp_path / "src.mkv"
-        dst = tmp_path / "dst.mkv"
-        src.write_bytes(content_src)
-        dst.write_bytes(content_dst)
-        # delete_file fails
-        mocker.patch("movarr.file_utils.delete_file", return_value=False)
-        # chattr runs but returns non-zero (e.g., EPERM, missing capability)
-        mock_run = mocker.patch("movarr.file_utils.subprocess.run")
-        mock_run.return_value.returncode = 1
-        mock_run.return_value.stderr = b"Operation not permitted\n"
-        result = copy_with_verify(src, dst)
-        assert result is True
-        # Destination file should remain untouched
-        assert dst.read_bytes() == b"different data"
+        assert not (tmp_path / "dst.mkv.part").exists()
 
     def test_returns_false_on_permission_error_during_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
         src = tmp_path / "src.mkv"
@@ -419,23 +383,107 @@ class TestCopyWithVerify:
         assert not any("% complete" in m for m in messages)
 
 
-class TestResolutionLabelFromHeight:
-    """Tests for resolution_label_from_height()."""
+class TestUnreadableDestinationRecovery:
+    """A destination that becomes unreadable must be re-copied, not raised."""
 
-    def test_2160_returns_uhd(self) -> None:
-        assert resolution_label_from_height("2160") == "UHD"
+    def test_verify_existing_falls_through_when_dst_unreadable(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """An OSError while hashing an existing destination triggers a re-copy."""
+        import hashlib
 
-    def test_1080_returns_hd(self) -> None:
-        assert resolution_label_from_height("1080") == "HD"
+        from movarr.file_utils import copy_with_verify
 
-    def test_720_returns_hd(self) -> None:
-        assert resolution_label_from_height("720") == "HD"
+        src = tmp_path / "src.mkv"
+        src.write_bytes(b"payload")
+        dst = tmp_path / "dst.mkv"
+        dst.write_bytes(b"stale")
 
-    def test_none_returns_hd(self) -> None:
-        assert resolution_label_from_height(None) == "HD"
+        real_sha = hashlib.sha256
+        state = {"raised": False}
 
-    def test_480_returns_hd(self) -> None:
-        assert resolution_label_from_height("480") == "HD"
+        def fake_sha(path: Path, label: str | None = None) -> str:
+            if Path(path) == dst and not state["raised"]:
+                state["raised"] = True
+                raise OSError("destination vanished")
+            return real_sha(Path(path).read_bytes()).hexdigest()
 
-    def test_arbitrary_string_returns_hd(self) -> None:
-        assert resolution_label_from_height("unknown") == "HD"
+        mocker.patch("movarr.file_utils._sha256", side_effect=fake_sha)
+
+        assert copy_with_verify(src, dst) is True
+        assert dst.read_bytes() == b"payload"
+        assert state["raised"] is True
+
+
+class TestPostCopyVerificationFailure:
+    """A destination hash that fails after the copy returns False, not raise."""
+
+    def test_post_copy_dst_hash_oserror_returns_false(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        from movarr.file_utils import copy_with_verify
+
+        src = tmp_path / "src.mkv"
+        src.write_bytes(b"payload")
+        dst = tmp_path / "dst.mkv"
+
+        import hashlib
+
+        real_sha = hashlib.sha256
+        state = {"n": 0}
+
+        def fake_sha(path: Path, label: str | None = None) -> str:
+            state["n"] += 1
+            # dst does not pre-exist, so call 1 = src, call 2 = dst (post-copy).
+            if state["n"] >= 2:
+                raise OSError("destination gone")
+            return real_sha(Path(path).read_bytes()).hexdigest()
+
+        mocker.patch("movarr.file_utils._sha256", side_effect=fake_sha)
+
+        assert copy_with_verify(src, dst) is False
+
+
+class TestWalkLibraryIsReusable:
+    """walk_library returns a list, so a second pass still sees every entry."""
+
+    def test_second_pass_sees_the_same_entries(self, tmp_path: Path) -> None:
+        from movarr.file_utils import walk_library
+
+        (tmp_path / "Movie (2020)").mkdir()
+        (tmp_path / "Movie (2020)" / "Movie 2020 1080p.mkv").write_bytes(b"x")
+
+        entries = walk_library([str(tmp_path)])
+        first = [root for root, _dirs, _files in entries]
+        second = [root for root, _dirs, _files in entries]
+
+        assert first == second
+        assert len(first) >= 1
+
+
+class TestDeleteFileDirectory:
+    """A directory must never be reported as a deleted file."""
+
+    def test_directory_returns_false(self, tmp_path: Path) -> None:
+        from movarr.file_utils import delete_file
+
+        target = tmp_path / "movie.mkv"
+        target.mkdir()
+
+        assert delete_file(target) is False
+        assert target.is_dir()
+
+
+class TestImmutableFlagRetry:
+    """chattr failures are logged at debug and never raise."""
+
+    def test_chattr_oserror_is_swallowed(self, mocker: MockerFixture) -> None:
+        from movarr.file_utils import _try_clear_immutable
+
+        mocker.patch("movarr.file_utils.subprocess.run", side_effect=FileNotFoundError("no chattr"))
+
+        _try_clear_immutable(Path("/tmp/x"))  # must not raise
+
+    def test_nonzero_return_is_logged(self, mocker: MockerFixture) -> None:
+        from movarr.file_utils import _try_clear_immutable
+
+        result = mocker.MagicMock(returncode=1, stderr=b"nope")
+        mocker.patch("movarr.file_utils.subprocess.run", return_value=result)
+
+        _try_clear_immutable(Path("/tmp/x"))  # must not raise

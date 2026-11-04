@@ -195,7 +195,6 @@ class TestBuildMarkdownBody:
     def test_poster_img_never_in_body(self) -> None:
         """Body never contains an inline poster <img> tag (poster removed from notifications)."""
         cfg = Config()
-        cfg.notification.poster_embed_enabled = True
         result = _make_full_result(imdb_poster_url="https://m.media-amazon.com/images/M/MV5B._V1_.jpg")
         body = _build_markdown_body(_make_fields(result, cfg))
         assert '<img src="' not in body
@@ -438,16 +437,6 @@ class TestNotificationConfigDefaults:
         nc = NotificationConfig(apprise_urls=["ntfy://alerts", "mailtos://user:pass@smtp.host:587"])
         assert len(nc.apprise_urls) == 2
 
-    def test_poster_embed_enabled_defaults_to_true(self) -> None:
-        """poster_embed_enabled defaults to True."""
-        cfg = Config()
-        assert cfg.notification.poster_embed_enabled is True
-
-    def test_poster_embed_width_defaults_to_500(self) -> None:
-        """poster_embed_width defaults to 500."""
-        cfg = Config()
-        assert cfg.notification.poster_embed_width == 500
-
     def test_poster_art_filename_defaults_to_empty(self) -> None:
         """poster_art.filename defaults to empty string (disabled)."""
         cfg = Config()
@@ -578,36 +567,6 @@ class TestSendIndexProxyAlertDelegates:
 
 
 # _safe_url edge-cases — torrent URL intentionally excluded from links section
-
-
-class TestSafeUrlEdgeCases:
-    """_safe_url edge-cases (torrent URLs excluded from links by design)."""
-
-    def test_missing_index_details_does_not_affect_links(self) -> None:
-        """Missing index_details does not prevent IMDb link from appearing."""
-        cfg = Config()
-        result = _make_full_result()
-        result.pop("index_details", None)
-        fields = _make_fields(result, cfg)
-        links = _build_links_section(fields, use_markdown=True)
-        assert "[IMDb]" in links
-
-    def test_non_http_scheme_does_not_affect_links(self) -> None:
-        """Non-http index_details does not prevent IMDb link."""
-        cfg = Config()
-        result = _make_full_result(index_details="ftp://tracker.example.com/")
-        fields = _make_fields(result, cfg)
-        links = _build_links_section(fields, use_markdown=True)
-        assert "[IMDb]" in links
-
-    def test_urlparse_exception_does_not_affect_links(self, mocker: MockerFixture) -> None:
-        """urlparse exception does not prevent IMDb link."""
-        mocker.patch("movarr.notifications.urllib.parse.urlparse", side_effect=Exception("parse error"))
-        cfg = Config()
-        result = _make_full_result(index_details="http://example.com/details")
-        fields = _make_fields(result, cfg)
-        links = _build_links_section(fields, use_markdown=True)
-        assert "[IMDb]" in links
 
 
 class TestEnsureNtfyMarkdown:
@@ -974,3 +933,74 @@ class TestPosterUrlHelpers:
         """URL with resolution modifier but no _V1_ returns original unchanged."""
         url = "https://m.media-amazon.com/images/M/MV5B_SX500.jpg"
         assert _poster_url_with_width(url, 500) == url
+
+
+class TestImdbIdLinkHardening:
+    """An indexer-supplied IMDb ID must never be interpolated raw into a link."""
+
+    def test_malformed_imdb_id_produces_no_link(self) -> None:
+        """A crafted ID cannot inject a Markdown link into the notification."""
+        cfg = Config()
+        result = _make_full_result(imdb_id="tt1)](https://evil.example")
+        body = _build_markdown_body(_make_fields(result, cfg))
+
+        assert "evil.example" not in body
+        assert "imdb.com" not in body
+
+    def test_valid_imdb_id_still_linked(self) -> None:
+        """A well-formed ID still produces the IMDb link."""
+        cfg = Config()
+        result = _make_full_result(imdb_id="tt0133093")
+        body = _build_markdown_body(_make_fields(result, cfg))
+
+        assert "imdb.com/title/tt0133093" in body
+
+
+class TestPlainTextBodyEscapes:
+    """The text-only body must not carry Markdown escape backslashes."""
+
+    def test_ampersand_is_not_escaped_in_text_body(self) -> None:
+        cfg = Config()
+        fields = _make_fields(_make_full_result(imdb_plot_outline="Fast & Furious"), cfg)
+
+        body = _build_text_body(fields)
+
+        assert "Fast & Furious" in body
+        assert "\\&" not in body
+
+    def test_markdown_body_still_escapes(self) -> None:
+        cfg = Config()
+        fields = _make_fields(_make_full_result(imdb_plot_outline="Fast & Furious"), cfg)
+
+        body = _build_markdown_body(fields)
+
+        assert "Fast \\& Furious" in body
+
+
+class TestPartialDeliveryLogging:
+    """A falsy apprise result is logged rather than silently swallowed."""
+
+    def test_falsy_notify_logs_a_warning(self, mocker: MockerFixture) -> None:
+        from movarr.notifications import _try_apprise_notify
+
+        ap = mocker.MagicMock()
+        ap.notify.return_value = False
+        mocker.patch("movarr.notifications.apprise.Apprise", return_value=ap)
+        mock_log = mocker.patch("movarr.notifications.logger")
+
+        sent = _try_apprise_notify("subject", ["json://localhost"], "body", "text", False, "text")
+
+        assert sent == 0
+        assert mock_log.warning.called
+
+
+class TestNtfyFormatOverride:
+    """An existing format parameter is replaced, not duplicated."""
+
+    def test_existing_format_is_replaced(self) -> None:
+        from movarr.notifications import _ensure_ntfy_markdown
+
+        out = _ensure_ntfy_markdown("ntfy://topic?format=text")
+
+        assert out.count("format=") == 1
+        assert "format=markdown" in out

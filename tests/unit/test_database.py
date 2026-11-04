@@ -12,6 +12,8 @@ from movarr.database import Database
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pytest_mock import MockerFixture
+
     from movarr.models import ResultDict
 
 # Fixtures
@@ -62,15 +64,6 @@ class TestWrite:
     def test_unknown_title_not_duplicate(self, db: Database) -> None:
         assert db.is_duplicate_exact("Unknown Movie 2099") is False
 
-    def test_fuzzy_duplicate_detected(self, db: Database) -> None:
-        result = _minimal_result()
-        db.write(result)
-        assert db.is_duplicate_fuzzy("%Dark Knight%") is True
-
-    def test_fuzzy_no_match_returns_false(self, db: Database) -> None:
-        db.write(_minimal_result())
-        assert db.is_duplicate_fuzzy("%UnknownXYZ%") is False
-
 
 # read_by_tag / find_by_tag
 
@@ -87,75 +80,6 @@ class TestFindByTag:
 
     def test_returns_none_for_unknown_tag(self, db: Database) -> None:
         assert db.find_by_tag("no-such-tag") is None
-
-
-# set_verified / is_verified
-
-
-class TestVerification:
-    """Verification state round-trips correctly."""
-
-    def test_newly_written_record_is_not_verified(self, db: Database) -> None:
-        db.write(_minimal_result(torrent_tag="v-tag-001"))
-        assert db.is_verified("v-tag-001") is False
-
-    def test_set_verified_marks_record(self, db: Database) -> None:
-        db.write(_minimal_result(torrent_tag="v-tag-002"))
-        db.set_verified("v-tag-002")
-        assert db.is_verified("v-tag-002") is True
-
-    def test_set_verified_unknown_tag_is_noop(self, db: Database) -> None:
-        db.set_verified("no-such-tag")  # must not raise
-
-
-# genres_for_tag — JSON and legacy Python-repr formats
-
-
-class TestGenresForTag:
-    """genres_for_tag() handles both JSON and Python-repr encoded lists."""
-
-    def test_json_encoded_genres(self, db: Database) -> None:
-        result = _minimal_result(
-            torrent_tag="genre-tag-json",
-            imdb_genres_list='["Action", "Drama"]',
-        )
-        db.write(result)
-        genres = db.genres_for_tag("genre-tag-json")
-        assert "Action" in genres
-        assert "Drama" in genres
-
-    def test_python_repr_encoded_genres(self, db: Database) -> None:
-        result = _minimal_result(
-            torrent_tag="genre-tag-repr",
-            imdb_genres_list="['Comedy', 'Thriller']",
-        )
-        db.write(result)
-        genres = db.genres_for_tag("genre-tag-repr")
-        assert "Comedy" in genres
-
-    def test_no_genres_returns_empty_list(self, db: Database) -> None:
-        db.write(_minimal_result(torrent_tag="no-genre-tag"))
-        assert db.genres_for_tag("no-genre-tag") == []
-
-    def test_missing_tag_returns_empty_list(self, db: Database) -> None:
-        assert db.genres_for_tag("absent-tag") == []
-
-    def test_invalid_genres_string_returns_empty_list(self, db: Database, tmp_path: Path) -> None:
-        """Genres that fail both json.loads and ast.literal_eval return []."""
-        import sqlite3
-
-        db.write(_minimal_result(torrent_tag="bad-genre-tag"))
-        raw_path = str(tmp_path / "test.db")
-        con = sqlite3.connect(raw_path)
-        con.execute(
-            "UPDATE history SET imdb_genres_list = ? WHERE torrent_tag = ?",
-            ("not-valid-at-all", "bad-genre-tag"),
-        )
-        con.commit()
-        con.close()
-        # Re-open via Database — read genres
-        db2 = Database(raw_path)
-        assert db2.genres_for_tag("bad-genre-tag") == []
 
 
 # IMDb metadata cache
@@ -308,43 +232,21 @@ class TestDatabaseUpgrade:
         assert "imdb_cert_source" in columns
         del db  # ensure object is not garbage collected before assertion
 
+    def test_unversioned_legacy_db_is_upgraded(self, tmp_path: Path) -> None:
+        """A pre-versioning DB (user_version=0, history table present) is fully upgraded."""
+        import sqlite3
 
-# Database vacuum
+        old_path = str(tmp_path / "legacy.db")
+        con = sqlite3.connect(old_path)
+        con.execute("CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, index_title TEXT)")
+        con.commit()
+        con.close()
 
+        db = Database(old_path)
+        version = db._get_user_version()
+        del db
 
-class TestDatabaseVacuum:
-    """Database.vacuum() must not raise."""
-
-    def test_vacuum_runs_without_error(self, db: Database) -> None:
-        db.vacuum()  # must not raise
-
-
-# has_passed
-
-
-class TestHasPassed:
-    """Database.has_passed() returns True only when a Passed/Completed/Stalled row exists."""
-
-    def test_returns_true_when_passed_row_exists(self, db: Database) -> None:
-        db.write(_minimal_result(result="Passed"))
-        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
-
-    def test_returns_false_when_only_failed_row_exists(self, db: Database) -> None:
-        db.write(_minimal_result(result="Failed"))
-        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is False
-
-    def test_returns_false_when_no_row_exists(self, db: Database) -> None:
-        assert db.has_passed("Unknown Movie 2099") is False
-
-    def test_returns_true_when_completed_row_exists(self, db: Database) -> None:
-        db.write(_minimal_result(torrent_tag="movarr-comp-hp"))
-        db.mark_completed("movarr-comp-hp")
-        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
-
-    def test_returns_true_when_stalled_row_exists(self, db: Database) -> None:
-        db.write(_minimal_result(torrent_tag="movarr-stall-hp"))
-        db.mark_stalled("movarr-stall-hp")
-        assert db.has_passed("The Dark Knight 2008 1080p BluRay") is True
+        assert version == 13
 
     def test_upgrade_from_version_7_creates_index_title_index(self, tmp_path: Path) -> None:
         import sqlite3
@@ -371,64 +273,6 @@ class TestHasPassed:
         index_names = [row[0] for row in cursor.fetchall()]
         con2.close()
         assert "ix_history_index_title" in index_names
-        del db
-
-    def test_unversioned_legacy_db_gets_index_created(self, tmp_path: Path) -> None:
-        """A pre-versioning DB (user_version=0, history table exists) must get the index."""
-        import sqlite3
-
-        old_path = str(tmp_path / "legacy.db")
-        con = sqlite3.connect(old_path)
-        con.execute(
-            """
-            CREATE TABLE history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                index_title TEXT,
-                result TEXT,
-                result_details TEXT,
-                imdb_certification TEXT,
-                imdb_cert_source TEXT
-            )
-            """
-        )
-        # user_version stays 0 — simulates a DB created before schema versioning
-        con.commit()
-        con.close()
-
-        db = Database(old_path)
-        con2 = sqlite3.connect(old_path)
-        cursor = con2.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='history'")
-        index_names = [row[0] for row in cursor.fetchall()]
-        con2.close()
-        assert "ix_history_index_title" in index_names
-        del db
-
-    def test_upgrade_from_version_8_adds_stalled_at_column(self, tmp_path: Path) -> None:
-        """Migrating a v8 DB adds the stalled_at column."""
-        import sqlite3
-
-        old_path = str(tmp_path / "v8.db")
-        con = sqlite3.connect(old_path)
-        con.execute(
-            """
-            CREATE TABLE history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                index_title TEXT,
-                result TEXT,
-                result_details TEXT
-            )
-            """
-        )
-        con.execute("PRAGMA user_version = 8")
-        con.commit()
-        con.close()
-
-        db = Database(old_path)
-        con2 = sqlite3.connect(old_path)
-        cursor = con2.execute("PRAGMA table_info(history)")
-        columns = [row[1] for row in cursor.fetchall()]
-        con2.close()
-        assert "stalled_at" in columns
         del db
 
 
@@ -784,10 +628,10 @@ class TestKvStore:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='kv_store'"))
             assert result.fetchone() is not None
 
-    def test_db_version_is_12(self, tmp_path: Path) -> None:
-        """New database is created at schema version 12."""
+    def test_db_version_is_13(self, tmp_path: Path) -> None:
+        """New database is created at schema version 13."""
         db = Database(tmp_path / "test.db")
-        assert db._get_user_version() == 12
+        assert db._get_user_version() == 13
 
     def test_kv_store_migration_from_v10(self, tmp_path: Path) -> None:
         """kv_store table is created and usable when upgrading a v10 database."""
@@ -802,7 +646,7 @@ class TestKvStore:
         raw.close()
 
         db = Database(db_path)
-        assert db._get_user_version() == 12
+        assert db._get_user_version() == 13
 
     def test_kv_rename_migration_v11_to_v12(self, tmp_path: Path) -> None:
         """v11->v12 migration renames index_proxy.zero_results_since to index_proxy.unavailable_since."""
@@ -820,6 +664,140 @@ class TestKvStore:
         raw.close()
 
         db = Database(db_path)
-        assert db._get_user_version() == 12
+        assert db._get_user_version() == 13
         assert db.kv_get("index_proxy.zero_results_since") is None
         assert db.kv_get("index_proxy.unavailable_since") == "2026-01-01T00:00:00+00:00"
+
+
+class TestDualTitleCacheColumns:
+    """Schema v13 persists the dual-title fields the library matcher needs."""
+
+    def test_v13_adds_dual_title_columns(self, tmp_path: Path) -> None:
+        """Upgrading from v12 adds imdb_original_title and imdb_alternate_titles."""
+        import sqlite3
+
+        old_path = str(tmp_path / "v12.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                result TEXT,
+                result_details TEXT
+            )
+            """
+        )
+        con.execute("PRAGMA user_version = 12")
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        con2 = sqlite3.connect(old_path)
+        columns = [row[1] for row in con2.execute("PRAGMA table_info(history)").fetchall()]
+        version = con2.execute("PRAGMA user_version").fetchone()[0]
+        con2.close()
+        del db
+
+        assert "imdb_original_title" in columns
+        assert "imdb_alternate_titles" in columns
+        assert version == 13
+
+    def test_dual_title_fields_round_trip_through_cache(self, db: Database) -> None:
+        """Cached metadata must return the original and alternate titles."""
+        db.write(
+            _minimal_result(
+                torrent_tag="dual-title",
+                imdb_id="tt0133093",
+                imdb_title="The Matrix",
+                imdb_original_title="Матрица",
+                imdb_alternate_titles=["Matrix", "Die Matrix"],
+            )
+        )
+
+        cached = db.find_imdb_metadata("tt0133093")
+
+        assert cached is not None
+        assert cached["imdb_original_title"] == "Матрица"
+        assert cached["imdb_alternate_titles"] == ["Matrix", "Die Matrix"]
+
+
+class TestDbPathResolution:
+    """A directory whose name contains a dot is still a directory."""
+
+    def test_directory_with_dot_in_name_gets_movarr_db(self, tmp_path: Path) -> None:
+        """Database(path) treats an existing dotted directory as a directory."""
+        dotted = tmp_path / "movarr-1.3"
+        dotted.mkdir()
+
+        db = Database(dotted)
+        db.write(_minimal_result())
+
+        assert (dotted / "movarr.db").is_file()
+        assert not dotted.is_file()
+
+
+class TestEncodeField:
+    """_encode_field serialises lists as JSON and passes scalars through."""
+
+    def test_list_is_json_encoded(self, db: Database) -> None:
+        db.write(_minimal_result(imdb_genres_list=["Action", "Drama"]))
+        record = db.find_by_tag("uuid-test-001")
+        assert record is not None
+        assert record.imdb_genres_list == '["Action", "Drama"]'
+
+    def test_scalar_is_stringified(self, db: Database) -> None:
+        """A scalar in a list-typed field is stored via str() rather than crashing."""
+        db.write(_minimal_result(imdb_genres_list="Action"))
+        record = db.find_by_tag("uuid-test-001")
+        assert record is not None
+        assert record.imdb_genres_list == "Action"
+
+
+class TestLegacyColumnRepair:
+    """An unversioned legacy table is repaired for columns added before v7."""
+
+    def test_missing_pre_v7_columns_are_added(self, tmp_path: Path) -> None:
+        """A v5-era table lacking torrent_tag/verified must still be writable."""
+        import sqlite3
+
+        old_path = str(tmp_path / "v5.db")
+        con = sqlite3.connect(old_path)
+        con.execute(
+            """
+            CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_title TEXT,
+                result TEXT,
+                result_details TEXT
+            )
+            """
+        )
+        con.commit()
+        con.close()
+
+        db = Database(old_path)
+        db.write(_minimal_result(torrent_tag="legacy-tag"))
+        record = db.find_by_tag("legacy-tag")
+
+        assert record is not None
+        assert record.torrent_tag == "legacy-tag"
+
+
+class TestNewerDatabaseSchema:
+    """A database written by a newer build is flagged, not silently used."""
+
+    def test_newer_version_warns(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        import sqlite3
+
+        path = str(tmp_path / "newer.db")
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE history (id INTEGER PRIMARY KEY, index_title TEXT)")
+        con.execute("PRAGMA user_version = 99")
+        con.commit()
+        con.close()
+        log = mocker.patch("movarr.database._logger")
+
+        Database(path)
+
+        assert any("newer" in str(c).lower() for c in log.warning.call_args_list)

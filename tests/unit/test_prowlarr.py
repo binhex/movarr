@@ -297,3 +297,35 @@ class TestIsReachable:
         logged = " ".join(str(a) for a in mock_warn.call_args[0])
         assert "localhost" in logged
         assert "9696" in logged
+
+
+class TestNullLeechers:
+    """A JSON null peer count must persist as an empty string."""
+
+    def test_null_leechers_becomes_empty_string(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Movie 2023 1080p BluRay",
+            "indexer": "MyTracker",
+            "publishDate": "2023-01-01",
+            "infoUrl": "http://example.com/info",
+            "seeders": 42,
+            "leechers": None,
+            "size": 8_589_934_592,
+            "downloadUrl": "http://example.com/dl.torrent",
+            "magnetUrl": "magnet:?xt=urn:btih:abc123",
+        }
+
+        result = client._parse_result(item)
+
+        assert result is not None
+        assert result["index_peers"] == ""
+
+
+class TestNonDictResult:
+    """A malformed JSON element is skipped, not fatal."""
+
+    def test_non_dict_element_returns_none(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+
+        assert client._parse_result(["not", "an", "object"]) is None  # type: ignore[arg-type]

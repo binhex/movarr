@@ -21,6 +21,7 @@ import pycountry
 from loguru import logger as _logger
 
 from movarr.notifications import _strip_poster_resolution
+from movarr.utils import redact_secrets
 
 if TYPE_CHECKING:
     from movarr.config import Config
@@ -161,7 +162,10 @@ def _build_imdbpie_payload(client: Any, imdb_id: str) -> dict[str, Any] | None:
         aux_data = client.get_title_auxiliary(imdb_id)
     except Exception:  # noqa: BLE001
         return None
-    return {
+    if not isinstance(aux_data, dict):
+        # Auxiliary data is optional and shape-unstable; never dereference it blindly.
+        aux_data = {}
+    payload = {
         "title": _safe_str(title_data, "base", "title"),
         "year": _safe_val(title_data, "base", "year"),
         "title_type": _safe_str(title_data, "base", "titleType"),
@@ -174,13 +178,37 @@ def _build_imdbpie_payload(client: Any, imdb_id: str) -> dict[str, Any] | None:
         "trailer_url": _extract_trailer(aux_data),
         "genres": _extract_list_or_none(genres_data, "genres"),
         "cert": _extract_cert_imdbpie(aux_data),
-        # Convert spoken language names to ISO 639-1 codes so they match the
-        # allow-list format documented in the README (e.g. ["en"], not ["English"]).
-        # _convert_languages and _convert_countries accept comma-separated strings.
-        "languages": _convert_languages(", ".join(_extract_list_or_none(aux_data, "spokenLanguages") or [])) or None,
-        "countries": _convert_countries(", ".join(_extract_list_or_none(aux_data, "origins") or [])) or None,
+        "languages": _imdbpie_languages(aux_data),
+        "countries": _imdbpie_countries(aux_data),
         "original_title": aux_data.get("originalTitle"),
         "alternate_titles": _safe_alternate_titles(aux_data.get("alternateTitlesSample")),
+    }
+    payload.update(_imdbpie_credits(credits_data))
+    return payload
+
+
+def _joined_aux_list(aux_data: dict, key: str) -> str:
+    """Return the *key* list from *aux_data* joined into a comma-separated string."""
+    return ", ".join(str(x) for x in (_extract_list_or_none(aux_data, key) or []) if x)
+
+
+def _imdbpie_languages(aux_data: dict) -> list[str] | None:
+    """Return spoken languages as ISO 639-1 codes, or None.
+
+    The README documents codes (``["en"]``), not names, so the IMDbPie names are
+    converted here.  ``_convert_languages`` accepts a comma-separated string.
+    """
+    return _convert_languages(_joined_aux_list(aux_data, "spokenLanguages")) or None
+
+
+def _imdbpie_countries(aux_data: dict) -> list[str] | None:
+    """Return production countries as ISO codes, or None."""
+    return _convert_countries(_joined_aux_list(aux_data, "origins")) or None
+
+
+def _imdbpie_credits(credits_data: Any) -> dict[str, Any]:
+    """Return the four credits fields extracted from *credits_data*."""
+    return {
         "directors": _credits_names(credits_data, "director"),
         "writers": _credits_names(credits_data, "writer"),
         "cast": _credits_names(credits_data, "cast"),
@@ -261,8 +289,15 @@ def _split_csv_field(data: dict, key: str) -> list[str] | None:
 
 
 def _parse_digits_to_int(raw: str | None) -> int | None:
-    """Extract all digit characters from *raw* and return as int, or None if *raw* is falsy."""
-    return int("".join(re.findall(r"\d+", raw))) if raw else None
+    """Extract all digit characters from *raw* and return as int, or None.
+
+    Returns ``None`` when *raw* is falsy or contains no digits at all — a
+    non-numeric value from OMDb must not raise inside the metadata pipeline.
+    """
+    if not raw:
+        return None
+    digits = "".join(re.findall(r"\d+", raw))
+    return int(digits) if digits else None
 
 
 def _parse_omdb_canonical(data: dict) -> dict:
@@ -292,7 +327,10 @@ def _parse_omdb_canonical(data: dict) -> dict:
     year: int | None = int(year_digits) if len(year_digits) == _year_digits else None
 
     raw_rating = _omit_na(data, "imdb_rating")
-    rating: float | None = float(raw_rating) if raw_rating else None
+    try:
+        rating: float | None = float(raw_rating) if raw_rating else None
+    except (TypeError, ValueError):
+        rating = None
 
     return {
         "title": _omit_na(data, "title"),
@@ -319,11 +357,19 @@ def _parse_omdb_canonical(data: dict) -> dict:
 
 
 def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
-    import omdb  # noqa: PLC0415
-
     api_key = config.credentials.omdb.api_key
     imdb_id = result.get("imdb_id", "")
     details: list[str] = result.get("result_details") or []
+
+    try:
+        import omdb  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        msg = f"OMDb client unavailable: {exc}"
+        _logger.warning(msg)
+        details.append(f"Failed: {msg}")
+        result["result"] = "Failed"
+        result["result_details"] = details
+        return result
 
     if not api_key:
         msg = "OMDb API key not configured; cannot fetch OMDb metadata."
@@ -337,7 +383,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
         omdb_client = omdb.OMDBClient(apikey=api_key)
         data = omdb_client.imdbid(imdb_id, timeout=30)
     except Exception as exc:  # noqa: BLE001
-        msg = f"OMDb fetch failed for '{imdb_id}': {exc}"
+        msg = f"OMDb fetch failed for '{imdb_id}': {redact_secrets(exc)}"
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
         result["result"] = "Failed"
@@ -348,7 +394,7 @@ def _fetch_omdb(result: ResultDict, config: Config) -> ResultDict:
     # not found) to an empty dict rather than raising.  Detect that here so
     # callers see a clean failure instead of a misleading "Passed" with all
     # metadata fields set to None.
-    if not data or not (data.get("title") or data.get("imdb_id")):
+    if not isinstance(data, dict) or not (data.get("title") or data.get("imdb_id")):
         msg = f"OMDb returned no usable data for '{imdb_id}' (empty or error response)."
         _logger.warning(msg)
         details.append(f"Failed: {msg}")
@@ -410,7 +456,7 @@ def _credits_names(credits: dict, role: str) -> list[str] | None:
             name = person.get("name")
             if name and name not in names and len(names) < _MAX_CREDITS:
                 names.append(name)
-    except (KeyError, TypeError):
+    except (AttributeError, KeyError, TypeError):
         return None
     return names or None
 
@@ -446,7 +492,7 @@ def _safe_val(data: dict, *keys: str | int) -> Any:
     for k in keys:
         try:
             cur = cur[k]
-        except (KeyError, IndexError, TypeError):
+        except (AttributeError, KeyError, IndexError, TypeError):
             return None
     return cur
 
@@ -476,7 +522,7 @@ def _extract_cert_from_certificates_list(aux: dict) -> str | None:
             None,
         )
         return uk or (certs[0].get("certificate") if certs else None)
-    except (KeyError, IndexError, TypeError):
+    except (AttributeError, KeyError, IndexError, TypeError):
         return None
 
 

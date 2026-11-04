@@ -11,7 +11,8 @@ from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
 from movarr.models import build_result_dict
-from movarr.utils import bytes_to_mb
+from movarr.parsing import normalise_imdb_id
+from movarr.utils import bytes_to_mb, redact_secrets
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -19,14 +20,10 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["JackettClient", "JackettError"]
+__all__ = ["JackettClient"]
 
 # Torznab namespace used as a dict key by xmltodict
 _TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
-
-
-class JackettError(Exception):
-    """Raised when Jackett cannot be reached or returns unusable data."""
 
 
 class JackettClient:
@@ -74,7 +71,7 @@ class JackettClient:
                 "Jackett is not reachable at {}:{} — {}.",
                 self._cfg.host,
                 self._cfg.port,
-                exc,
+                redact_secrets(exc),
             )
             return False
 
@@ -86,9 +83,9 @@ class JackettClient:
     ) -> Generator[ResultDict, None, None]:
         """Yield one :class:`~movarr.models.ResultDict` per search result.
 
-        Paginates through results starting at offset 0, stepping by
-        *limit* on each page until ``max_offset`` is reached or the feed
-        returns an empty page.
+        Paginates through results starting at offset 0, advancing the offset by
+        the number of items each page actually returned (at least one) until
+        ``max_offset`` is reached or the feed returns an empty page.
 
         Args:
             index_site: Jackett indexer slug (e.g. ``"rarbg"`` or ``"all"``).
@@ -126,8 +123,10 @@ class JackettClient:
                 if result is not None:
                     yield result
 
-            # Advance by the actual page size, not a hardcoded 100 (bug fix).
-            offset += limit
+            # Advance by the number of items actually returned: an indexer that
+            # caps the page below our requested limit would otherwise skip
+            # everything between the page end and the next offset.
+            offset += max(len(items), 1)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -138,10 +137,10 @@ class JackettClient:
         try:
             response = self._http.get(url, read_timeout=self._cfg.read_timeout)
         except HttpError as exc:
-            _logger.warning("Jackett HTTP error for '{}': {}.", index_site, exc)
+            _logger.warning("Jackett HTTP error for '{}': {}.", index_site, redact_secrets(exc))
             return None
         except Exception as exc:
-            _logger.warning("Jackett request failed for '{}': {}.", index_site, exc)
+            _logger.warning("Jackett request failed for '{}': {}.", index_site, redact_secrets(exc))
             return None
 
         try:
@@ -152,7 +151,7 @@ class JackettClient:
 
         try:
             items = parsed["rss"]["channel"]["item"]
-        except KeyError:
+        except (KeyError, TypeError):
             # A valid feed with no results returns no <item> elements.
             # This is not a parse error — return an empty list.
             return []
@@ -165,6 +164,9 @@ class JackettClient:
 
     def _parse_item(self, item: dict[str, Any]) -> ResultDict | None:
         """Extract a :class:`~movarr.models.ResultDict` from a single Torznab item."""
+        if not isinstance(item, dict):
+            _logger.debug("Skipping malformed Torznab item (not an object).")
+            return None
         index_title: str | None = item.get("title")
         if not index_title:
             return None
@@ -182,6 +184,9 @@ class JackettClient:
             index_details=item.get("comments", ""),
             index_seeders=self._attr(item, "seeders"),
             index_peers=self._attr(item, "peers"),
+            # Deliberately the plain RSS <size> element only: Jackett always
+            # emits it, and a torznab size attr is not trusted (see
+            # tests/unit/test_jackett.py::test_size_in_torznab_attr_only_is_ignored).
             index_size=item.get("size", ""),
             index_size_mb=bytes_to_mb(item.get("size", "")),
             torrent_url=self._torrent_url(item),
@@ -189,10 +194,14 @@ class JackettClient:
             category=self._attr(item, "category"),
         )
 
-        # Prefer an embedded IMDb ID if present.
-        imdb_id = self._attr(item, "imdbid")
+        # Prefer an embedded IMDb ID if present, but never trust it verbatim:
+        # the value reaches the notification body, the qBittorrent tag and the
+        # IMDbPie request URL, so a malformed ID from an indexer feed must be
+        # normalised or dropped.
+        imdb_id = normalise_imdb_id(self._attr(item, "imdbid"))
         if imdb_id:
             result["imdb_id"] = imdb_id
+            result["_imdb_id_source"] = "indexer"
 
         return result
 
@@ -210,11 +219,11 @@ class JackettClient:
         if isinstance(enclosure, dict):
             url = enclosure.get("@url", "")
             if not url:
-                return str(item.get("link", ""))  # malformed enclosure — use link
-            if url.startswith("magnet:"):
+                return str(item.get("link") or "")  # malformed enclosure — use link
+            if str(url).startswith("magnet:"):
                 return ""  # magnet-only release; magnet_url is populated separately
             return str(url)
-        return str(item.get("link", ""))
+        return str(item.get("link") or "")
 
     @staticmethod
     def _enclosure_magnet(item: dict[str, Any]) -> str:
@@ -225,8 +234,8 @@ class JackettClient:
         """
         enclosure = item.get("enclosure")
         if isinstance(enclosure, dict):
-            url = enclosure.get("@url", "")
-            if url.startswith("magnet:"):
+            url = enclosure.get("@url") or ""
+            if str(url).startswith("magnet:"):
                 return str(url)
         return ""
 
@@ -234,7 +243,7 @@ class JackettClient:
     def _attr(item: dict[str, Any], name: str) -> str:
         """Extract a Torznab ``torznab:attr`` value by name."""
         torznab_ns_key = f"{_TORZNAB_NS}:attr"
-        attrs = item.get(torznab_ns_key, [])
+        attrs = item.get(torznab_ns_key) or []
         if isinstance(attrs, dict):
             attrs = [attrs]
         for attr in attrs:

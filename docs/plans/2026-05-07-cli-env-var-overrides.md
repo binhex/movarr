@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Historical, with deviations: `--daemon` and `config.general.daemon_mode` were never
+implemented, and the path options take directories (`file_okay=False`), not files.
+
 **Goal:** Add CLI options for the settings Unraid users need most, so a container can be configured entirely via environment variables without ever editing movarr.yml; also improve the auto-generated config with a sensible 1080p-only default search.
 
 **Architecture:** All new options follow the existing override pattern — `None` default means "not supplied, use YAML value". After `load_config()` the CLI applies non-None values onto the loaded config object before passing it to the scheduler. A single `_apply_cli_overrides()` helper keeps `cli()` readable. The default-config improvement is a one-line change to `IndexSiteConfig`.
@@ -13,7 +16,7 @@
 ## File Map
 
 | File | Change |
-|------|--------|
+| ------ | -------- |
 | `src/movarr/cli.py` | Add 12 new `@click.option` decorators + `_apply_cli_overrides()` helper |
 | `src/movarr/config.py` | Change `IndexSiteConfig.search` default to 1080p-only |
 | `tests/unit/test_cli.py` | New test class `TestCliOverrides` covering every new option |
@@ -27,6 +30,7 @@ No new files. No migrations needed (no YAML schema change — all new options pu
 The current default generates both `1080p` and `2160p` search tiers. New installs should start with just `1080p` (category `2000,5000`) so the out-of-the-box experience is conservative.
 
 **Files:**
+
 - Modify: `src/movarr/config.py` — `IndexSiteConfig.search` field default
 
 - [ ] **Step 1: Write the failing test**
@@ -107,6 +111,7 @@ git commit -m "feat(config): default search tier is 1080p only (category 2000,50
 Introduce the override helper function and wire up the first new option as a pattern check.
 
 **Files:**
+
 - Modify: `src/movarr/cli.py`
 - Modify: `tests/unit/test_cli.py`
 
@@ -240,11 +245,12 @@ git commit -m "feat(cli): add --db-path CLI override"
 
 ---
 
-### Task 3: Add `--library-path-list` option
+### Task 3: Add `--library-path` option
 
 Accepts a comma-separated list (e.g. `"/media/movies,/media/4k"`) and splits it into `config.general.library_path_list`.
 
 **Files:**
+
 - Modify: `src/movarr/cli.py`
 - Modify: `tests/unit/test_cli.py`
 
@@ -254,15 +260,15 @@ Add to `TestCliOverrides` in `tests/unit/test_cli.py`:
 
 ```python
 def test_library_path_list_single_path(self, mocker: "MockerFixture") -> None:
-    cfg = self._invoke(mocker, ["--library-path-list", "/media/movies", "--test"])
+    cfg = self._invoke(mocker, ["--library-path", "/media/movies", "--test"])
     assert cfg.general.library_path_list == ["/media/movies"]
 
 def test_library_path_list_multiple_paths(self, mocker: "MockerFixture") -> None:
-    cfg = self._invoke(mocker, ["--library-path-list", "/media/movies,/media/4k", "--test"])
+    cfg = self._invoke(mocker, ["--library-path", "/media/movies,/media/4k", "--test"])
     assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
 def test_library_path_list_strips_whitespace(self, mocker: "MockerFixture") -> None:
-    cfg = self._invoke(mocker, ["--library-path-list", "/media/movies, /media/4k", "--test"])
+    cfg = self._invoke(mocker, ["--library-path", "/media/movies, /media/4k", "--test"])
     assert cfg.general.library_path_list == ["/media/movies", "/media/4k"]
 
 def test_library_path_list_absent_leaves_config_unchanged(self, mocker: "MockerFixture") -> None:
@@ -284,7 +290,7 @@ Add decorator:
 
 ```python
 @click.option(
-    "--library-path-list",
+    "--library-path",
     default=None,
     show_default=False,
     metavar="<path[,path...]>",
@@ -322,7 +328,7 @@ Expected: all `PASSED`.
 
 ```bash
 git add src/movarr/cli.py tests/unit/test_cli.py
-git commit -m "feat(cli): add --library-path-list CLI override (comma-separated)"
+git commit -m "feat(cli): add --library-path CLI override (comma-separated)"
 ```
 
 ---
@@ -332,6 +338,7 @@ git commit -m "feat(cli): add --library-path-list CLI override (comma-separated)
 Four options: `--qbt-host`, `--qbt-port`, `--qbt-username`, `--qbt-password`.
 
 **Files:**
+
 - Modify: `src/movarr/cli.py`
 - Modify: `tests/unit/test_cli.py`
 
@@ -459,6 +466,7 @@ git commit -m "feat(cli): add --qbt-host/port/username/password CLI overrides"
 Options: `--index-proxy` (choice), `--jackett-host`, `--jackett-port`, `--jackett-api-key`.
 
 **Files:**
+
 - Modify: `src/movarr/cli.py`
 - Modify: `tests/unit/test_cli.py`
 
@@ -578,6 +586,7 @@ git commit -m "feat(cli): add --index-proxy and --jackett-host/port/api-key CLI 
 Options: `--prowlarr-host`, `--prowlarr-port`, `--prowlarr-api-key`.
 
 **Files:**
+
 - Modify: `src/movarr/cli.py`
 - Modify: `tests/unit/test_cli.py`
 
@@ -686,6 +695,7 @@ git commit -m "feat(cli): add --prowlarr-host/port/api-key CLI overrides"
 Verify the complete feature end-to-end and check the help output.
 
 **Files:**
+
 - Modify: `tests/unit/test_cli.py` — one integration-style smoke test
 
 - [ ] **Step 1: Write the integration test**
@@ -699,7 +709,7 @@ def test_all_overrides_applied_together(self, mocker: "MockerFixture") -> None:
         mocker,
         [
             "--db-path", "/data/movarr.db",
-            "--library-path-list", "/media/movies,/media/4k",
+            "--library-path", "/media/movies,/media/4k",
             "--qbt-host", "10.0.0.5",
             "--qbt-port", "8090",
             "--qbt-username", "admin2",
@@ -733,7 +743,7 @@ def test_help_shows_all_new_options(self) -> None:
     from movarr.cli import cli
     result = CliRunner().invoke(cli, ["--help"])
     for opt in (
-        "--db-path", "--library-path-list",
+        "--db-path", "--library-path",
         "--qbt-host", "--qbt-port", "--qbt-username", "--qbt-password",
         "--index-proxy",
         "--jackett-host", "--jackett-port", "--jackett-api-key",
@@ -774,7 +784,7 @@ git push
 **Spec coverage:**
 
 | Requirement | Task |
-|------------|------|
+| ------------ | ------ |
 | `general/library_path_list` comma-separated CLI | Task 3 |
 | `general/db_path` CLI | Task 2 |
 | `torrent_client/qbittorrent` host, port, username, password | Task 4 |

@@ -7,7 +7,7 @@ alert if it has been unavailable for longer than
 
 Adding support for a future torrent client requires only:
   1. Adding a ``"client_key": "DisplayName"`` entry to ``_CLIENT_DISPLAY_NAMES``.
-  2. Ensuring the client implements an ``is_connected()`` method.
+  2. Ensuring the client implements an ``is_reachable()`` method.
 """
 
 from __future__ import annotations

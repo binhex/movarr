@@ -1,15 +1,28 @@
 """Miscellaneous project utilities for movarr."""
 
-from pathlib import Path
+import re
+
+# Query parameters that carry credentials for the services movarr talks to
+# (TMDb, OMDb and Jackett all authenticate via the query string).
+_SECRET_QUERY_RE = re.compile(r"(?i)\b(api[_-]?key|apikey|token|secret|password|passwd)=([^&\s'\"]+)")
 
 
-def get_project_root() -> Path:
-    """Return the root directory of the movarr project.
+def redact_secrets(value: object) -> str:
+    """Return *value* as a string with secret-bearing query parameters masked.
 
-    Resolves to the parent of the ``src/`` package directory, which is the
-    repository root when installed in editable mode.
+    Exception messages and log records frequently embed the request URL.
+    Because TMDb, OMDb and Jackett pass their API key in the query string, an
+    unredacted URL leaks the user's credential into the log file, the history
+    database and queued notification bodies.
+
+    Args:
+        value: Any value; converted with ``str()`` before redaction.
+
+    Returns:
+        The string with every secret query parameter value replaced by
+        ``REDACTED``.
     """
-    return Path(__file__).parent.parent.parent
+    return _SECRET_QUERY_RE.sub(r"\1=REDACTED", str(value))
 
 
 def bytes_to_mb(size_bytes: object) -> str:
@@ -21,6 +34,27 @@ def bytes_to_mb(size_bytes: object) -> str:
         # Use int() directly (not float) to avoid losing precision for values
         # larger than 2^53 bytes (~9 PB), though current torrent files never
         # approach that size.
-        return str(int(str(size_bytes).split(".")[0]) // 1_000_000)
+        value = int(str(size_bytes).split(".")[0])
+        if value < 0:
+            return "0"
+        return str(value // 1_000_000)
     except (ValueError, TypeError, OverflowError):
         return "0"
+
+
+def parse_size_bytes(value: object) -> int | None:
+    """Return *value* as an integer byte count, tolerating float-formatted strings.
+
+    Indexer JSON occasionally reports sizes as ``4294967296.0``; ``int()`` rejects
+    that while the rest of the pipeline (``bytes_to_mb``) accepts it.
+
+    Args:
+        value: Raw size value from an indexer feed.
+
+    Returns:
+        The integer byte count, or ``None`` when *value* is not numeric.
+    """
+    try:
+        return int(str(value).split(".")[0])
+    except (ValueError, TypeError, OverflowError):
+        return None

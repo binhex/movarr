@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger as _logger
 
 from movarr.downloader import HttpClient
-from movarr.parsing import normalise_for_compare, sanitise
+from movarr.parsing import normalise_for_compare, normalise_imdb_id, sanitise
+from movarr.utils import redact_secrets
 
 if TYPE_CHECKING:
     from movarr.config import Config
@@ -87,6 +88,7 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     movie_title_compare = result.get("movie_title_compare") or ""
     year = result.get("movie_title_year") or ""
 
+    client = None
     try:
         import imdbpie  # noqa: PLC0415
 
@@ -95,6 +97,12 @@ def _search_imdbpie(result: ResultDict, _config: Config) -> ResultDict:
     except Exception as exc:  # noqa: BLE001
         _fail(result, f"IMDbPie search error for '{search_term}': {exc}")
         return result
+    finally:
+        # This strategy runs for nearly every result; an unclosed session leaks
+        # sockets until GC.
+        with contextlib.suppress(Exception):
+            if client is not None:
+                client.session.close()
 
     if not hits:
         _fail(result, f"IMDbPie returned no hits for '{search_term}'.")
@@ -166,6 +174,9 @@ def _resolve_imdb_from_tmdb(
     except Exception as exc:  # noqa: BLE001
         _fail(result, f"TMDb detail request failed: {exc}")
         return None
+    if not isinstance(detail, dict):
+        _fail(result, "TMDb detail request failed: unexpected response shape.")
+        return None
     imdb_id = detail.get("imdb_id")
     return imdb_id if imdb_id else None
 
@@ -180,14 +191,23 @@ def _tmdb_search_request(title: str, year: str, api_key: str) -> tuple[dict | No
     http = HttpClient()
     try:
         resp = http.get(url)
-        return cast("dict", json.loads(resp.content)), None
+        parsed = json.loads(resp.content)
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
+    finally:
+        http.close()
+    if not isinstance(parsed, dict):
+        return None, "unexpected response shape (expected a JSON object)"
+    return parsed, None
 
 
 def _apply_tmdb_result(result: ResultDict, tmdb_id: int, api_key: str, title: str, year: str) -> ResultDict:
     """Resolve IMDb ID from TMDb and apply the match to *result*."""
-    imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, HttpClient(), result)
+    http = HttpClient()
+    try:
+        imdb_id = _resolve_imdb_from_tmdb(tmdb_id, api_key, http, result)
+    finally:
+        http.close()
     if imdb_id is None:
         if result.get("result") != "Failed":
             _apply_imdb_match(result, [], title, year)
@@ -220,7 +240,11 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
         _fail(result, f"TMDb search request failed for '{title}' ({year}){err_suffix}.")
         return result
 
-    tmdb_id = _find_tmdb_candidate(data.get("results", []), movie_title_compare, year)
+    raw_results = data.get("results")
+    if not isinstance(raw_results, list):
+        _fail(result, f"TMDb search returned an unexpected payload shape for '{title}' ({year}).")
+        return result
+    tmdb_id = _find_tmdb_candidate(raw_results, movie_title_compare, year)
     if tmdb_id is None:
         _apply_imdb_match(result, [], title, year)
         return result
@@ -242,7 +266,8 @@ def _validate_omdb_title(
 
     Calls _fail on *result* for invalid responses.
     """
-    omdb_title = data.get("Title")
+    raw_omdb_title = data.get("Title")
+    omdb_title = raw_omdb_title if isinstance(raw_omdb_title, str) else None
     omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
     if not omdb_title or not omdb_norm:
         omdb_error = data.get("Error") or ""
@@ -254,7 +279,7 @@ def _validate_omdb_title(
     if omdb_norm != movie_title_compare:
         _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
         return None
-    return cast("str", omdb_title)
+    return omdb_title
 
 
 def _validate_omdb_year(data: dict, year: str, result: ResultDict) -> bool:
@@ -277,11 +302,17 @@ def _omdb_search_request(title: str, year: str, api_key: str) -> tuple[dict | No
     """
     encoded_title = urllib.parse.quote(title)
     url = f"https://www.omdbapi.com/?apikey={api_key}&t={encoded_title}&y={year}"
+    http = HttpClient()
     try:
-        resp = HttpClient().get(url)
-        return cast("dict", json.loads(resp.content)), None
+        resp = http.get(url)
+        parsed = json.loads(resp.content)
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
+    finally:
+        http.close()
+    if not isinstance(parsed, dict):
+        return None, "unexpected response shape (expected a JSON object)"
+    return parsed, None
 
 
 def _search_omdb(result: ResultDict, config: Config) -> ResultDict:
@@ -395,7 +426,7 @@ def _get_str(result: ResultDict, key: str) -> str:
 def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
     """Search IMDb ID via DuckDuckGo web search.
 
-    Uses ``duckduckgo-search`` (a maintained, scraper-friendly alternative
+    Uses ``ddgs`` (a maintained, scraper-friendly alternative
     to the fragile Google HTML scraper).  Returns the first IMDb URL whose
     normalised title matches ``movie_title_compare`` or ``movie_title_and_year_compare``.
     """
@@ -447,14 +478,21 @@ def _apply_imdb_match(
 
 
 def _fail(result: ResultDict, message: str) -> None:
-    _logger.warning(message)
+    _logger.warning(redact_secrets(message))
     details: list[str] = result.get("result_details") or []
-    details.append(f"Failed: {message}")
+    details.append(f"Failed: {redact_secrets(message)}")
     result["result"] = "Failed"
     result["result_details"] = details
 
 
 def _pass(result: ResultDict, imdb_id: str, message: str) -> None:
+    # Every strategy funnels through here, so this is the single validation
+    # point: a malformed ID must never reach the DB, an API URL or a tag.
+    canonical = normalise_imdb_id(imdb_id)
+    if canonical is None:
+        _fail(result, f"Provider returned a malformed IMDb ID {imdb_id!r}.")
+        return
+    imdb_id = canonical
     _logger.info("IMDb ID '{}' — {}", imdb_id, message)
     details: list[str] = result.get("result_details") or []
     details.append(f"Passed: {message}")

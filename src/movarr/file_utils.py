@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import shutil
 import subprocess
-from itertools import chain
+import uuid
 from pathlib import Path
 
 from loguru import logger as _logger
@@ -16,17 +17,20 @@ __all__ = [
     "copy_with_verify",
     "make_directory",
     "delete_file",
-    "resolution_label_from_height",
 ]
 
 
-def walk_library(library_paths: list[str]) -> chain[tuple[str, list[str], list[str]]]:
-    """Yield ``(root, dirs, files)`` tuples for every path in *library_paths*.
+def walk_library(library_paths: list[str]) -> list[tuple[str, list[str], list[str]]]:
+    """Return ``(root, dirs, files)`` tuples for every path in *library_paths*.
+
+    Materialised as a list on purpose: the dedup pipeline walks the result more
+    than once, and a one-shot iterator would silently appear empty the second
+    time round.
 
     Args:
         library_paths: List of root directories to walk.
     """
-    return chain.from_iterable(os.walk(p) for p in library_paths)
+    return [entry for path in library_paths for entry in os.walk(path)]
 
 
 _CHUNK_SIZE = 65_536  # 64 KiB — balance between I/O calls and memory usage
@@ -80,6 +84,9 @@ def delete_file(path: str | Path) -> bool:
         path: File path to delete.
     """
     target = Path(path)
+    if target.is_dir():
+        _logger.error("Refusing to delete '{}': it is a directory, not a file.", target)
+        return False
     if not target.is_file():
         _logger.debug("File '{}' does not exist; treating as already deleted.", target)
         return True
@@ -97,15 +104,15 @@ def delete_file(path: str | Path) -> bool:
 
 
 def _verify_existing(src: Path, dst: Path) -> bool | None:
-    """Check if *dst* already matches *src* by SHA-256.
+    """Check whether *dst* already matches *src* by SHA-256.
+
+    This never modifies either file.  Replacing a mismatched destination is the
+    caller's job, and it happens only after the replacement copy is verified.
 
     Returns:
-        True  — dst is identical to src; skip the copy,
-               OR the destination could not be deleted (e.g. immutable
-               file) and the mismatch is being accepted to unblock
-               post-processing.
-        None  — dst was mismatched and has been deleted; proceed to copy.
-        False — the source file disappeared during verification.
+        True  - dst is identical to src (the copy can be skipped).
+        None  - dst exists but differs, or became unreadable (replace it).
+        False - the source file disappeared during verification.
     """
     _logger.info("Verifying existing destination '{}' checksum.", dst)
     try:
@@ -113,7 +120,11 @@ def _verify_existing(src: Path, dst: Path) -> bool | None:
     except OSError:
         _logger.error("Source file disappeared during verification: '{}'", src)
         return False
-    dst_hash = _sha256(dst, label="Verifying '{}' checksum:")
+    try:
+        dst_hash = _sha256(dst, label="Verifying '{}' checksum:")
+    except OSError:
+        _logger.warning("Destination '{}' became unreadable during verification; replacing.", dst)
+        return None
     if src_hash == dst_hash:
         _logger.info(
             "Destination '{}' already matches source (sha256={}); skipping copy.",
@@ -122,43 +133,56 @@ def _verify_existing(src: Path, dst: Path) -> bool | None:
         )
         return True
     _logger.warning(
-        "Destination '{}' checksum mismatch (src={}, dst={}); re-copying.",
+        "Destination '{}' checksum mismatch (src={}, dst={}); replacing.",
         dst,
         src_hash[:12],
         dst_hash[:12],
     )
-    if not delete_file(dst):
-        # File may be immutable; try to remove the immutable flag and retry.
-        _logger.debug("Attempting to remove immutable attribute from '{}'.", dst)
-        try:
-            result = subprocess.run(
-                ["chattr", "-i", str(dst)],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr.decode(errors="replace").strip()
-                _logger.debug("chattr -i failed (rc={}): {}", result.returncode, stderr)
-            else:
-                if delete_file(dst):
-                    return None
-                _logger.error(
-                    "chattr -i succeeded for '{}' but the second delete still "
-                    "failed; accepting existing file to unblock post-processing.",
-                    dst,
-                )
-                return True
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        _logger.warning(
-            "Could not delete '{}'; checksum mismatch will be accepted to avoid "
-            "blocking post-processing.  Try granting CAP_LINUX_IMMUTABLE capability "
-            "or manually removing the immutable attribute with 'chattr -i'.",
-            dst,
-        )
-        return True
-
     return None
+
+
+def _try_clear_immutable(target: Path) -> None:
+    """Best-effort ``chattr -i`` so an immutable destination can be replaced."""
+    _logger.debug("Attempting to remove immutable attribute from '{}'.", target)
+    try:
+        result = subprocess.run(["chattr", "-i", str(target)], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace").strip()
+        _logger.debug("chattr -i failed (rc={}): {}", result.returncode, stderr)
+
+
+def _replace_copy(src: Path, dst: Path) -> bool:
+    """Copy *src* to a temporary sibling, verify it, then swap it over *dst*.
+
+    The old destination is never removed before a verified replacement exists,
+    so a failed copy (disk full, permission error, vanished source) leaves the
+    previous library file untouched.
+
+    Returns:
+        True when *dst* now holds verified content from *src*.
+    """
+    # Unique suffix: a torrent can legitimately contain "<name>.part" itself.
+    tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        if not _perform_copy(src, tmp):
+            return False
+        try:
+            os.replace(tmp, dst)
+        except PermissionError:
+            # Immutable destination: clear the flag and retry the swap once.
+            _try_clear_immutable(dst)
+            os.replace(tmp, dst)
+        _logger.info("Replaced '{}' with verified copy.", dst)
+        return True
+    except OSError as exc:
+        _logger.error("Could not replace '{}': {}.", dst, exc)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            if tmp.exists():
+                tmp.unlink()
 
 
 def _do_copy(src: Path, dst: Path) -> None:
@@ -213,7 +237,13 @@ def _perform_copy(src: Path, dst: Path) -> bool:
     except OSError:
         _logger.error("Source file disappeared during post-copy verification: '{}'", src)
         return False
-    dst_hash = _sha256(dst, label="Verifying '{}' copy integrity:")
+    try:
+        dst_hash = _sha256(dst, label="Verifying '{}' copy integrity:")
+    except OSError as exc:
+        # Contract is "True/False", not "raise": a destination that became
+        # unreadable after the copy is a failed copy.
+        _logger.warning("Could not verify copied file '{}': {}.", dst, exc)
+        return False
     if src_hash != dst_hash:
         _logger.warning(
             "Post-copy checksum mismatch for '{}': src={}, dst={}.",
@@ -231,18 +261,18 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
     """Copy *src* to *dst* with SHA-256 pre/post verification.
 
     - If *dst* already exists and checksums match, the copy is skipped.
-    - If *dst* exists but checksums differ, the destination is deleted and
-      the file is re-copied.
-    - After copying, checksums are compared again to confirm integrity.
+    - If *dst* exists but checksums differ, the file is copied to a temporary
+      sibling, verified, and only then swapped into place atomically.  A failed
+      copy leaves the previous destination untouched.
 
     Args:
         src: Source file path.
         dst: Destination file path (parent directory must exist, or is created).
 
     Returns:
-        True if the file is present at *dst* with the correct checksum,
-        or the destination could not be deleted and the mismatch is being
-        accepted (e.g. immutable file with no CAP_LINUX_IMMUTABLE).
+        True only when *dst* holds verified content from *src*.  ``False`` on
+        any copy, verification or replacement failure — the previous
+        destination is then left in place, not deleted.
         See :func:`_verify_existing` for details.
     """
     src_path = Path(src)
@@ -255,18 +285,6 @@ def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
             return True
         if existing is False:
             return False
-        # existing is None: dst was deleted, fall through to copy
+        # existing is None: dst differs or is unreadable; replace it atomically
 
-    return _perform_copy(src_path, dst_path)
-
-
-def resolution_label_from_height(height: str | None) -> str:
-    """Return ``"UHD"`` for 2160p or higher, ``"HD"`` for anything else.
-
-    Args:
-        height: Resolution height string (e.g. ``"1080"``, ``"2160"``, ``"4320"``).
-    """
-    try:
-        return "UHD" if int(height or "") >= 2160 else "HD"
-    except (ValueError, TypeError):
-        return "HD"
+    return _replace_copy(src_path, dst_path)

@@ -1,8 +1,13 @@
 # Poster Art in Notifications & Disk Save
 
 **Date:** 2026-06-04
-**Status:** Draft
-**Config version target:** 2.21.0
+**Status:** Partially implemented, then partly reverted
+**Config version target:** 2.21.0 (poster_embed_* removed again in 2.24.0)
+
+- **Shipped:** saving poster art to disk (`post_process.poster_art.filename` / `download_width`).
+- **Reverted:** embedding the poster as a notification attachment (`poster_embed_enabled` /
+  `poster_embed_width`) — removed as dead config in 2.24.0 after the Markdown redesign.
+- **Not implemented:** the HTML `body_format` path.
 
 ---
 
@@ -102,6 +107,7 @@ After building subject and body, if the result has a non-None `imdb_poster_url` 
 
 1. Resolve the URL with `_poster_url_with_width(url, config.notification.poster_embed_width)`.
 2. Pass as `attach` to `ap.notify(...)`:
+
    ```python
    attach = poster_url if poster_url else None
    sent = ap.notify(
@@ -145,6 +151,7 @@ post_process:
 ```
 
 **Rules:**
+
 - `filename` blank → poster is not saved (regardless of any state).
 - `filename` set → extension is forced to `.jpg`. If user types `poster.png`, it becomes `poster.jpg`. If they type `poster`, it becomes `poster.jpg`.
 - `download_width: 0` → resolution is stripped from the URL (largest available).
@@ -262,7 +269,7 @@ If `imdb_id` is absent, the line is omitted entirely.
 ## 6. Files modified
 
 | File | Change |
-|------|--------|
+| ------ | -------- |
 | `src/movarr/notifications.py` | Add `_strip_poster_resolution`, `_poster_url_with_width`. Modify `send_queued_notification` to pass `attach`. Modify `_build_body` to add IMDb plain-text URL. |
 | `src/movarr/imdb_metadata.py` | Strip resolution from poster URL in `_apply_metadata`. |
 | `src/movarr/post_processor.py` | Add `_save_poster_art`. Call it from `_post_copy_actions`. |
@@ -275,7 +282,7 @@ If `imdb_id` is absent, the line is omitted entirely.
 ## 7. Edge cases
 
 | Scenario | Behavior |
-|----------|----------|
+| ---------- | ---------- |
 | Poster URL is `None` (IMDbPie/OMDb returned no URL) | Notification → no attach. Disk save → silently skipped. |
 | Poster URL has no `_V1_.jpg` pattern (unexpected format) | `_poster_url_with_width` returns the URL unchanged. Disk save proceeds. |
 | Download fails (network timeout, 404, DNS) | Logged at WARNING, post-processing continues. |
@@ -290,7 +297,7 @@ If `imdb_id` is absent, the line is omitted entirely.
 ### Unit tests
 
 | Test | Location |
-|------|----------|
+| ------ | ---------- |
 | `_strip_poster_resolution` removes `_SX500` | `test_notifications.py` |
 | `_strip_poster_resolution` removes `_SY1080` | `test_notifications.py` |
 | `_strip_poster_resolution` leaves URL without resolution unchanged | `test_notifications.py` |

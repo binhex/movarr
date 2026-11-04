@@ -20,19 +20,18 @@ import os
 import pathlib
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import urllib.request
+from http.client import HTTPException as HttpClientException
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
-from movarr.filters import _RE_SPECIAL as _RE_EDITION
-from movarr.filters import _UNICODE_APOSTROPHES
-from movarr.parsing import extract_movie_title, extract_resolution, sanitise
+from movarr.filters import edition_token_set, supersession_quality_score
+from movarr.parsing import extract_movie_title, extract_resolution, extract_year, normalise_for_compare, sanitise
 
 if TYPE_CHECKING:
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
@@ -44,6 +43,9 @@ __all__ = ["run_post_processing"]
 _BBFC_ORDER = ["U", "PG", "12", "12A", "15", "18", "R18"]
 _VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 _MAX_VIDEO_FILES_IN_MOVIE_DIR = 4  # safety cap: abort deletion if dir contains more than this many video files
+# Hard cap on downloaded poster size (bytes); a hostile or broken poster URL must
+# not be able to fill the library volume.
+_MAX_POSTER_BYTES = 20 * 1024 * 1024
 _RE_PATH_UNSAFE = re.compile(r'[/\\<>:"|?*\x00]|\.\.')
 # Known extras/bonus-content markers.  Matching is scoped by _title_remainder(), which
 # aligns and removes the movie's own title from the filename first, so a movie whose
@@ -142,6 +144,8 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | Non
             last component. Do not quote either placeholder in the template.
         dir_path: Absolute path of the destination directory.
         label: Hook name for log messages (e.g. ``"pre_delete"``).
+        timeout_secs: Seconds to wait for the command before terminating its
+            process group; ``None`` waits indefinitely.
 
     Returns:
         True if the command exits with code 0, False otherwise.
@@ -193,7 +197,7 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
 
     Args:
         config: Application configuration.
-        qbt: An already-connected ``QBittorrentClient`` instance.
+        qbt: ``QBittorrentClient`` instance; reachability is checked here.
         db: Open database instance.
     """
     pp_cfg = config.post_process
@@ -201,7 +205,7 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
         logger.debug("Post-processing disabled; skipping.")
         return
 
-    if not qbt.is_connected():
+    if not qbt.is_reachable():
         logger.warning("qBittorrent is unreachable; skipping post-processing.")
         torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
@@ -213,7 +217,14 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
         return
 
     for torrent in completed:
-        _process_one(torrent, config, qbt, db)
+        # One malformed torrent must never abort the remaining torrents in the cycle.
+        try:
+            _process_one(torrent, config, qbt, db)
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).error(
+                "Post-processing raised for torrent '{}'; continuing with the next torrent.",
+                torrent.get("torrent_name") or torrent.get("torrent_tag") or "<unknown>",
+            )
 
 
 # Copy helper
@@ -227,12 +238,26 @@ def _copy_files(
 ) -> tuple[bool, set[str]]:
     """Copy *src_files* to *dst_dir*, renaming the largest file to *canonical_fname*.
 
+    Destination names are derived from each source basename, so a torrent that
+    holds the same basename in two sub-directories would silently overwrite one
+    file with the other — and the source is removed afterwards.  Collisions are
+    therefore detected before anything is written and abort the copy.
+
     Returns ``(all_ok, copied_fnames)``.  Aborts and returns ``False`` on first failure.
     """
+    dst_fnames = [
+        canonical_fname if os.path.basename(src) == largest_fname else os.path.basename(src) for src in src_files
+    ]
+    collisions = sorted({name for name in dst_fnames if dst_fnames.count(name) > 1})
+    if collisions:
+        logger.error(
+            "Aborting copy: multiple source files map to the same destination name {}.",
+            collisions,
+        )
+        return False, set()
+
     copied_fnames: set[str] = set()
-    for src_path in src_files:
-        src_fname = os.path.basename(src_path)
-        dst_fname = canonical_fname if src_fname == largest_fname else src_fname
+    for src_path, dst_fname in zip(src_files, dst_fnames, strict=True):
         dst_path = os.path.join(dst_dir, dst_fname)
         if not copy_with_verify(src_path, dst_path):
             logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
@@ -277,12 +302,42 @@ def _maybe_delete_superseded(
     dst_base: str,
     canonical_fname: str,
     copied_fnames: set[str],
+    release_san: str = "",
+    raw_release_name: str = "",
 ) -> None:
-    """Delete lower-quality superseded files if configured."""
+    """Delete lower-quality superseded files if configured.
+
+    *release_san* is the sanitised release name (the index title); the title,
+    scoring and extras-primary decisions use it rather than *canonical_fname*:
+    the canonical name is just ``<folder><ext>`` and carries no quality or
+    edition tokens, so using it made every library release look better and
+    silently disabled the whole pass.  *raw_release_name* is the un-sanitised
+    release name, used for edition evidence because
+    :func:`movarr.parsing.sanitise` strips bracketed markers such as
+    ``[Extended]``.
+    """
     if not config.post_process.delete_lower_quality or canonical_fname not in copied_fnames:
         return
+    library_roots = [pathlib.Path(p).resolve() for p in (config.general.library_path_list or [])]
+    resolved_dst = pathlib.Path(dst_dir).resolve()
+    if not any(resolved_dst == root or resolved_dst.is_relative_to(root) for root in library_roots):
+        # The acquisition-time comparison only walked the configured library
+        # roots, so a destination outside them was never proven better.
+        logger.debug(
+            "Skipping superseded-file deletion: '{}' is outside general.library_path_list.",
+            resolved_dst,
+        )
+        return
+    # An empty library_path_list is covered by the root check above: with no
+    # roots, nothing is inside the library, so deletion never runs.
     deleted = _delete_superseded_files(
-        dst_dir, dst_base, canonical_fname, config, copied_fnames=frozenset(copied_fnames)
+        dst_dir,
+        dst_base,
+        canonical_fname,
+        config,
+        copied_fnames=frozenset(copied_fnames),
+        release_san=release_san,
+        raw_release_name=raw_release_name,
     )
     if deleted:
         logger.info("Auto-deleted {} lower-quality file(s) from '{}'.", deleted, dst_dir)
@@ -309,7 +364,15 @@ def _post_copy_actions(
     # Save poster art
     if db_record and config.post_process.poster_art.filename:
         _save_poster_art(db_record, dst_dir, config)
-    _maybe_delete_superseded(config, dst_dir, dst_base, canonical_fname, copied_fnames)
+    _maybe_delete_superseded(
+        config,
+        dst_dir,
+        dst_base,
+        canonical_fname,
+        copied_fnames,
+        release_san=sanitise(torrent_name) or "",
+        raw_release_name=torrent_name,
+    )
     if config.post_process.remove_completed:
         qbt.delete_torrent(torrent_hash, delete_data=True, state="completed", name=torrent_name)
 
@@ -320,6 +383,17 @@ def _make_safe_poster_path(filename: str) -> str:
     return f"{stem}.jpg" if stem else "poster.jpg"
 
 
+def _user_agent() -> str:
+    """Return the poster-download User-Agent, derived from the installed version."""
+    try:
+        from importlib.metadata import version  # noqa: PLC0415
+
+        return f"movarr/{version('movarr')}"
+    except Exception:  # noqa: BLE001
+        # Package metadata is unavailable (e.g. running from a source tree).
+        return "movarr"
+
+
 def _download_poster_art(resolved_url: str, dst_path: str) -> None:
     """Download poster image from *resolved_url* to *dst_path*.
 
@@ -328,17 +402,21 @@ def _download_poster_art(resolved_url: str, dst_path: str) -> None:
     try:
         req = urllib.request.Request(
             resolved_url,
-            headers={"User-Agent": "movarr/2.21.0"},
+            headers={"User-Agent": _user_agent()},
         )
         with urllib.request.urlopen(req, timeout=30) as response:
             content_type = (response.headers.get("Content-Type") or "").strip().lower()
             if not content_type or not content_type.startswith("image/"):
                 logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
                 return
-            with open(dst_path, "wb") as f:
-                shutil.copyfileobj(response, f)
+            payload = response.read(_MAX_POSTER_BYTES + 1)
+        if len(payload) > _MAX_POSTER_BYTES:
+            logger.warning("Poster at '{}' exceeds {} bytes; skipping.", resolved_url, _MAX_POSTER_BYTES)
+            return
+        with open(dst_path, "wb") as f:
+            f.write(payload)
         logger.info("Saved poster art to '{}'.", dst_path)
-    except OSError as exc:
+    except (OSError, ValueError, HttpClientException) as exc:
         logger.warning("Failed to download/save poster art from '{}': {}.", resolved_url, exc)
 
 
@@ -397,6 +475,22 @@ def _build_copy_target(
         )
         return None
     dst_dir = _build_dst_dir(db_record, dst_base)
+    save_path = str(torrent.get("torrent_save_path") or "")
+    if save_path:
+        resolved_save = pathlib.Path(save_path).resolve()
+        resolved_dst = pathlib.Path(dst_dir).resolve()
+        if resolved_dst == resolved_save or resolved_dst.is_relative_to(resolved_save):
+            logger.error(
+                "Destination '{}' is inside the torrent save path '{}'; refusing to copy"
+                + (
+                    " (remove_completed would delete the library copy)."
+                    if config.post_process.remove_completed
+                    else "."
+                ),
+                resolved_dst,
+                resolved_save,
+            )
+            return None
     if not make_directory(dst_dir):
         logger.error("Cannot create destination directory '{}'; skipping.", dst_dir)
         return None
@@ -429,25 +523,44 @@ def _process_one_no_copy(
         )
 
 
-def _process_one(
-    torrent: dict,
+def _is_record_completed(db_record: HistoryRecord) -> bool:
+    """Return True when the history row was already post-processed."""
+    return str(db_record.result or "") == "Completed" or str(db_record.verified or "") == "true"
+
+
+def _retry_removal(
     config: Config,
     qbt: QBittorrentClient,
-    db: Database,
+    tag: str,
+    torrent_hash: str,
+    db_record: HistoryRecord,
 ) -> None:
-    """Process a single completed torrent: copy to library, save poster, clean up."""
-    tag, torrent_hash = _torrent_tag_and_hash(torrent)
-
-    db_record = db.find_by_tag(tag)
-    if not db_record:
-        logger.warning("No DB record for tag '{}'; skipping.", tag)
+    """Remove a completed torrent whose earlier removal did not happen."""
+    if not config.post_process.remove_completed:
+        logger.debug("Torrent '{}' was already post-processed; skipping.", tag)
         return
+    logger.debug("Torrent '{}' was already post-processed; retrying removal.", tag)
+    # delete_data=False: this row may have been completed with copy_completed
+    # disabled (the download IS the library copy), and the current config cannot
+    # prove otherwise.  Never destroy data here.
+    qbt.delete_torrent(
+        torrent_hash,
+        delete_data=False,
+        state="completed",
+        name=str(db_record.index_title or ""),
+    )
 
-    # If copy_completed is disabled, handle the non-copy path and return.
-    if not config.post_process.copy_completed:
-        _process_one_no_copy(config, qbt, db, tag, torrent_hash, db_record)
-        return
 
+def _copy_phase(
+    torrent: dict,
+    config: Config,
+    db: Database,
+    qbt: QBittorrentClient,
+    tag: str,
+    torrent_hash: str,
+    db_record: HistoryRecord,
+) -> None:
+    """Copy the torrent into the library and run the post-copy actions."""
     target = _build_copy_target(torrent, db_record, config)
     if target is None:
         return
@@ -462,22 +575,64 @@ def _process_one(
     canonical_fname = _canonical_filename(largest_fname, largest_rel_path)
 
     all_ok, copied_fnames = _copy_files(src_files, dst_dir, largest_fname, canonical_fname)
+    if not all_ok:
+        return
 
-    if all_ok:
-        _post_copy_actions(
-            config,
+    if copied_fnames and not any(name.lower().endswith(_VIDEO_EXTS) for name in copied_fnames):
+        # Only non-video files (subtitles, artwork) were copied: marking the
+        # record Completed would let remove_completed delete the only copy of
+        # the feature, which the exclusion rules dropped.
+        logger.warning(
+            "No video file was copied for tag '{}'; marking the record completed so the "
+            "torrent is not re-processed every cycle. Its data is left untouched.",
             tag,
-            db,
-            qbt,
-            torrent_hash,
-            dst_dir,
-            dst_base,
-            resolved_dst_dir,
-            canonical_fname,
-            copied_fnames,
-            torrent_name=str(db_record.index_title or ""),
-            db_record=db_record,
         )
+        db.mark_completed(tag)
+        return
+
+    _post_copy_actions(
+        config,
+        tag,
+        db,
+        qbt,
+        torrent_hash,
+        dst_dir,
+        dst_base,
+        resolved_dst_dir,
+        canonical_fname,
+        copied_fnames,
+        torrent_name=str(db_record.index_title or ""),
+        db_record=db_record,
+    )
+
+
+def _process_one(
+    torrent: dict,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+) -> None:
+    """Process a single completed torrent: copy to library, save poster, clean up."""
+    tag, torrent_hash = _torrent_tag_and_hash(torrent)
+
+    db_record = db.find_by_tag(tag)
+    if not db_record:
+        logger.warning("No DB record for tag '{}'; skipping.", tag)
+        return
+
+    # A completed torrent can stay in qBittorrent indefinitely (remove_completed:
+    # false), so a record that is already Completed must not be copied, hashed,
+    # poster-downloaded or hook-run again on every cycle.
+    if _is_record_completed(db_record):
+        _retry_removal(config, qbt, tag, torrent_hash, db_record)
+        return
+
+    # If copy_completed is disabled, handle the non-copy path and return.
+    if not config.post_process.copy_completed:
+        _process_one_no_copy(config, qbt, db, tag, torrent_hash, db_record)
+        return
+
+    _copy_phase(torrent, config, db, qbt, tag, torrent_hash, db_record)
 
 
 # File-list helpers
@@ -532,7 +687,11 @@ def _should_include_file(
     exclude_min_kb: int,
 ) -> str | None:
     """Return the absolute path for *file_dict* if it should be copied, else None."""
-    rel_path = file_dict.get("file_name") or ""
+    # Normalise Windows separators first: on POSIX a name like
+    # ``..\\..\\etc\\passwd`` is a single literal component, so validating it
+    # before normalisation let it through and the conversion below then made it
+    # a real traversal.
+    rel_path = (file_dict.get("file_name") or "").replace("\\", "/")
     if not rel_path:
         logger.debug("Skipping file entry with empty name.")
         return None
@@ -632,13 +791,14 @@ def _first_level_dir(path: str) -> str:
 
 
 def _resolve_destination(db_record: HistoryRecord, config: Config) -> str | None:
-    """Choose the library copy path based on genre, cert, and resolution rules."""
+    """Choose the library copy path based on genre, cert, and resolution rules.
+
+    ``copy_library_rules`` is the primary routing mechanism and
+    ``default_copy_library`` is documented as the fallback, so a rules-only
+    configuration must still resolve a destination.  The guard therefore runs
+    against the *resolved* path, not against the default paths alone.
+    """
     pp = config.post_process
-    rules = pp.copy_library_rules
-    default = pp.default_copy_library
-    if not default.hd_path and not default.uhd_path:
-        logger.warning("No 'default_copy_library' configured; cannot copy.")
-        return None
     genres = _parse_genres(db_record.imdb_genres_list or [])
     cert: str = str(db_record.imdb_certification or "")
     # Default to empty string (not "imdbpie") so legacy/unknown rows
@@ -648,7 +808,12 @@ def _resolve_destination(db_record: HistoryRecord, config: Config) -> str | None
     # OMDb returns MPAA ratings which are not compatible with BBFC ordering.
     effective_cert = cert if cert_source == "imdbpie" else ""
     resolution = _resolution_from_index_title(str(db_record.index_title or ""))
-    return _pick_path(genres, effective_cert, resolution, rules, default)
+    destination = _pick_path(genres, effective_cert, resolution, pp.copy_library_rules, pp.default_copy_library)
+    if not destination:
+        logger.warning(
+            "Cannot copy: no 'copy_library_rules' entry matched and no 'default_copy_library' path is configured."
+        )
+    return destination
 
 
 def _get_default_path(default: DefaultCopyLibraryConfig, path_key: str) -> str | None:
@@ -982,18 +1147,24 @@ def _delete_superseded_files(
     config: Config,
     *,
     copied_fnames: frozenset[str] = frozenset(),
+    release_san: str = "",
+    raw_release_name: str = "",
 ) -> int:
     """Delete superseded video files in *dst_dir* after a new copy.
 
-    All video files in *dst_dir* are deleted except:
-    - The newly-copied primary file
-    - Files written in the current torrent run (*copied_fnames*)
-    - Files matching extras/bonus-content patterns
-    - Files whose edition set differs from the new primary's (different cuts are preserved)
+    A video file is deleted only when *all* of these hold:
 
-    The search pipeline (:func:`movarr.filters._check_library_canonical`) already
-    guarantees the newly-downloaded file is strictly better than anything in the
-    library, so no resolution/quality re-comparison is needed here.
+    - it is not the newly-copied primary file and was not written by this run
+      (*copied_fnames*);
+    - it belongs to the same film (title, plus year when both parse);
+    - it does not match the extras/bonus-content patterns;
+    - its edition set equals the new release's (different cuts are preserved);
+    - its quality is parseable **and** does not outrank the new release.
+
+    The last two conditions are a deliberate belt-and-braces layer on top of the
+    upstream library check (:func:`movarr.filters._check_library_canonical`):
+    a file added after the search ran, or one whose quality cannot be parsed,
+    must never be removed.  Every guard here can only prevent a deletion.
 
     Two hard-stop safety guards protect against runaway deletion:
     1. *Depth check*: ``dst_dir`` must be a direct child of ``dst_base``.
@@ -1008,6 +1179,10 @@ def _delete_superseded_files(
         copied_fnames: All destination filenames written during this torrent run.
             Every filename in this set — including ``new_primary_fname`` — is
             protected from deletion.
+        release_san: Sanitised release name for the new copy; used for the
+            extras-primary, title, resolution and quality comparisons.
+        raw_release_name: Un-sanitised release name; supplies the edition tokens
+            because ``sanitise()`` strips bracketed markers such as ``[Extended]``.
 
     Returns:
         Number of files successfully deleted.
@@ -1017,7 +1192,16 @@ def _delete_superseded_files(
         return 0
     video_files, resolved_dst = preconditions
 
-    new_san = sanitise(new_primary_fname) or ""
+    # Identity for scoring/edition/extras comes from the *release* name: the
+    # canonical destination name ("<folder><ext>") carries no quality or edition
+    # tokens, so using it made every library release outrank the new copy.
+    new_san = release_san or sanitise(new_primary_fname) or ""
+    # Edition/extras evidence comes from the un-sanitised release text: sanitise()
+    # strips "[Extended]"/"[Featurettes]" markers before they can be compared.
+    raw_release = raw_release_name or f"{release_san} {new_primary_fname}".strip() or new_san
+    # The extras *primary* decision keeps using the sanitised form: its title
+    # alignment logic (which prevents "Making Of A Monarch" being read as a
+    # bonus feature) depends on it.
     if _is_extras_primary(new_primary_fname, new_san, resolved_dst.name):
         logger.debug(
             "Auto-delete skipped: new primary '{}' is bonus/extras content.",
@@ -1029,10 +1213,48 @@ def _delete_superseded_files(
         return 0
 
     protected = frozenset(copied_fnames) | {new_primary_fname}
-    deleted = _delete_superseded_loop(video_files, resolved_dst, protected, new_san)
+    deleted = _delete_superseded_loop(video_files, resolved_dst, protected, new_san, raw_release, config)
 
     _run_post_delete_hook(config, resolved_dst, dst_dir)
     return deleted
+
+
+def _title_key(sanitised: str) -> tuple[str, ...]:
+    """Return a comparable word tuple for the title part of *sanitised*.
+
+    Leading articles are dropped and each word is normalised, so
+    ``"The Making of a Lady"`` and ``"Making of a Lady"`` compare equal while a
+    sequel (``"The Matrix Reloaded"``) does not.
+    """
+    title = extract_movie_title(sanitised) or sanitised
+    words = [normalise_for_compare(word) or word for word in title.lower().split()]
+    while words and words[0] in _LEADING_ARTICLES:
+        words.pop(0)
+    return tuple(word for word in words if word)
+
+
+def _same_title(new_san: str, lib_san: str, folder_title: tuple[str, ...]) -> bool:
+    """Return True when a library file belongs to the same film as the new copy.
+
+    Identity must be positive, not merely "same year": a per-movie folder can
+    hold a second feature released the same year.  A file qualifies only when
+    its title matches the new primary's title, or the destination folder's
+    title (``lib`` abbreviations such as ``IWTV`` cannot be reconciled, so they
+    are preserved).  A filename whose title cannot be resolved never authorises
+    a deletion.
+
+    Release years are still compared: a remake ("The Thing" 1982 vs 2011) is a
+    different film even though its title matches.
+    """
+    new_key = _title_key(new_san)
+    lib_key = _title_key(lib_san)
+    if not new_key or not lib_key:
+        return False
+    new_year = extract_year(new_san)
+    lib_year = extract_year(lib_san)
+    if new_year and lib_year and new_year != lib_year:
+        return False
+    return lib_key == new_key or (bool(folder_title) and lib_key == folder_title)
 
 
 def _delete_superseded_loop(
@@ -1040,29 +1262,34 @@ def _delete_superseded_loop(
     resolved_dst: pathlib.Path,
     protected: frozenset[str],
     new_san: str,
+    raw_release: str,
+    config: Config,
 ) -> int:
     """Delete files in *video_files* that are not *protected* and not extras.
 
-    A library file whose edition set differs from the new file's is
-    preserved — different cuts (Theatrical vs Director's Cut) must never be
-    deleted even when the new file has higher resolution.
+    Five protections apply, each of which must hold before a file is removed:
+
+    - the file must belong to the same title as the new primary (a per-movie
+      directory can legitimately hold a sequel or a second feature);
+    - it must not match the extras/bonus-content patterns;
+    - its edition set must equal the new primary's — different cuts
+      (Theatrical vs Director's Cut) must never be deleted;
+    - its resolution must not exceed the new primary's;
+    - its quality must be parseable and strictly worse than the new primary's.
+
+    The quality precondition (*the new copy is better*) is not inherited from
+    the caller: :func:`_maybe_delete_superseded` only establishes that the
+    destination is inside ``general.library_path_list`` (so the
+    acquisition-time comparison covered it), and
+    :func:`_is_superseded_candidate` re-checks resolution and score per file.
     """
-    new_editions = _edition_set(new_san)
+    new_editions = edition_token_set(raw_release or new_san)
+    folder_title = _title_key(sanitise(resolved_dst.name) or resolved_dst.name)
     deleted = 0
     for fname in video_files:
         if fname in protected:
             continue
-        lib_san = sanitise(fname) or ""
-        if _is_extras_file(fname, lib_san, resolved_dst.name):
-            logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
-            continue
-        if new_editions != _edition_set(lib_san):
-            logger.debug(
-                "Skipping auto-delete for '{}': edition mismatch (new={}, lib={}).",
-                fname,
-                sorted(new_editions),
-                sorted(_edition_set(lib_san)),
-            )
+        if not _is_superseded_candidate(fname, new_san, new_editions, folder_title, resolved_dst.name, config):
             continue
         lib_path = str(resolved_dst / fname)
         if delete_file(lib_path):
@@ -1073,21 +1300,88 @@ def _delete_superseded_loop(
     return deleted
 
 
-def _edition_set(san: str) -> frozenset[str]:
-    """Return the set of non-theatrical special-edition tokens in *san*.
+def _is_superseded_candidate(
+    fname: str,
+    new_san: str,
+    new_editions: frozenset[str],
+    folder_title: tuple[str, ...],
+    folder_name: str,
+    config: Config,
+) -> bool:
+    """Return True when *fname* is provably worse than the new copy and may be deleted.
 
-    Canonicalizes director's-cut spelling variants and excludes ``theatrical``
-    (treated as the base edition).  Returns an empty frozenset when no
-    non-theatrical token is found.
+    Every check is a veto applied in order: title identity, extras markers,
+    edition set, resolution, unparseable quality, then a final score comparison.
+    A False result is always the safe outcome.
     """
-    norm = _UNICODE_APOSTROPHES.sub("'", san)
-    tokens: set[str] = set()
-    for m in _RE_EDITION.finditer(norm):
-        token = m.group(0).lower()
-        if token == "theatrical":
-            continue
-        if "director" in token and "cut" in token:
-            tokens.add("directors cut")
-        else:
-            tokens.add(token)
-    return frozenset(tokens)
+    lib_san = sanitise(fname) or ""
+    if not _same_title(new_san, lib_san, folder_title):
+        logger.debug("Skipping auto-delete for '{}': different title to the new file.", fname)
+        return False
+    if _is_extras_file(fname, lib_san, folder_name):
+        logger.debug("Skipping auto-delete for '{}': looks like extra/bonus content.", fname)
+        return False
+    if not _same_edition(fname, new_editions):
+        return False
+    if _library_resolution_is_higher(fname, new_san):
+        return False
+    return _library_quality_is_worse(fname, lib_san, new_san, config)
+
+
+def _same_edition(fname: str, new_editions: frozenset[str]) -> bool:
+    """Return True when *fname* carries the same edition tags as the new copy."""
+    lib_editions = edition_token_set(fname)
+    if lib_editions == new_editions:
+        return True
+    logger.debug(
+        "Edition mismatch for '{}' (new={}, lib={}).",
+        fname,
+        sorted(new_editions),
+        sorted(lib_editions),
+    )
+    return False
+
+
+def _library_resolution_is_higher(fname: str, new_san: str) -> bool:
+    """Return True when the library file has a higher resolution than the copy.
+
+    Acquisition treats a higher resolution as dominant regardless of source or
+    score, so the delete pass must agree.
+    """
+    lib_res = extract_resolution(sanitise(fname) or "")
+    new_res = extract_resolution(new_san)
+    if not (lib_res and new_res and lib_res.isdigit() and new_res.isdigit()):
+        return False
+    if int(lib_res) <= int(new_res):
+        return False
+    logger.warning(
+        "Skipping auto-delete for '{}': it has a higher resolution ({}p) than the copy ({}p).",
+        fname,
+        lib_res,
+        new_res,
+    )
+    return True
+
+
+def _library_quality_is_worse(fname: str, lib_san: str, new_san: str, config: Config) -> bool:
+    """Return True when the library file's quality is parseable and strictly worse."""
+    lib_score = supersession_quality_score(lib_san, new_san, config)
+    if lib_score <= 0:
+        # No parseable quality tokens (e.g. "The Matrix.mkv"): the file may well
+        # be the better copy, so it must survive.
+        logger.warning(
+            "Skipping auto-delete for '{}': its quality cannot be parsed, so it may be the better copy.",
+            fname,
+        )
+        return False
+    new_score = supersession_quality_score(new_san, lib_san, config)
+    if lib_score >= new_score:
+        # Final safety net: the library file is at least as good as what was just
+        # copied (e.g. it was added after the search ran).
+        logger.warning(
+            "Skipping auto-delete for '{}': it scores at least as high as the copied file '{}'.",
+            fname,
+            new_san,
+        )
+        return False
+    return True

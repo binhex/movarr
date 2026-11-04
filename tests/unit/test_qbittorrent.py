@@ -9,7 +9,7 @@ import pytest
 import qbittorrentapi
 
 from movarr.config import Config
-from movarr.qbittorrent import QBittorrentClient, _build_supersede_tag, _parse_imdb_id_from_tags, _parse_score_from_tags
+from movarr.qbittorrent import QBittorrentClient, _build_supersede_tag, parse_imdb_id_from_tags
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -70,6 +70,18 @@ class TestIsConnected:
         """Returns False when the API call raises APIError."""
         client, mock_api = _make_client(mocker)
         mock_api.sync_maindata.side_effect = qbittorrentapi.APIError("connection failed")
+        assert client.is_connected() is False
+
+    def test_returns_false_on_api_connection_error(self, mocker: MockerFixture) -> None:
+        """Returns False when qBittorrent is unreachable (APIConnectionError).
+
+        ``qbittorrentapi.exceptions.APIConnectionError`` subclasses ``APIError``,
+        so an unreachable host takes the same non-raising path as an API error.
+        This regression test pins that relationship: the outage alert depends on
+        ``is_connected()`` returning False rather than propagating.
+        """
+        client, mock_api = _make_client(mocker)
+        mock_api.sync_maindata.side_effect = qbittorrentapi.exceptions.APIConnectionError("unreachable")
         assert client.is_connected() is False
 
 
@@ -576,67 +588,190 @@ class TestBuildSupersedeTag:
         assert tag1 != tag2
 
 
-# _parse_imdb_id_from_tags
+# parse_imdb_id_from_tags
 
 
 class TestParseImdbIdFromTags:
-    """Tests for _parse_imdb_id_from_tags — IMDb ID extraction from tag strings."""
+    """Tests for parse_imdb_id_from_tags - IMDb ID extraction from tag strings."""
 
     def test_returns_imdb_id_when_present(self) -> None:
         """Extracts tt-id from a complete movarr tag."""
-        assert _parse_imdb_id_from_tags("movarr-abc123-imdb-tt1234567-score-45") == "tt1234567"
+        assert parse_imdb_id_from_tags("movarr-abc123-imdb-tt1234567-score-45") == "tt1234567"
 
     def test_returns_imdb_id_from_comma_separated_tags(self) -> None:
         """Finds imdb segment even when tag is part of a comma-separated list."""
-        assert _parse_imdb_id_from_tags("tag1, movarr-abc123-imdb-tt1234567-score-45, tag2") == "tt1234567"
+        assert parse_imdb_id_from_tags("tag1, movarr-abc123-imdb-tt1234567-score-45, tag2") == "tt1234567"
 
     def test_returns_none_when_no_imdb_segment(self) -> None:
         """Returns None when tag lacks the imdb-ttN segment."""
-        assert _parse_imdb_id_from_tags("movarr-abc123-score-45") is None
+        assert parse_imdb_id_from_tags("movarr-abc123-score-45") is None
 
     def test_returns_none_for_empty_string(self) -> None:
         """Returns None for empty input."""
-        assert _parse_imdb_id_from_tags("") is None
+        assert parse_imdb_id_from_tags("") is None
 
     def test_returns_none_for_unrelated_tags(self) -> None:
         """Returns None when no movarr tag is present."""
-        assert _parse_imdb_id_from_tags("some-random-tag") is None
+        assert parse_imdb_id_from_tags("some-random-tag") is None
 
     def test_handles_8_digit_imdb_id(self) -> None:
         """Supports 8-digit IMDb IDs (tt12345678)."""
-        assert _parse_imdb_id_from_tags("movarr-abc123-imdb-tt12345678-score-45") == "tt12345678"
+        assert parse_imdb_id_from_tags("movarr-abc123-imdb-tt12345678-score-45") == "tt12345678"
 
 
-# _parse_score_from_tags
+class TestParseImdbIdDigitWidth:
+    """parse_imdb_id_from_tags must accept future 9-digit IMDb IDs."""
+
+    def test_handles_9_digit_imdb_id(self) -> None:
+        """A 9-digit IMDb ID must still match the supersession regex."""
+        assert parse_imdb_id_from_tags("movarr-abc123-imdb-tt123456789-score-45") == "tt123456789"
 
 
-class TestParseScoreFromTags:
-    """Tests for _parse_score_from_tags — score extraction from tag strings."""
+class TestAddTorrentRejection:
+    """A qBittorrent 'Fails.' response must not be recorded as a queued torrent."""
 
-    def test_returns_score_when_present(self) -> None:
-        """Extracts score integer from a complete movarr tag."""
-        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-45") == 45
+    def _result(self) -> ResultDict:
+        return {"index_title": "Test Movie", "magnet_url": "magnet:?xt=urn:btih:abc123", "torrent_url": ""}
 
-    def test_returns_score_from_comma_separated_tags(self) -> None:
-        """Finds score segment even when tag is part of a comma-separated list."""
-        assert _parse_score_from_tags("tag1, movarr-abc123-imdb-tt1234567-score-45, tag2") == 45
+    def test_returns_none_when_qbt_reports_fails(self, mocker: MockerFixture) -> None:
+        """A rejected add returns None so the pipeline records a failure, not Passed."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_add.return_value = "Fails."
+        result = self._result()
 
-    def test_returns_none_when_no_score_segment(self) -> None:
-        """Returns None when tag lacks the score-NNN segment."""
-        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567") is None
+        assert client.add_torrent(result) is None
+        assert "torrent_tag" not in result
+        mock_api.torrents_reannounce.assert_not_called()
 
-    def test_returns_none_for_empty_string(self) -> None:
-        """Returns None for empty input."""
-        assert _parse_score_from_tags("") is None
+    def test_returns_result_when_qbt_reports_ok(self, mocker: MockerFixture) -> None:
+        """A successful add still returns the tagged result."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_add.return_value = "Ok."
+        result = self._result()
 
-    def test_returns_none_for_unrelated_tags(self) -> None:
-        """Returns None when no movarr tag is present."""
-        assert _parse_score_from_tags("some-random-tag") is None
+        updated = client.add_torrent(result)
+        assert updated is not None
+        assert result["torrent_tag"].startswith("movarr-")
 
-    def test_parses_multidigit_score(self) -> None:
-        """Handles multi-digit scores correctly."""
-        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-130") == 130
 
-    def test_parses_zero_score(self) -> None:
-        """Handles score of zero."""
-        assert _parse_score_from_tags("movarr-abc123-imdb-tt1234567-score-0") == 0
+class TestBuildTagFromResultNormalisation:
+    """Indexer-supplied IMDb IDs must be normalised before entering a tag."""
+
+    def _client(self, mocker: MockerFixture) -> QBittorrentClient:
+        client, _ = _make_client(mocker)
+        return client
+
+    def test_malformed_imdb_id_falls_back_to_random_tag(self, mocker: MockerFixture) -> None:
+        """A malformed ID produces no imdb segment at all."""
+        tag = self._client(mocker)._build_tag_from_result(
+            {"imdb_id": "tt1)](https://evil.example", "index_title_sanitised": "Movie 2020 1080p"}
+        )
+        assert "imdb-" not in tag
+        assert tag.startswith("movarr-")
+
+    def test_bare_digit_imdb_id_is_normalised(self, mocker: MockerFixture) -> None:
+        """A bare-digit ID gains the tt prefix."""
+        tag = self._client(mocker)._build_tag_from_result(
+            {"imdb_id": "1234567", "index_title_sanitised": "Movie 2020 1080p"}
+        )
+        assert "imdb-tt1234567" in tag
+
+    def test_comma_in_imdb_id_cannot_inject_extra_tags(self, mocker: MockerFixture) -> None:
+        """A comma-bearing ID cannot smuggle a second tag into the tag list."""
+        tag = self._client(mocker)._build_tag_from_result(
+            {"imdb_id": "tt1234567,tag-injected", "index_title_sanitised": "Movie 2020 1080p"}
+        )
+        assert "tag-injected" not in tag
+
+
+class TestIsReachable:
+    """is_reachable() is a pure API probe, independent of internet status."""
+
+    def test_true_when_api_answers(self, mocker: MockerFixture) -> None:
+        client, mock_api = _make_client(mocker)
+        mock_api.app_version.return_value = "v4.6.0"
+        assert client.is_reachable() is True
+
+    def test_false_when_api_raises(self, mocker: MockerFixture) -> None:
+        client, mock_api = _make_client(mocker)
+        mock_api.app_version.side_effect = qbittorrentapi.APIConnectionError("down")
+        assert client.is_reachable() is False
+
+
+class TestReachableButOffline:
+    """A reachable qBittorrent without internet is not a service outage."""
+
+    def test_is_connected_false_while_reachable(self, mocker: MockerFixture) -> None:
+        client, mock_api = _make_client(mocker)
+        mock_api.app_version.return_value = "v4.6.0"
+        mock_api.sync_maindata.return_value.server_state.connection_status = "disconnected"
+
+        assert client.is_reachable() is True
+        assert client.is_connected() is False
+
+
+class TestSupersedeTagRequiresMovarrShape:
+    """Only a complete movarr supersede tag identifies one of our torrents."""
+
+    def test_foreign_imdb_tag_is_not_matched(self) -> None:
+        """A user/other-tool tag must never be treated as a movarr tag."""
+        assert parse_imdb_id_from_tags("imdb-tt0133093") is None
+        assert parse_imdb_id_from_tags("movies, imdb-tt0133093, archive") is None
+
+    def test_complete_movarr_tag_is_matched(self) -> None:
+        assert parse_imdb_id_from_tags("movarr-abc12345-imdb-tt0133093-score-70") == "tt0133093"
+
+
+class TestAddTorrentTagBeforeReannounce:
+    """The tag is stamped before the optional reannounce can fail."""
+
+    def test_tag_survives_a_reannounce_failure(self, mocker: MockerFixture) -> None:
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_info.side_effect = RuntimeError("unexpected")
+        result: ResultDict = {
+            "index_title": "Test Movie",
+            "imdb_id": "tt1234567",
+            "index_title_sanitised": "Test Movie 2024 1080p",
+            "magnet_url": "magnet:?xt=urn:btih:abc123",
+            "torrent_url": "",
+        }
+
+        updated = client.add_torrent(result)
+
+        assert updated is not None
+        assert updated["torrent_tag"].startswith("movarr-")
+
+
+class TestMetadataStuckForcedState:
+    """forcedMetaDL is the same stuck state as metaDL."""
+
+    def test_forced_metadl_is_matched(self, mocker: MockerFixture) -> None:
+        client, _ = _make_client(mocker)
+        candidates = client.identify_for_deletion(
+            {"h1": {"name": "Stuck Magnet", "state": "forcedMetaDL", "added_on": 1, "size": 0}},
+            "metaDL",
+            30,
+            "added_on",
+        )
+
+        assert "h1" in candidates
+
+
+class TestWebuiTlsVerification:
+    """The qBittorrent WebUI certificate check is configurable."""
+
+    def test_verification_flag_follows_config(self, mocker: MockerFixture) -> None:
+        client_cls = mocker.patch("movarr.qbittorrent.qbittorrentapi.Client")
+        cfg = Config()
+        cfg.torrent_client.qbittorrent.verify_webui_certificate = True
+
+        QBittorrentClient(cfg)
+
+        assert client_cls.call_args.kwargs["VERIFY_WEBUI_CERTIFICATE"] is True
+
+    def test_defaults_to_disabled_for_self_signed_lan_certs(self, mocker: MockerFixture) -> None:
+        client_cls = mocker.patch("movarr.qbittorrent.qbittorrentapi.Client")
+
+        QBittorrentClient(Config())
+
+        assert client_cls.call_args.kwargs["VERIFY_WEBUI_CERTIFICATE"] is False

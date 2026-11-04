@@ -5,9 +5,10 @@ Three tasks run on configurable intervals:
   2. **queue_management** — delete metaDL/stalledDL torrents that exceed wait times.
   3. **post_processing** — copy completed torrents to the library.
 
-The scheduler can run in:
-  - **daemon mode** — long-running foreground process (suitable for systemd/Docker, writes PID file).
-  - **foreground mode** — runs each task once then exits (useful for testing).
+The scheduler runs in **daemon mode** — a long-running foreground process
+(suitable for systemd/Docker, writes a PID file) with one interval job per
+enabled task.  ``run_once()`` executes each enabled task a single time; it is
+the foreground/test helper, and it logs and exits when nothing is enabled.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import SchedulerNotRunningError
 from loguru import logger
 
+from movarr.config import PID_FILENAME
 from movarr.database import Database
 from movarr.post_processor import run_post_processing
 from movarr.qbittorrent import QBittorrentClient
@@ -38,20 +40,36 @@ if TYPE_CHECKING:
 __all__ = ["run", "run_once"]
 
 
+def _pid_file_path(pid_path: str) -> str:
+    """Return the PID file path for *pid_path*.
+
+    A directory whose name contains a dot (e.g. ``/run/movarr-1.3``) is still a
+    directory, so the filesystem is consulted before the extension heuristic.
+    """
+    if os.path.isdir(pid_path) or not os.path.splitext(pid_path)[1]:
+        return os.path.join(pid_path, PID_FILENAME)
+    return pid_path
+
+
 def _cleanup_pid_file(pid_path: str | None) -> None:
     """Remove the PID file at *pid_path* if it exists."""
     if pid_path:
-        pid_file = pid_path if os.path.splitext(pid_path)[1] else os.path.join(pid_path, "movarr.pid")
-        if os.path.exists(pid_file):
-            os.unlink(pid_file)
+        pid_file = _pid_file_path(pid_path)
+        try:
+            if os.path.exists(pid_file):
+                os.unlink(pid_file)
+        except OSError as exc:
+            # Cleanup runs in a finally block; raising here would mask the real
+            # failure that triggered shutdown.
+            logger.warning("Could not remove PID file '{}': {}.", pid_file, exc)
 
 
 def run(config: Config) -> None:
-    """Start the scheduler in daemon/foreground mode.
+    """Start the scheduler in daemon mode.
 
-    If any scheduler task is enabled in the config the scheduler runs in
-    continuous loop mode (``_run_daemon``).  Otherwise a single pass
-    (``run_once``) is executed.
+    Runs the continuous scheduler (``_run_daemon``) when any task is enabled.
+    With every task disabled there is nothing to schedule, so the process logs
+    that and exits.
 
     The PID file path is taken from ``config.general.pid_path``;
     an empty string means no PID file is written.
@@ -67,7 +85,7 @@ def run(config: Config) -> None:
         if _any_scheduler_enabled(config):
             _run_daemon(config)
         else:
-            run_once(config)
+            logger.info("All scheduler tasks are disabled; nothing to schedule.")
     finally:
         _cleanup_pid_file(pid_path)
 
@@ -87,6 +105,10 @@ def run_once(config: Config) -> None:
     Args:
         config: Application configuration.
     """
+    if not _any_scheduler_enabled(config):
+        logger.info("All scheduler tasks are disabled; nothing to run in single-pass mode.")
+        return
+
     logger.info("movarr running in single-pass foreground mode.")
 
     db = Database(config.general.db_path)
@@ -160,15 +182,10 @@ def _run_daemon(config: Config) -> None:
         name="Post-processing (copy to library)",
     )
 
-    scheduler.start()
-    logger.info(
-        "Scheduler started — search every {}m, queue_management every {}m, post_processing every {}m.",
-        search_mins,
-        qm_mins,
-        pp_mins,
-    )
-
-    # Block until SIGTERM or SIGINT.
+    # Block until SIGTERM or SIGINT.  The handlers are installed *before* the
+    # scheduler starts: a signal arriving in the window between start() and
+    # handler installation would take the default action, skipping the
+    # finally-block PID cleanup in run().
     stop_event = threading.Event()
 
     def _shutdown(signum: int, frame: types.FrameType | None) -> None:
@@ -179,6 +196,14 @@ def _run_daemon(config: Config) -> None:
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
+
+    scheduler.start()
+    logger.info(
+        "Scheduler started — search every {}m, queue_management every {}m, post_processing every {}m.",
+        search_mins,
+        qm_mins,
+        pp_mins,
+    )
 
     stop_event.wait()
     logger.info("movarr stopped.")
@@ -265,8 +290,10 @@ def _add_job_if_enabled(
 
 def _connect_qbt(config: Config) -> QBittorrentClient:
     qbt = QBittorrentClient(config)
-    if not qbt.is_connected():
-        logger.warning("qBittorrent is not reachable at startup; tasks will retry each interval.")
+    if not qbt.is_reachable():
+        logger.warning("qBittorrent WebUI is not reachable at startup; tasks will retry each interval.")
+    elif not qbt.is_connected():
+        logger.warning("qBittorrent is reachable but reports no internet connection.")
     return qbt
 
 
@@ -281,10 +308,8 @@ def _log_next_run(scheduler: BackgroundScheduler, job_id: str) -> None:
 
 
 def _write_pid(pid_path: str) -> None:
+    pid_file = _pid_file_path(pid_path)
     try:
-        # If pid_path has an extension, treat as a full file path (backward compat).
-        # Otherwise, treat as a directory and create movarr.pid inside.
-        pid_file = pid_path if os.path.splitext(pid_path)[1] else os.path.join(pid_path, "movarr.pid")
         pid_dir = os.path.dirname(pid_file)
         if pid_dir:
             os.makedirs(pid_dir, exist_ok=True)

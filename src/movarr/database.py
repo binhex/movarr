@@ -2,29 +2,32 @@
 
 from __future__ import annotations
 
-import ast
 import datetime
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger as _logger
-from sqlalchemy import Column, Integer, String, create_engine, text
+from sqlalchemy import Column, Integer, String, create_engine, func, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from movarr.config import DB_FILENAME
+from movarr.utils import redact_secrets
 
 if TYPE_CHECKING:
     from movarr.models import ResultDict
 
 __all__ = ["Database", "HistoryRecord", "KvRecord"]
 
-_DB_VERSION = 12
+_DB_VERSION = 13
 _SCHEMA_V7_CERT_FIELDS = 7
 _SCHEMA_V8_INDEX_TITLE_IDX = 8
 _SCHEMA_V9_STALLED_AT = 9
 _SCHEMA_V10_CREATED_AT = 10
 _SCHEMA_V11_KV_STORE = 11
 _SCHEMA_V12_KV_KEY_RENAME = 12
+_SCHEMA_V13_DUAL_TITLE = 13
 
 
 def _encode_field(value: object) -> str | None:
@@ -82,6 +85,8 @@ class HistoryRecord(Base):
     verified = Column(String)
     imdb_id = Column(String)
     imdb_title = Column(String)
+    imdb_original_title = Column(String)
+    imdb_alternate_titles = Column(String)
     imdb_year = Column(String)
     imdb_poster_url = Column(String)
     imdb_trailer_url = Column(String)
@@ -117,21 +122,30 @@ class KvRecord(Base):
 class Database:
     """SQLite history database wrapper.
 
-    Each instance owns its own engine + session, satisfying SQLite's
-    thread-safety requirement (one connection per thread).
+    Each instance owns its own engine, and every operation opens a short-lived
+    session, so SQLite's "one connection per thread" rule is honoured even
+    though a single ``Database`` instance is shared by the scheduler's job
+    threads (``scheduler._run_daemon``).  Concurrent writers can still collide
+    on the database lock; SQLite serialises them and the default busy timeout
+    applies.
 
     Args:
-        db_path: Directory path for the database.  The file ``movarr.db``
-            is created inside this directory.  Parent directories are
-            created automatically.
+        db_path: Path to the database.  A directory, or a path without a
+            suffix, gets ``movarr.db`` created inside it; any other path is
+            used as the database file itself.  Parent directories are created
+            automatically.
     """
 
     def __init__(self, db_path: str | Path) -> None:
         db_path_obj = Path(db_path)
-        if db_path_obj.suffix:  # file path (backward compat) — use as-is
+        # Prefer the filesystem when it can answer the question: a directory
+        # whose name contains a dot (e.g. ``/data/movarr-1.3``) is still a
+        # directory.  Fall back to the suffix heuristic for paths that do not
+        # exist yet.
+        if db_path_obj.is_dir() or not db_path_obj.suffix:
+            self._db_path = db_path_obj / DB_FILENAME
+        else:
             self._db_path = db_path_obj
-        else:  # directory — construct movarr.db inside
-            self._db_path = db_path_obj / "movarr.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._engine = create_engine(
             f"sqlite:///{self._db_path}",
@@ -164,7 +178,7 @@ class Database:
             return result.fetchone() is not None
 
     def _ensure_schema(self) -> None:
-        """Create tables if absent; run migrations if version mismatches."""
+        """Create tables if absent; migrate an older schema and warn on a newer one."""
         table_existed = self._history_table_exists()
         Base.metadata.create_all(self._engine)
         current = self._get_user_version()
@@ -178,11 +192,37 @@ class Database:
         elif current < _DB_VERSION:
             _logger.info("Upgrading database from v{} to v{}.", current, _DB_VERSION)
             self._upgrade(current)
+        elif current > _DB_VERSION:
+            _logger.warning(
+                "Database schema v{} is newer than this build (v{}); continuing read/write — "
+                "downgrade the database or upgrade movarr if behaviour looks wrong.",
+                current,
+                _DB_VERSION,
+            )
+
+    def _repair_missing_columns(self, conn: Any) -> None:
+        """Add any ORM-mapped column that a pre-versioning legacy table lacks.
+
+        ``Base.metadata.create_all`` never alters an existing table, and the
+        v7+ migrations only add the columns introduced after v7.  A v5-era
+        table therefore reached the current version without ``torrent_tag`` or
+        ``verified``, and every write then failed with "no such column".
+        Column names and types come from this module's own ORM metadata, so no
+        external input reaches the DDL.
+        """
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(history)"))}
+        for column in HistoryRecord.__table__.columns:
+            if column.primary_key or column.name in existing:
+                continue
+            col_type = column.type.compile(dialect=self._engine.dialect)
+            conn.execute(text(f"ALTER TABLE history ADD COLUMN {column.name} {col_type}"))
+        conn.commit()
 
     def _upgrade(self, from_version: int) -> None:
         """Apply incremental schema migrations."""
         with self._engine.connect() as conn:
             if from_version < _SCHEMA_V7_CERT_FIELDS:
+                self._repair_missing_columns(conn)
                 self._upgrade_v7_cert_fields(conn)
             if from_version < _SCHEMA_V8_INDEX_TITLE_IDX:
                 self._upgrade_v8_index_title_idx(conn)
@@ -194,6 +234,8 @@ class Database:
                 self._upgrade_v11_kv_store(conn)
             if from_version < _SCHEMA_V12_KV_KEY_RENAME:
                 self._upgrade_v12_kv_key_rename(conn)
+            if from_version < _SCHEMA_V13_DUAL_TITLE:
+                self._upgrade_v13_dual_title(conn)
         self._set_user_version(_DB_VERSION)
 
     def _upgrade_v7_cert_fields(self, conn: Any) -> None:
@@ -224,11 +266,20 @@ class Database:
 
     def _upgrade_v12_kv_key_rename(self, conn: Any) -> None:
         """Rename index_proxy.zero_results_since key to index_proxy.unavailable_since."""
+        # Idempotent under a downgrade/restore where both keys exist: the UPDATE
+        # alone would violate the primary key and abort startup.
+        conn.execute(text("DELETE FROM kv_store WHERE key = 'index_proxy.unavailable_since'"))
         conn.execute(
             text(
                 "UPDATE kv_store SET key = 'index_proxy.unavailable_since' WHERE key = 'index_proxy.zero_results_since'"
             )
         )
+        conn.commit()
+
+    def _upgrade_v13_dual_title(self, conn: Any) -> None:
+        """Add imdb_original_title and imdb_alternate_titles columns to history."""
+        _add_column_if_absent(conn, "imdb_original_title")
+        _add_column_if_absent(conn, "imdb_alternate_titles")
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -261,13 +312,16 @@ class Database:
             index_peers=result.get("index_peers"),
             index_size=result.get("index_size"),
             index_size_mb=result.get("index_size_mb"),
-            torrent_url=result.get("torrent_url"),
+            # Jackett/Prowlarr download URLs can carry the indexer API key.
+            torrent_url=redact_secrets(result.get("torrent_url") or ""),
             torrent_tag=result.get("torrent_tag"),
-            magnet_url=result.get("magnet_url"),
+            magnet_url=redact_secrets(result.get("magnet_url") or ""),
             category=result.get("category"),
             verified=result.get("verified"),
             imdb_id=result.get("imdb_id"),
             imdb_title=result.get("imdb_title"),
+            imdb_original_title=result.get("imdb_original_title"),
+            imdb_alternate_titles=_encode_field(result.get("imdb_alternate_titles")),
             imdb_year=result.get("imdb_year"),
             imdb_poster_url=result.get("imdb_poster_url"),
             imdb_trailer_url=result.get("imdb_trailer_url"),
@@ -288,16 +342,6 @@ class Database:
             imdb_cert_source=result.get("imdb_cert_source"),
             created_at=datetime.datetime.now(tz=datetime.UTC).isoformat(),
         )
-
-    def set_verified(self, torrent_tag: str) -> None:
-        """Mark a history record as verified after a successful file copy.
-
-        Args:
-            torrent_tag: The UUID tag that identifies the torrent.
-        """
-        with Session(self._engine) as session:
-            session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag).update({"verified": "true"})
-            session.commit()
 
     def mark_stalled(self, torrent_tag: str) -> None:
         """Mark a torrent as stalled (deleted by queue manager with no seeds/peers).
@@ -339,12 +383,15 @@ class Database:
         cutoff = (datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(days=days)).isoformat()
         col_attr = getattr(HistoryRecord, timestamp_column)
         with Session(self._engine) as session:
+            # Compare parsed timestamps: legacy rows written with SQLite's
+            # CURRENT_TIMESTAMP use "YYYY-MM-DD HH:MM:SS", which sorts before any
+            # ISO "T" string and would otherwise expire a day early.
             deleted = (
                 session.query(HistoryRecord)
                 .filter(
                     HistoryRecord.result == result_value,
                     col_attr.isnot(None),
-                    col_attr < cutoff,
+                    func.datetime(col_attr) < func.datetime(cutoff),
                 )
                 .delete(synchronize_session=False)
             )
@@ -416,51 +463,6 @@ class Database:
         with Session(self._engine) as session:
             return session.query(HistoryRecord).filter_by(index_title=index_title).first() is not None
 
-    def has_passed(self, index_title: str) -> bool:
-        """Return True if *index_title* should be skipped by the search pipeline.
-
-        Skips titles with result ``Passed`` (submitted, awaiting outcome),
-        ``Completed`` (successfully downloaded), or ``Stalled`` (pending expiry).
-        Expired stalled rows are removed by :meth:`expire_stalled` before this
-        is called, so no timestamp check is needed here.
-
-        Args:
-            index_title: The raw index torrent title.
-        """
-        with Session(self._engine) as session:
-            return (
-                session.query(HistoryRecord)
-                .filter(
-                    HistoryRecord.index_title == index_title,
-                    HistoryRecord.result.in_(["Passed", "Completed", "Stalled"]),
-                )
-                .first()
-                is not None
-            )
-
-    def is_duplicate_fuzzy(self, pattern: str) -> bool:
-        """Return True if *pattern* matches any existing history title (LIKE match).
-
-        *pattern* should already be in ``%…%`` form (produced by
-        :func:`~movarr.parsing.build_sqlite_pattern`).
-
-        Args:
-            pattern: A ``LIKE``-style pattern string.
-        """
-        with Session(self._engine) as session:
-            row = session.query(HistoryRecord).filter(HistoryRecord.index_title.like(pattern)).first()
-            return row is not None
-
-    def is_verified(self, torrent_tag: str) -> bool:
-        """Return True if the torrent has already been post-processed.
-
-        Args:
-            torrent_tag: The UUID tag that identifies the torrent.
-        """
-        with Session(self._engine) as session:
-            row = session.query(HistoryRecord).filter_by(torrent_tag=torrent_tag, verified="true").first()
-            return row is not None
-
     def find_by_tag(self, torrent_tag: str) -> HistoryRecord | None:
         """Fetch a history record by its torrent tag.
 
@@ -514,6 +516,8 @@ class Database:
         """Convert a *row* into a plain dict of ``imdb_*`` fields."""
         return {
             "imdb_title": row.imdb_title,
+            "imdb_original_title": row.imdb_original_title,
+            "imdb_alternate_titles": _decode_field(row.imdb_alternate_titles),
             "imdb_year": row.imdb_year,
             "imdb_rating": row.imdb_rating,
             "imdb_votes": row.imdb_votes,
@@ -534,41 +538,6 @@ class Database:
             "imdb_credits_character_list": _decode_field(row.imdb_credits_character_list),
         }
 
-    def genres_for_tag(self, torrent_tag: str) -> list[str]:
-        """Return the genre list stored for *torrent_tag*, or an empty list.
-
-        Handles both JSON-encoded and Python-repr encoded lists (legacy).
-
-        Args:
-            torrent_tag: The UUID tag that identifies the torrent.
-        """
-        record = self.find_by_tag(torrent_tag)
-        if record is None or not record.imdb_genres_list:
-            return []
-        raw = record.imdb_genres_list.strip()
-        try:
-            return cast("list[str]", json.loads(raw))
-        except json.JSONDecodeError:
-            pass
-        # Legacy: Python repr list e.g. "['Action', 'Comedy']"
-        try:
-            value = ast.literal_eval(raw)
-            if isinstance(value, list):
-                return [str(g) for g in value]
-        except (ValueError, SyntaxError):
-            pass
-        return []
-
-    # ------------------------------------------------------------------
-    # Maintenance
-    # ------------------------------------------------------------------
-
-    def vacuum(self) -> None:
-        """Run VACUUM to reclaim disk space from deleted rows."""
-        with self._engine.connect() as conn:
-            conn.execute(text("VACUUM"))
-            conn.commit()
-
     # ------------------------------------------------------------------
     # Key-value store
     # ------------------------------------------------------------------
@@ -577,7 +546,7 @@ class Database:
         """Return the stored string for *key*, or ``None`` if absent.
 
         Args:
-            key: Dot-namespaced key string (e.g. ``"index_proxy.zero_results_since"``).
+            key: Dot-namespaced key string (e.g. ``"index_proxy.unavailable_since"``).
 
         Returns:
             The stored value, or ``None`` if the key does not exist.
@@ -609,6 +578,24 @@ class Database:
             )
             session.execute(stmt)
             session.commit()
+
+    def kv_set_if_absent(self, key: str, value: str) -> bool:
+        """Insert *key* only when absent; return True when this call inserted it.
+
+        Used to claim a one-shot action (e.g. an outage alert) across the
+        scheduler's threads.  A plain read-then-write is racy: two jobs firing
+        on the same wall clock can both observe "absent".
+        """
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        stmt = (
+            sqlite_insert(KvRecord)
+            .values(key=key, value=value, updated_at=now)
+            .on_conflict_do_nothing(index_elements=[KvRecord.key])
+        )
+        with Session(self._engine) as session:
+            result = session.execute(stmt)
+            session.commit()
+            return bool(cast("Any", result).rowcount)
 
     def kv_delete(self, key: str) -> None:
         """Delete the entry for *key* if it exists (no-op if absent).

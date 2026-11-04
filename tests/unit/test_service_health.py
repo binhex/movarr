@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path  # noqa: TC003
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from movarr.config import Config, NotificationConfig
 from movarr.database import Database
 from movarr.service_health import check_service_health
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 _PREFIX = "test_svc"
 
@@ -187,3 +191,170 @@ class TestNaiveDatetimeResetsStreak:
         assert ts is not None
         assert ts != naive_ts  # streak was reset to a fresh aware timestamp
         mock_alert.assert_not_called()
+
+
+class TestFutureStreakStart:
+    """A future unavailable_since timestamp is corrupt and restarts the streak."""
+
+    def test_future_timestamp_resets_and_does_not_alert(self, mocker: MockerFixture) -> None:
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)).isoformat()
+        db = mocker.MagicMock()
+        db.kv_get.side_effect = lambda key: future if key.endswith("unavailable_since") else None
+        config = Config()
+        config.notification.index_proxy_alert_hours = 1
+        config.notification.apprise_urls = ["json://localhost"]
+
+        check_service_health(
+            is_healthy=False,
+            service_name="Prowlarr",
+            kv_prefix="index_proxy",
+            alert_hours=1,
+            db=db,
+            config=config,
+        )
+
+        # Streak is reset to "now" and no alert is sent for the bogus future value.
+        written = [c.args for c in db.kv_set.call_args_list]
+        assert any(key.endswith("unavailable_since") for key, _ in written)
+        assert db.kv_set.call_args_list[-1].args[0].endswith("unavailable_since")
+
+
+class TestDisabledAlertingClearsState:
+    """Disabling alerts drops the streak so a re-enable starts fresh."""
+
+    def test_disabled_alert_hours_clears_kv(self, tmp_path: Path) -> None:
+        db = _db(tmp_path)
+        db.kv_set("test_svc.unavailable_since", "2020-01-01T00:00:00+00:00")
+        db.kv_set("test_svc.alert_sent", "1")
+        cfg = Config()
+
+        check_service_health(
+            is_healthy=False,
+            service_name="Prowlarr",
+            kv_prefix="test_svc",
+            alert_hours=0,
+            db=db,
+            config=cfg,
+        )
+
+        assert db.kv_get("test_svc.unavailable_since") is None
+        assert db.kv_get("test_svc.alert_sent") is None
+
+
+class TestSuppressedAlertLogging:
+    """The suppressed-alert warning is emitted once, then downgraded to debug."""
+
+    def test_second_cycle_does_not_repeat_the_warning(self, tmp_path: Path) -> None:
+        db = _db(tmp_path)
+        box = {"time": (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=5)).isoformat()}
+        db.kv_set("test_svc.unavailable_since", box["time"])
+        cfg = Config()
+        cfg.notification.index_proxy_alert_hours = 1
+        cfg.notification.apprise_urls = []
+
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+        first = db.kv_get("test_svc.alert_sent")
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+
+        assert first == "suppressed"
+        assert db.kv_get("test_svc.alert_sent") == "suppressed"
+
+
+class TestAlertClaim:
+    """The alert slot is claimed atomically, once per streak."""
+
+    def test_claim_succeeds_then_fails(self, tmp_path: Path) -> None:
+        from movarr.service_health import _claim_alert, _ServiceHealthCtx
+
+        db = _db(tmp_path)
+        ctx = _ServiceHealthCtx(
+            service_name="Prowlarr",
+            kv_prefix="test_svc",
+            alert_hours=1,
+            db=db,
+            config=Config(),
+        )
+
+        assert _claim_alert(ctx, "test_svc.alert_sent") is True
+        assert _claim_alert(ctx, "test_svc.alert_sent") is False
+
+    def test_claim_failure_does_not_block_sending(self, mocker: MockerFixture) -> None:
+        from movarr.service_health import _claim_alert, _ServiceHealthCtx
+
+        db = mocker.MagicMock()
+        db.kv_set_if_absent.side_effect = RuntimeError("db down")
+        ctx = _ServiceHealthCtx(service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=Config())
+
+        assert _claim_alert(ctx, "test_svc.alert_sent") is True
+
+
+class TestAlertClaimSuppressesSecondSender:
+    """A second caller that loses the claim sends nothing."""
+
+    def test_second_caller_is_suppressed(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        db = _db(tmp_path)
+        since = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=5)).isoformat()
+        db.kv_set("test_svc.unavailable_since", since)
+        cfg = Config()
+        cfg.notification.index_proxy_alert_hours = 1
+        cfg.notification.apprise_urls = ["json://localhost"]
+        send = mocker.patch("movarr.service_health.send_service_alert", return_value=True)
+
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+
+        assert send.call_count == 1
+
+    def test_losing_the_claim_sends_nothing(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A non-"1" claim marker still blocks a second sender."""
+        db = _db(tmp_path)
+        since = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=5)).isoformat()
+        db.kv_set("test_svc.unavailable_since", since)
+        db.kv_set("test_svc.alert_sent", "claimed")
+        cfg = Config()
+        cfg.notification.index_proxy_alert_hours = 1
+        cfg.notification.apprise_urls = ["json://localhost"]
+        send = mocker.patch("movarr.service_health.send_service_alert", return_value=True)
+
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+
+        send.assert_not_called()
+
+
+class TestSuppressedMarkerIsReleased:
+    """A "suppressed" marker becomes claimable once URLs exist."""
+
+    def test_suppressed_marker_is_cleared_and_alert_sent(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        db = _db(tmp_path)
+        since = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=5)).isoformat()
+        db.kv_set("test_svc.unavailable_since", since)
+        db.kv_set("test_svc.alert_sent", "suppressed")
+        cfg = Config()
+        cfg.notification.index_proxy_alert_hours = 1
+        cfg.notification.apprise_urls = ["json://localhost"]
+        send = mocker.patch("movarr.service_health.send_service_alert", return_value=True)
+
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=cfg
+        )
+
+        send.assert_called_once()
+        assert db.kv_get("test_svc.alert_sent") == "1"
+
+    def test_unexpected_error_is_swallowed(self, mocker: MockerFixture) -> None:
+        db = mocker.MagicMock()
+        db.kv_get.side_effect = RuntimeError("boom")
+
+        check_service_health(
+            is_healthy=False, service_name="Prowlarr", kv_prefix="test_svc", alert_hours=1, db=db, config=Config()
+        )  # must not raise

@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Partially shipped. Notification poster *embedding* was reverted in config v2.24.0
+(`poster_embed_*` removed); only saving poster art to disk remains.
+
 **Goal:** Embed poster art in queued notifications, save poster art to disk during post-processing, and add a plain-text IMDb URL to notification bodies for ntfy compatibility.
 
 **Architecture:** Three features sharing a small URL-manipulation helper (strip/set `_SX<width>` resolution on Amazon poster URLs). Poster URL is already stored in the database; notification embedding uses Apprise's `attach` parameter; disk save creates a file in the movie's destination folder after verified copy. No new Python dependencies.
@@ -25,7 +28,7 @@ All three are small, independent enough to be implemented in sequence. No sub-sy
 ## File Structure
 
 | File | Status | Responsibility |
-|------|--------|---------------|
+| ------ | -------- | --------------- |
 | `src/movarr/notifications.py` | Modify | Add `_strip_poster_resolution`, `_poster_url_with_width`, attach poster to `notify()` call, add IMDb plain-text URL line to `_build_body()` |
 | `src/movarr/imdb_metadata.py` | Modify | Strip resolution from poster URL in `_apply_metadata()` |
 | `src/movarr/post_processor.py` | Modify | Add `_save_poster_art()` function, wire into `_post_copy_actions()`, add `db_record` param |
@@ -42,6 +45,7 @@ All three are small, independent enough to be implemented in sequence. No sub-sy
 Add two pure functions to `src/movarr/notifications.py` that manipulate Amazon poster URLs. These are the shared building blocks used by both notification embedding and disk save.
 
 **Files:**
+
 - Modify: `src/movarr/notifications.py` — add after imports, before `__all__`
 - Test: `tests/unit/test_notifications.py` — add `TestPosterUrlHelpers` class
 
@@ -172,6 +176,7 @@ git commit -m "feat: add poster URL resolution helpers (_strip_poster_resolution
 Ensure the poster URL stored in the ResultDict (and thus the database) is always resolution-free, so downstream consumers (notifications, disk save) start from a clean base.
 
 **Files:**
+
 - Modify: `src/movarr/imdb_metadata.py:365` — `_apply_metadata()` poster line
 - Test: `tests/unit/test_imdb_metadata.py` — add to existing metadata tests
 
@@ -244,6 +249,7 @@ git commit -m "feat: strip poster URL resolution at metadata source"
 ## Task 3: Poster embed + IMDb link in notifications
 
 **Files:**
+
 - Modify: `src/movarr/notifications.py:81-103` — `send_queued_notification()`, `_build_body()`
 - Test: `tests/unit/test_notifications.py`
 
@@ -446,6 +452,7 @@ git commit -m "feat: embed poster art in notifications + add IMDb plain-text lin
 ## Task 4: Config models and migration
 
 **Files:**
+
 - Modify: `src/movarr/config.py` — NotificationConfig + PostProcessConfig + migration table
 - Test: `tests/unit/test_config.py`
 
@@ -625,6 +632,7 @@ git commit -m "feat: add poster art config models and migration to v2.21.0"
 ## Task 5: Poster save to disk in post-processor
 
 **Files:**
+
 - Modify: `src/movarr/post_processor.py` — add `_save_poster_art`, wire into `_post_copy_actions`, add `db_record` param
 - Test: `tests/unit/test_post_processor.py`
 
@@ -801,6 +809,7 @@ def _save_poster_art(
 Modify `_post_copy_actions` to accept `db_record` and call `_save_poster_art`:
 
 Change the signature:
+
 ```python
 def _post_copy_actions(
     config: Config,

@@ -1,5 +1,11 @@
 # Post-Process Hooks — Design Spec
 
+**Status:** Implemented, with deviations: four hooks (`pre_copy`, `post_copy`, `pre_delete`,
+`post_delete`), a per-hook `hook_timeout_mins` (`0` = no timeout), and `{dir}`/`{leaf}` substituted
+through `shlex.quote()` in a single pass (no double expansion). `pre_delete`/`post_delete` only run
+from the superseded-file deletion pass, which needs `delete_lower_quality: true` and a non-empty
+`general.library_path_list`.
+
 **Date:** 2026-05-08
 **Branch:** dev
 **Config version:** 2.13.0 → 2.14.0
@@ -40,7 +46,7 @@ skipped entirely — no subprocess is spawned.
 ### Events
 
 | Field | Fires when | `{dir}` value |
-|---|---|---|
+| --- | --- | --- |
 | `post_copy` | All files from a torrent are successfully copied to the library | Destination movie directory |
 | `pre_delete` | The deletion pass is about to start | Movie directory containing superseded files |
 | `post_delete` | The deletion pass ran to completion without being aborted by a failed `pre_delete` hook (fires even if 0 files were deleted) | Same directory as `pre_delete` |
@@ -106,7 +112,7 @@ A `TimeoutExpired` exception is caught, logged as an error, and treated as failu
 Hooks are best-effort except where failure makes the subsequent operation pointless:
 
 | Hook | On failure |
-|---|---|
+| --- | --- |
 | `post_copy` | Log warning, continue — trimarr failure does not undo a successful copy |
 | `pre_delete` | Abort the deletion pass, return 0 deleted — if `chattr` failed, `unlink` will also fail; there is no point proceeding |
 | `post_delete` | Log warning, continue — re-locking is best-effort |

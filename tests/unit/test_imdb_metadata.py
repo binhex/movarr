@@ -748,7 +748,7 @@ class TestConvertLanguages:
     def test_lowercased_name_resolved_via_title(self) -> None:
         from movarr.imdb_metadata import _convert_languages
 
-        # "english" (all-lowercase) must match after .title() normalization (lines 544-548).
+        # "english" (all-lowercase) must match through the case-insensitive lookup.
         result = _convert_languages("english")
         assert result == ["en"]
 
@@ -771,3 +771,110 @@ class TestApplyMetadataResolutionStrip:
         data = {"poster": "https://m.media-amazon.com/images/M/MV5B._V1_SX300.jpg"}
         _apply_metadata(result, data)
         assert result["imdb_poster_url"] == "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+
+
+class TestMetadataParseGuards:
+    """External payload shapes must never raise out of the metadata pipeline."""
+
+    def test_parse_digits_to_int_returns_none_without_digits(self) -> None:
+        from movarr.imdb_metadata import _parse_digits_to_int
+
+        assert _parse_digits_to_int("n/a") is None
+        assert _parse_digits_to_int("") is None
+        assert _parse_digits_to_int(None) is None
+
+    def test_parse_digits_to_int_extracts_digits(self) -> None:
+        from movarr.imdb_metadata import _parse_digits_to_int
+
+        assert _parse_digits_to_int("1,234") == 1234
+
+    def test_non_numeric_rating_does_not_raise(self) -> None:
+        from movarr.imdb_metadata import _parse_omdb_canonical
+
+        canonical = _parse_omdb_canonical({"title": "X", "imdb_rating": "N/A", "imdb_votes": "n/a"})
+
+        assert canonical["rating"] is None
+
+    def test_non_dict_auxiliary_data_is_tolerated(self, mocker: MockerFixture) -> None:
+        from movarr.imdb_metadata import _build_imdbpie_payload
+
+        client = mocker.MagicMock()
+        client.get_title.return_value = {}
+        client.get_title_genres.return_value = {}
+        client.get_title_credits.return_value = {}
+        client.get_title_auxiliary.return_value = None
+
+        payload = _build_imdbpie_payload(client, "tt0133093")
+
+        assert payload is not None
+        assert payload["original_title"] is None
+
+    def test_omdb_failure_detail_is_redacted(self, mocker: MockerFixture) -> None:
+        """A fetch error must not burn the API key into the DB/notification detail."""
+        import sys
+
+        from movarr import imdb_metadata
+
+        failing_client = mocker.MagicMock()
+        failing_client.imdbid.side_effect = RuntimeError("GET https://www.omdbapi.com/?apikey=topsecret&i=tt1 failed")
+        fake_omdb = mocker.MagicMock(OMDBClient=mocker.MagicMock(return_value=failing_client))
+        mocker.patch.dict(sys.modules, {"omdb": fake_omdb})
+
+        config = Config()
+        config.credentials.omdb.api_key = "topsecret"
+        result: ResultDict = {"imdb_id": "tt0133093", "result_details": []}
+
+        out = imdb_metadata._fetch_omdb(result, config)
+
+        assert out["result"] == "Failed"
+        joined = " ".join(out["result_details"])
+        assert "topsecret" not in joined
+        assert "REDACTED" in joined
+
+
+class TestNonNumericRating:
+    """A rating string that is not 'N/A' but still not numeric must not raise."""
+
+    def test_fractional_rating_string_yields_none(self) -> None:
+        from movarr.imdb_metadata import _parse_omdb_canonical
+
+        canonical = _parse_omdb_canonical({"title": "X", "imdb_rating": "9.1/10"})
+
+        assert canonical["rating"] is None
+
+
+class TestCertificateListShape:
+    """Non-dict entries in the certificates list must not raise."""
+
+    def test_non_dict_certificate_entry_is_ignored(self) -> None:
+        from movarr.imdb_metadata import _extract_cert_from_certificates_list
+
+        assert _extract_cert_from_certificates_list({"certificates": ["bogus"]}) is None
+
+
+class TestOmdbImportFailure:
+    """A missing omdb package fails the result cleanly instead of raising."""
+
+    def test_import_error_is_reported_as_failed(self, mocker: MockerFixture) -> None:
+        import builtins
+        import sys
+
+        from movarr import imdb_metadata
+
+        mocker.patch.dict(sys.modules, {"omdb": None})
+        real_import = builtins.__import__
+
+        def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "omdb":
+                raise ImportError("omdb missing")
+            return real_import(name, *args, **kwargs)
+
+        mocker.patch.object(builtins, "__import__", side_effect=_fake_import)
+        cfg = Config()
+        cfg.credentials.omdb.api_key = "key"
+        result: ResultDict = {"imdb_id": "tt0133093", "result_details": []}
+
+        out = imdb_metadata._fetch_omdb(result, cfg)
+
+        assert out["result"] == "Failed"
+        assert any("unavailable" in d for d in out["result_details"])

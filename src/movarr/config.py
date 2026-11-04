@@ -16,22 +16,37 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.23.0"
+_CONFIG_VERSION = "2.24.0"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
-# Hardcoded filenames constructed from directory paths at runtime.
-_LOG_FILENAME = "movarr.log"
-_DB_FILENAME = "movarr.db"
-_PID_FILENAME = "movarr.pid"
+# Filenames constructed from directory paths at runtime.  Consumers import these
+# rather than hardcoding the literal, so the name is defined in exactly one place.
+LOG_FILENAME = "movarr.log"
+DB_FILENAME = "movarr.db"
+PID_FILENAME = "movarr.pid"
 _CONFIG_FILENAME = "movarr.yml"
+
+
+def _section(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return *parent*[*key*] as a mutable dict, replacing a null/scalar value.
+
+    ``raw.setdefault(key, {})`` returns the existing value untouched, so a YAML
+    section written as ``filters:`` (null) or ``filters: nope`` would make every
+    hand-written migration raise ``AttributeError``/``TypeError`` at startup.
+    """
+    value = parent.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        parent[key] = value
+    return value
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v1.0.0 → v2.0.0: replace notification.email with apprise_urls."""
-    notification = raw.setdefault("notification", {})
+    notification = _section(raw, "notification")
     notification.pop("email", None)
     notification.setdefault("apprise_urls", [])
-    raw.setdefault("general", {})["config_version"] = "2.0.0"
+    _section(raw, "general")["config_version"] = "2.0.0"
     return raw
 
 
@@ -83,6 +98,10 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
             (("notification", "torrent_client_alert_hours"), 0),
         ],
     ),
+    # NOTE: these defaults (empty = disabled) differ from the current model
+    # defaults ("logs"/"pids").  Reaching 2.11.0 *disables* file logging and the
+    # PID file for upgraded configs, which is intended continuity with 2.10
+    # behaviour; fresh installs get the enabled defaults.
     (
         "2.10.0",
         "2.11.0",
@@ -115,14 +134,7 @@ _MIGRATION_TABLE: list[tuple[str, str, list[tuple[tuple[str, ...], Any]]]] = [
     (
         "2.16.0",
         "2.17.0",
-        [
-            (("post_process", "hooks", "hook_timeout_mins"), 5.0),
-        ],
-    ),
-    (
-        "2.18.0",
-        "2.19.0",
-        [],  # hand-written migration: strips filenames from path fields
+        [],  # version bump only: key introduced by the hand-written 2.17.0 -> 2.18.0 step
     ),
     (
         "2.19.0",
@@ -174,7 +186,7 @@ def _make_migration(
                     node[k] = {}
                 node = node[k]
             node.setdefault(keypath[-1], copy.deepcopy(default))
-        raw.setdefault("general", {})["config_version"] = to_v
+        _section(raw, "general")["config_version"] = to_v
         return raw
 
     _migrate.__name__ = f"_migrate_v{from_v.replace('.', '')}_to_v{to_v.replace('.', '')}"
@@ -188,23 +200,23 @@ def _make_migration(
 
 def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.3.0 → v2.4.0: add run_on_start: true to all schedule tasks."""
-    schedule = raw.setdefault("schedule", {})
+    schedule = _section(raw, "schedule")
     for task in ("acquisition", "queue_management", "post_processing"):
-        schedule.setdefault(task, {}).setdefault("run_on_start", True)
-    raw.setdefault("general", {})["config_version"] = "2.4.0"
+        _section(schedule, task).setdefault("run_on_start", True)
+    _section(raw, "general")["config_version"] = "2.4.0"
     return raw
 
 
 def _migrate_v25_to_v26(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.5.0 → v2.6.0: remove deprecated ffprobe_path setting."""
-    raw.setdefault("general", {}).pop("ffprobe_path", None)
-    raw.setdefault("general", {})["config_version"] = "2.6.0"
+    _section(raw, "general").pop("ffprobe_path", None)
+    _section(raw, "general")["config_version"] = "2.6.0"
     return raw
 
 
 def _migrate_v26_to_v27(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.6.0 → v2.7.0: rename good_* fields to allow_* in filters."""
-    filters = raw.setdefault("filters", {})
+    filters = _section(raw, "filters")
     for old, new in (
         ("good_imdb_title_type_list", "allow_imdb_title_type_list"),
         ("good_country_list", "allow_country_list"),
@@ -212,13 +224,13 @@ def _migrate_v26_to_v27(raw: dict[str, Any]) -> dict[str, Any]:
     ):
         if old in filters:
             filters[new] = filters.pop(old)
-    raw.setdefault("general", {})["config_version"] = "2.7.0"
+    _section(raw, "general")["config_version"] = "2.7.0"
     return raw
 
 
 def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.7.0 → v2.8.0: rename bad_* fields to reject_* in filters."""
-    filters = raw.setdefault("filters", {})
+    filters = _section(raw, "filters")
     for old, new in (
         ("bad_index_title_list", "reject_index_title_list"),
         ("bad_genre_list", "reject_genre_list"),
@@ -226,7 +238,7 @@ def _migrate_v27_to_v28(raw: dict[str, Any]) -> dict[str, Any]:
     ):
         if old in filters:
             filters[new] = filters.pop(old)
-    raw.setdefault("general", {})["config_version"] = "2.8.0"
+    _section(raw, "general")["config_version"] = "2.8.0"
     return raw
 
 
@@ -235,15 +247,17 @@ def _migrate_v211_to_v212(raw: dict[str, Any]) -> dict[str, Any]:
 
     The old default was ``False`` (leave partial files on disk when deleting a
     stalled or metaDL torrent).  The correct behaviour is to remove the
-    incomplete data via qBittorrent when movarr deletes the torrent, so both
-    fields are updated to ``True``.
+    incomplete data via qBittorrent when movarr deletes the torrent.
 
-    This migration explicitly writes ``True`` so that existing configs that
-    relied on the old ``False`` default are also corrected.
+    The values are written unconditionally: the old *default* was ``false``, so
+    a ``false`` in a 2.11.0 config is indistinguishable from the bug this step
+    exists to fix.  (An earlier revision preserved ``false``, which left
+    upgraded installs keeping the old behaviour.)
     """
-    raw.setdefault("queue_management", {})["stalled_delete_torrent_data"] = True
-    raw.setdefault("queue_management", {})["metadata_delete_torrent_data"] = True
-    raw.setdefault("general", {})["config_version"] = "2.12.0"
+    queue_management = _section(raw, "queue_management")
+    queue_management["stalled_delete_torrent_data"] = True
+    queue_management["metadata_delete_torrent_data"] = True
+    _section(raw, "general")["config_version"] = "2.12.0"
     return raw
 
 
@@ -254,10 +268,10 @@ def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
     Jackett all-indexer searches.  It now lives on JackettConfig so that each
     proxy owns its own ignore list.
     """
-    existing = raw.get("index_site", {}).pop("ignore_list", [])
+    existing = _section(raw, "index_site").pop("ignore_list", [])
     if existing:
-        raw.setdefault("index_proxy", {}).setdefault("jackett", {}).setdefault("ignore_list", existing)
-    raw.setdefault("general", {})["config_version"] = "2.16.0"
+        _section(_section(raw, "index_proxy"), "jackett").setdefault("ignore_list", existing)
+    _section(raw, "general")["config_version"] = "2.16.0"
     return raw
 
 
@@ -265,18 +279,15 @@ def _ensure_hooks_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Ensure raw["post_process"]["hooks"] is a mutable dict; return it."""
     if not isinstance(raw.get("post_process"), dict):
         raw["post_process"] = {}
-    hooks = raw.setdefault("post_process", {}).setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        hooks = {}
-        raw["post_process"]["hooks"] = hooks
-    return hooks
+    return _section(_section(raw, "post_process"), "hooks")
 
 
 def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.17.0 -> v2.18.0: rename hook_timeout_secs -> hook_timeout_mins (seconds to minutes).
 
     Converts any existing ``hook_timeout_secs`` value from seconds to minutes
-    (rounding to 1 decimal) and stores it under ``hook_timeout_mins``.
+    (rounding to 1 decimal) and stores it under ``hook_timeout_mins``, unless a
+    ``hook_timeout_mins`` value is already present, which takes precedence.
     If neither key exists, defaults to 5.0 minutes.
     """
     hooks = _ensure_hooks_dict(raw)
@@ -293,15 +304,26 @@ def _migrate_v217_to_v218(raw: dict[str, Any]) -> dict[str, Any]:
                     old_secs,
                 )
                 converted = None
+        # Only assign when the newer key is absent: a config that already carries
+        # hook_timeout_mins is expressing current intent, so the stale seconds
+        # value must not overwrite it.
         if converted is not None and converted > 0:
-            hooks.setdefault("hook_timeout_mins", converted)
+            if "hook_timeout_mins" in hooks:
+                logger.info(
+                    "Both hook_timeout_secs ({} s) and hook_timeout_mins are set; keeping "
+                    "hook_timeout_mins={} and dropping the legacy seconds key.",
+                    old_secs,
+                    hooks["hook_timeout_mins"],
+                )
+            else:
+                hooks["hook_timeout_mins"] = converted
         elif converted is not None:
             logger.warning(
                 "hook_timeout_secs value of {} s is non-positive; using default 5.0.",
                 old_secs,
             )
     hooks.setdefault("hook_timeout_mins", 5.0)
-    raw.setdefault("general", {})["config_version"] = "2.18.0"
+    _section(raw, "general")["config_version"] = "2.18.0"
     return raw
 
 
@@ -349,7 +371,7 @@ def _migrate_v218_to_v219(raw: dict[str, Any]) -> dict[str, Any]:
     log_path, db_path, and pid_path become directory-only; the filename portion
     (movarr.log, movarr.db, movarr.pid) is now hardcoded in the application.
     """
-    general = raw.setdefault("general", {})
+    general = _section(raw, "general")
     for key, basename in [
         ("log_path", "movarr.log"),
         ("db_path", "movarr.db"),
@@ -359,6 +381,19 @@ def _migrate_v218_to_v219(raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str):
             general[key] = _strip_path_basename(value, basename)
     general["config_version"] = "2.19.0"
+    return raw
+
+
+def _migrate_v223_to_v224(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.23.0 -> v2.24.0: drop the dead ``poster_embed_*`` settings.
+
+    Poster embedding was removed by the Markdown notification redesign, so the
+    two settings were written into every config without any effect.
+    """
+    notification = _section(raw, "notification")
+    for key in ("poster_embed_enabled", "poster_embed_width"):
+        notification.pop(key, None)
+    _section(raw, "general")["config_version"] = "2.24.0"
     return raw
 
 
@@ -412,6 +447,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.20.0": _migrate_v220_to_v221,
     "2.21.0": _migrate_v221_to_v222,
     "2.22.0": _migrate_v222_to_v223,
+    "2.23.0": _migrate_v223_to_v224,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -504,13 +540,18 @@ class FiltersConfig(BaseModel):
         """
         if not isinstance(v, dict):
             return v
-        return {k.lower(): val for k, val in v.items()}
+        # YAML may parse a bare key ("2020:", "Sci_Fi:") as a non-string.
+        return {str(k).lower(): val for k, val in v.items()}
 
 
 class QbittorrentConfig(BaseModel):
     """qBittorrent connection settings."""
 
     host: str = "localhost"
+    # Certificate verification for an HTTPS WebUI.  Defaults to False for
+    # compatibility with self-signed LAN certificates; enable it when the WebUI
+    # is reachable from anywhere but a trusted network.
+    verify_webui_certificate: bool = False
     port: int = 8080
     username: str = "admin"
     password: str = "adminadmin"
@@ -549,8 +590,6 @@ class NotificationConfig(BaseModel):
     apprise_urls: list[str] = Field(default_factory=list)
     index_proxy_alert_hours: float = 0
     torrent_client_alert_hours: float = 0
-    poster_embed_enabled: bool = True
-    poster_embed_width: int = 500
 
 
 class JackettConfig(BaseModel):
@@ -560,8 +599,11 @@ class JackettConfig(BaseModel):
     port: int = 9117
     api_key: str = ""
     read_timeout: float = 60.0
-    limit: int = 500
-    offset: int = 0
+    # gt=0: an indexer cannot return a page of zero results, so a zero limit
+    # would turn every request into an empty "last page" and silently stop.
+    limit: int = Field(default=500, gt=0)
+    # ge=0: a negative offset makes the pagination loop body never execute.
+    offset: int = Field(default=0, ge=0)
     ignore_list: list[str] = Field(default_factory=list)
 
 
@@ -572,6 +614,8 @@ class ProwlarrConfig(BaseModel):
     port: int = 9696
     api_key: str = ""
     read_timeout: float = 60.0
+    # gt=0: a zero page size would return nothing and look like "no results".
+    limit: int = Field(default=500, gt=0)
     ignore_list: list[str] = Field(default_factory=list)
 
 
@@ -641,7 +685,8 @@ class IndexSiteConfig(BaseModel):
         if value == "all":
             return value
         try:
-            int(value)
+            if int(value) <= 0:
+                raise ValueError(f"indexer ID must be positive, got {value!r}")
         except ValueError as exc:
             raise ValueError(f"index_site.prowlarr_indexer must be 'all' or a numeric ID, got {value!r}") from exc
         return value
@@ -655,8 +700,10 @@ class QueueManagementConfig(BaseModel):
     stalled_monitor_enabled: bool = True
     stalled_delete_torrent_data: bool = True
     metadata_delete_torrent_data: bool = True
-    stalled_delete_torrent_max_mins: int = 120
-    metadata_delete_torrent_max_mins: int = 30
+    # ge=1: a non-positive threshold would delete every matching torrent on the
+    # next cycle (including its partial data when *_data is enabled).
+    stalled_delete_torrent_max_mins: int = Field(default=120, ge=1)
+    metadata_delete_torrent_max_mins: int = Field(default=30, ge=1)
     supersede_enabled: bool = False
 
 
@@ -674,7 +721,7 @@ class DefaultCopyLibraryConfig(BaseModel):
     """Fallback destination paths when no routing rule matches."""
 
     hd_path: str = ""
-    uhd_path: str | None = None
+    uhd_path: str | None = ""
 
 
 class PostProcessHooksConfig(BaseModel):
@@ -704,7 +751,7 @@ class PostProcessHooksConfig(BaseModel):
     post_copy: str = ""
     pre_delete: str = ""
     post_delete: str = ""
-    hook_timeout_mins: float = 5.0
+    hook_timeout_mins: float = Field(default=5.0, ge=0)
 
 
 class PosterArtConfig(BaseModel):
@@ -831,6 +878,38 @@ def _strip_and_write(raw: dict[str, Any], config_path: Path) -> None:
         _strip_and_dump(raw, fh)
 
 
+def _normalise_version(value: object) -> str:
+    """Return *value* as a canonical ``X.Y.Z`` version string.
+
+    A hand-edited ``config_version: '2.3'`` (or an unquoted ``2.3`` parsed as a
+    float) must still match its migration entry rather than silently skipping
+    the whole chain.
+    """
+    if value is None:
+        return _INITIAL_CONFIG_VERSION
+    if isinstance(value, float):
+        logger.warning(
+            "config_version was read as the number {}; quote it in YAML (e.g. '2.10.0') — an "
+            "unquoted value loses its trailing zero and can re-run applied migrations.",
+            value,
+        )
+    text = str(value).strip()
+    key = _version_key(text)
+    padded = (key + (0, 0, 0))[:3]
+    return ".".join(str(part) for part in padded)
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Return a comparable tuple of the numeric components of *version*."""
+    parts: list[int] = []
+    for chunk in str(version).split("."):
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
 def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     """Apply any pending schema migrations to *raw*, rewriting the file on disk.
 
@@ -847,8 +926,9 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     """
     if not isinstance(raw.get("general"), dict):
         raw["general"] = {}
-    current = raw.get("general", {}).get("config_version", _INITIAL_CONFIG_VERSION)
+    current = _prepare_config_version(raw)
     if current not in MIGRATIONS:
+        _warn_unknown_version(current)
         if _has_none_values(raw):
             _strip_and_write(raw, config_path)
         return raw
@@ -863,10 +943,15 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
             backup_path,
         )
 
+    seen: set[str] = set()
     while current in MIGRATIONS:
+        if current in seen:
+            logger.error("Migration cycle detected at version {}; aborting.", current)
+            break
+        seen.add(current)
         previous = current
         raw = MIGRATIONS[current](raw)
-        current = raw.get("general", {}).get("config_version", current)
+        current = _normalise_version(raw.get("general", {}).get("config_version", current))
         logger.info("Config migrated from v{} to v{}", previous, current)
         if current == previous:
             logger.error("Migration loop detected at version {}; aborting.", current)
@@ -877,6 +962,107 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
         _strip_and_dump(merged, fh)
 
     return raw
+
+
+def _is_mapping(annotation: Any) -> bool:
+    """Return True when *annotation* is a ``dict[...]``-style mapping."""
+    origin = getattr(annotation, "__origin__", None)
+    return origin is dict or annotation is dict
+
+
+def _nested_model(annotation: Any) -> type[BaseModel] | None:
+    """Return the ``BaseModel`` subclass carried by *annotation*, if any."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    for arg in getattr(annotation, "__args__", ()):
+        found = _nested_model(arg)
+        if found is not None:
+            return found
+    return None
+
+
+def _unknown_key_paths(model: type[BaseModel], data: dict[str, Any], prefix: str = "") -> list[str]:
+    """Return dotted paths of keys in *data* that *model* (or its sub-models) lack.
+
+    Pydantic silently drops unknown keys, so a typo such as
+    ``filters.reject_genres_list`` or ``post_process.delete_lower_qualityy``
+    would otherwise switch a feature off with no diagnostic.  Lists of
+    sub-models (e.g. ``index_site.search``) are inspected element-wise.
+    """
+    unknown: list[str] = []
+    fields = model.model_fields
+    for key, value in data.items():
+        path = f"{prefix}{key}"
+        if key not in fields:
+            unknown.append(path)
+            continue
+        unknown.extend(_unknown_key_paths_in_value(fields[key].annotation, value, path))
+    return unknown
+
+
+def _unknown_key_paths_in_value(annotation: Any, value: Any, path: str) -> list[str]:
+    """Return unknown key paths inside *value* for a field annotated as *annotation*."""
+    nested = _nested_model(annotation)
+    if nested is None:
+        return []
+    if _is_mapping(annotation):
+        # dict[str, Model]: the mapping keys are user data (e.g. genre names in
+        # filters.override_genre), so only the mapping values are inspected.
+        return _unknown_key_paths_in_mapping_values(nested, value, path)
+    if isinstance(value, dict):
+        return _unknown_key_paths(nested, value, f"{path}.")
+    if isinstance(value, list):
+        return _unknown_key_paths_in_list(nested, value, f"{path}[].")
+    return []
+
+
+def _unknown_key_paths_in_mapping_values(nested: type[BaseModel], value: Any, path: str) -> list[str]:
+    """Return unknown key paths for each dict value of a ``dict[str, Model]`` field."""
+    if not isinstance(value, dict):
+        return []
+    found: list[str] = []
+    for item in value.values():
+        if isinstance(item, dict):
+            found.extend(_unknown_key_paths(nested, item, f"{path}."))
+    return found
+
+
+def _unknown_key_paths_in_list(nested: type[BaseModel], value: list[Any], prefix: str) -> list[str]:
+    """Return unknown key paths for each dict element of a list-of-models field."""
+    found: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            found.extend(_unknown_key_paths(nested, item, prefix))
+    return found
+
+
+def _prepare_config_version(raw: dict[str, Any]) -> str:
+    """Normalise ``general.config_version`` in place and warn when it is newer.
+
+    GeneralConfig validates ``config_version`` as a str, so an unquoted ``2.24``
+    (parsed as a float) would otherwise fail validation on every load.
+    """
+    current = _normalise_version(raw.get("general", {}).get("config_version"))
+    if isinstance(current, str) and _version_key(current) > _version_key(_CONFIG_VERSION):
+        logger.warning(
+            "Config version {} is newer than this movarr build ({}); no migration is applied and "
+            "unrecognised keys are ignored.",
+            current,
+            _CONFIG_VERSION,
+        )
+    raw.setdefault("general", {})["config_version"] = current
+    return current
+
+
+def _warn_unknown_version(current: str) -> None:
+    """Warn when *current* is older than this build but has no migration entry."""
+    if isinstance(current, str) and _version_key(current) < _version_key(_CONFIG_VERSION):
+        logger.warning(
+            "Unknown config_version '{}' (this build expects {}); no migration was applied. "
+            "Old keys are ignored, so verify the config after upgrading.",
+            current,
+            _CONFIG_VERSION,
+        )
 
 
 def _default_config_dict() -> dict[str, Any]:
@@ -891,7 +1077,7 @@ def create_default_config(config_path: str | Path) -> None:
     treated as a directory and ``movarr.yml`` is created inside.
     """
     path = Path(config_path)
-    if not path.suffix:  # directory — construct filename
+    if path.is_dir() or not path.suffix:  # directory — construct filename
         path = path / _CONFIG_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -918,7 +1104,7 @@ def load_config(config_path: str | Path) -> Config:
         ValueError: If the config file contains invalid values.
     """
     path = Path(config_path)
-    if not path.suffix:  # directory — construct filename
+    if path.is_dir() or not path.suffix:  # directory — construct filename
         path = path / _CONFIG_FILENAME
 
     if not path.exists():
@@ -937,12 +1123,11 @@ def load_config(config_path: str | Path) -> Config:
 
     raw = _run_migrations(raw, path)
 
-    _known_top_level = set(Config.model_fields.keys())
-    _unknown_keys = set(raw.keys()) - _known_top_level
-    if _unknown_keys:
+    unknown_keys = _unknown_key_paths(Config, raw)
+    if unknown_keys:
         logger.warning(
             "Unknown config keys (will be ignored): {}. Check for typos.",
-            ", ".join(sorted(_unknown_keys)),
+            ", ".join(sorted(unknown_keys)),
         )
 
     merged = _deep_merge(_default_config_dict(), raw)

@@ -147,8 +147,8 @@ class TestRun:
         mock_run_daemon.assert_called_once_with(config)
         mock_run_once.assert_not_called()
 
-    def test_runs_once_when_no_scheduler_enabled(self, mocker: MockerFixture) -> None:
-        """When no scheduler is enabled, run delegates to run_once (single pass)."""
+    def test_logs_and_exits_when_no_scheduler_enabled(self, mocker: MockerFixture) -> None:
+        """With every task disabled there is nothing to schedule."""
         mock_run_once = mocker.patch("movarr.scheduler.run_once")
         mock_run_daemon = mocker.patch("movarr.scheduler._run_daemon")
         config = Config()
@@ -158,7 +158,7 @@ class TestRun:
 
         run(config)
 
-        mock_run_once.assert_called_once_with(config)
+        mock_run_once.assert_not_called()
         mock_run_daemon.assert_not_called()
 
     def test_writes_pid_when_pid_path_set_in_config(self, mocker: MockerFixture, tmp_path: Path) -> None:
@@ -203,10 +203,10 @@ class TestRun:
 
     def test_pid_file_removed_on_exception(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """PID file is deleted in the finally block even when an exception is raised."""
-        mocker.patch("movarr.scheduler.run_once", side_effect=RuntimeError("boom"))
+        mocker.patch("movarr.scheduler._run_daemon", side_effect=RuntimeError("boom"))
         pid_path = str(tmp_path / "run" / "movarr.pid")
         config = Config(general=GeneralConfig(pid_path=pid_path))
-        config.schedule.acquisition.enabled = False
+        config.schedule.acquisition.enabled = True
         config.schedule.queue_management.enabled = False
         config.schedule.post_processing.enabled = False
 
@@ -867,3 +867,66 @@ class TestRunOnceDisabledTasks:
         run_once(config)
 
         mock_pp.assert_not_called()
+
+
+class TestSinglePassWithEverythingDisabled:
+    """run_once must not build a Database or probe qBittorrent when idle."""
+
+    def test_no_work_when_all_tasks_disabled(self, mocker: MockerFixture) -> None:
+        from movarr.scheduler import run_once
+
+        cfg = Config()
+        cfg.schedule.acquisition.enabled = False
+        cfg.schedule.queue_management.enabled = False
+        cfg.schedule.post_processing.enabled = False
+        db_cls = mocker.patch("movarr.scheduler.Database")
+        connect = mocker.patch("movarr.scheduler._connect_qbt")
+
+        run_once(cfg)
+
+        db_cls.assert_not_called()
+        connect.assert_not_called()
+
+
+class TestConnectQbtWarnings:
+    """Startup distinguishes an unreachable WebUI from an offline qBittorrent."""
+
+    def test_offline_but_reachable_warns_about_internet(self, mocker: MockerFixture) -> None:
+        from movarr.scheduler import _connect_qbt
+
+        client = mocker.MagicMock()
+        client.is_reachable.return_value = True
+        client.is_connected.return_value = False
+        mocker.patch("movarr.scheduler.QBittorrentClient", return_value=client)
+        log = mocker.patch("movarr.scheduler.logger")
+
+        _connect_qbt(Config())
+
+        assert "no internet" in log.warning.call_args.args[0]
+
+    def test_unreachable_warns_about_webui(self, mocker: MockerFixture) -> None:
+        from movarr.scheduler import _connect_qbt
+
+        client = mocker.MagicMock()
+        client.is_reachable.return_value = False
+        mocker.patch("movarr.scheduler.QBittorrentClient", return_value=client)
+        log = mocker.patch("movarr.scheduler.logger")
+
+        _connect_qbt(Config())
+
+        assert "not reachable" in log.warning.call_args.args[0]
+
+
+class TestPidCleanupFailure:
+    """An undeletable PID file must not mask shutdown."""
+
+    def test_unlink_error_is_logged(self, mocker: MockerFixture) -> None:
+        from movarr.scheduler import _cleanup_pid_file
+
+        mocker.patch("movarr.scheduler.os.path.exists", return_value=True)
+        mocker.patch("movarr.scheduler.os.unlink", side_effect=OSError("denied"))
+        log = mocker.patch("movarr.scheduler.logger")
+
+        _cleanup_pid_file("/run/movarr")  # must not raise
+
+        assert log.warning.called

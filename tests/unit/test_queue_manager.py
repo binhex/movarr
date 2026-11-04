@@ -45,7 +45,7 @@ class TestRunQueueManagement:
         """Skips all torrent operations when qBittorrent is unreachable."""
         cfg = _enabled_config()
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        qbt.is_connected.return_value = False
+        qbt.is_reachable.return_value = False
         db = mocker.MagicMock()
 
         run_queue_management(cfg, qbt, db)
@@ -57,7 +57,7 @@ class TestRunQueueManagement:
         cfg = _enabled_config()
         cfg.queue_management.stalled_monitor_enabled = False
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
         qbt.list_by_category.return_value = {}
         db = mocker.MagicMock()
 
@@ -70,7 +70,7 @@ class TestRunQueueManagement:
         cfg = _enabled_config()
         cfg.queue_management.metadata_monitor_enabled = False
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
         qbt.list_by_category.return_value = {}
         db = mocker.MagicMock()
 
@@ -82,13 +82,14 @@ class TestRunQueueManagement:
         """list_by_category is called once per enabled monitor (2 total)."""
         cfg = _enabled_config()
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
         qbt.list_by_category.return_value = {}
         db = mocker.MagicMock()
 
         run_queue_management(cfg, qbt, db)
 
-        assert qbt.list_by_category.call_count == 2
+        # Both passes share one snapshot of the category.
+        assert qbt.list_by_category.call_count == 1
 
     def test_skips_meta_dl_when_metadata_monitor_disabled(self, mocker: MockerFixture) -> None:
         """metaDL processing is skipped when metadata_monitor_enabled=False."""
@@ -96,12 +97,12 @@ class TestRunQueueManagement:
         cfg.queue_management.metadata_monitor_enabled = False
         cfg.queue_management.stalled_monitor_enabled = False
         qbt = mocker.MagicMock(spec=QBittorrentClient)
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
         db = mocker.MagicMock()
 
         run_queue_management(cfg, qbt, db)
 
-        qbt.list_by_category.assert_not_called()
+        qbt.list_by_category.assert_called_once()
 
 
 # _delete_stuck (internal, tested directly for full branch coverage)
@@ -368,3 +369,24 @@ class TestDeleteStuckNoTagOnDeletedHash:
         )
 
         db.mark_stalled.assert_not_called()
+
+
+class TestReachableButOffline:
+    """Reachable-but-offline pauses deletion without reporting an outage."""
+
+    def test_health_reported_healthy_and_deletion_paused(self, mocker: MockerFixture) -> None:
+        from movarr.queue_manager import run_queue_management
+
+        cfg = Config()
+        cfg.queue_management.queue_management_enabled = True
+        db = mocker.MagicMock()
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.is_connected.return_value = False
+        health = mocker.patch("movarr.queue_manager.torrent_client_health.check_and_notify")
+        stuck = mocker.patch("movarr.queue_manager._delete_stuck")
+
+        run_queue_management(cfg, qbt, db)
+
+        assert health.call_args.kwargs["is_reachable"] is True
+        stuck.assert_not_called()

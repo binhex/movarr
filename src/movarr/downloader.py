@@ -9,6 +9,8 @@ from typing import Any
 import backoff
 import requests
 
+from movarr.utils import redact_secrets
+
 __all__ = ["HttpClient", "HttpError"]
 
 _USER_AGENT_CHROME = (
@@ -50,15 +52,19 @@ class HttpClient:
         self._session = requests.Session()
         self._session.headers.update({"Accept-Encoding": "gzip", "User-Agent": user_agent})
 
-    def __del__(self) -> None:
+    def close(self) -> None:
+        """Release the underlying requests session (idempotent)."""
         with contextlib.suppress(Exception):
             self._session.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     def __enter__(self) -> HttpClient:
         return self
 
     def __exit__(self, *args: object) -> None:
-        self._session.close()
+        self.close()
 
     @backoff.on_exception(
         backoff.expo,
@@ -90,6 +96,7 @@ class HttpClient:
             headers: Extra request headers.
             data: Request body payload.
             auth: Optional ``(username, password)`` tuple.
+            read_timeout: Override the default read timeout for this call.
 
         Raises:
             HttpError: On non-2xx responses.
@@ -108,9 +115,8 @@ class HttpClient:
         )
 
         if not _HTTP_OK_MIN <= response.status_code <= _HTTP_OK_MAX:
-            raise HttpError(
-                f"HTTP {response.status_code} for {url!r}: {response.content[:_RESPONSE_PREVIEW_BYTES].decode('utf-8', errors='replace')}"
-            )
+            preview = response.content[:_RESPONSE_PREVIEW_BYTES].decode("utf-8", errors="replace")
+            raise HttpError(f"HTTP {response.status_code} for {redact_secrets(url)!r}: {redact_secrets(preview)}")
 
         return response
 

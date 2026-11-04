@@ -1,7 +1,10 @@
 # Index Site Name in Notifications
 
 **Date:** 2026-08-02
-**Status:** Approved
+**Status:** Implemented, with deviations:
+
+- `_extract_index_fields` no longer produces `index_details`; the index/info URL is not part of the
+  notification body.
 
 ## Overview
 

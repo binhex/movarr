@@ -46,7 +46,8 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
 
     Args:
         config: Application configuration.
-        qbt: An already-connected ``QBittorrentClient`` instance.
+        qbt: ``QBittorrentClient`` instance; reachability and connection state
+            are checked here.
         db: History database (used to mark deleted torrents as stalled).
     """
     qm_cfg = config.queue_management
@@ -54,11 +55,21 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
         logger.debug("Queue management disabled; skipping.")
         return
 
-    if not qbt.is_connected():
+    if not qbt.is_reachable():
         logger.warning("qBittorrent is unreachable; skipping queue management.")
         torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
     torrent_client_health.check_and_notify(is_reachable=True, db=db, config=config)
+
+    if not qbt.is_connected():
+        # The API is up but qBittorrent has no internet: pausing deletion is
+        # the documented behaviour, and it is not a service outage.
+        logger.warning("qBittorrent is offline (no internet); pausing stalled-torrent deletion.")
+        return
+
+    # One snapshot for both passes: fetching the category twice per cycle is
+    # wasted API traffic and can see inconsistent state.
+    torrent_map = qbt.list_by_category()
 
     if qm_cfg.metadata_monitor_enabled:
         _delete_stuck(
@@ -66,11 +77,14 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
             db,
             _StuckConfig(
                 state="metaDL",
-                filter_type="added_on",
+                # last_activity (falling back to added_on when 0) measures how
+                # long the torrent has been stuck, which is what the docs say.
+                filter_type="last_activity",
                 max_mins=qm_cfg.metadata_delete_torrent_max_mins,
                 label="metadata",
                 delete_data=qm_cfg.metadata_delete_torrent_data,
             ),
+            torrent_map,
         )
 
     if qm_cfg.stalled_monitor_enabled:
@@ -84,11 +98,22 @@ def run_queue_management(config: Config, qbt: QBittorrentClient, db: Database) -
                 label="stalled",
                 delete_data=qm_cfg.stalled_delete_torrent_data,
             ),
+            torrent_map,
         )
 
 
-def _delete_stuck(qbt: QBittorrentClient, db: Database, cfg: _StuckConfig) -> None:
-    torrent_map = qbt.list_by_category()
+def _delete_stuck(
+    qbt: QBittorrentClient,
+    db: Database,
+    cfg: _StuckConfig,
+    torrent_map: dict[str, Any] | None = None,
+) -> None:
+    """Delete torrents in *cfg.state* that stayed stuck past ``cfg.max_mins``.
+
+    *torrent_map* is passed in by the caller so both passes share one snapshot.
+    """
+    if torrent_map is None:
+        torrent_map = qbt.list_by_category()
     if not torrent_map:
         return
 

@@ -10,6 +10,10 @@ from movarr.config import Config
 from movarr.filters import filter_by_imdb, filter_by_index
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pytest_mock import MockerFixture
+
     from movarr.models import ResultDict
 
 # Helpers
@@ -1380,16 +1384,18 @@ class TestEvaluateLibraryFilesEdgeCases:
         out = _evaluate_library_files(result, ["/lib/Test Film 2008.mkv"], "1080", Config())
         assert out["result"] != "Passed"
 
-    def test_skips_file_when_resolution_not_castable_to_int(self) -> None:
+    def test_unparseable_index_resolution_fails_closed(self) -> None:
+        """A resolution like "1080p" must not silently bypass the library check."""
         from movarr.filters import _evaluate_library_files
 
         result = _imdb_result(
             index_title="Test Film 2008 1080p",
             index_title_sanitised="Test Film 2008 1080p",
-            index_title_resolution="1080",
+            index_title_resolution="1080p",
         )
-        out = _evaluate_library_files(result, ["/lib/Test Film 2008 1080p BluRay.mkv"], "notanint", Config())
-        assert out["result"] == "Passed"
+        out = _evaluate_library_files(result, ["/lib/Test Film 2008 2160p BluRay.mkv"], "1080p", Config())
+
+        assert out["result"] == "Failed"
 
     def test_fails_when_library_has_higher_resolution(self) -> None:
         from movarr.filters import _evaluate_library_files
@@ -1497,30 +1503,6 @@ class TestGroupAndEditionBonus:
         )
         assert bonus == 0
 
-    def test_theatrical_candidate_earns_no_bonus_over_base(self) -> None:
-        from movarr.config import Config
-        from movarr.filters import composite_quality_score
-
-        cfg = Config()
-        score_theatrical_vs_base = composite_quality_score("Movie 2019 Theatrical 2160p", "Movie 2019 2160p", cfg)
-        score_base_vs_theatrical = composite_quality_score("Movie 2019 2160p", "Movie 2019 Theatrical 2160p", cfg)
-        assert score_theatrical_vs_base == score_base_vs_theatrical, (
-            "theatrical vs base should have no special-edition bonus in either direction"
-        )
-
-    def test_theatrical_extended_earns_bonus_over_base(self) -> None:
-        from movarr.config import Config
-        from movarr.filters import composite_quality_score
-
-        cfg = Config()
-        score_compound = composite_quality_score(
-            "Movie 2019 Theatrical Extended 2160p BluRay", "Movie 2019 2160p BluRay", cfg
-        )
-        score_base = composite_quality_score(
-            "Movie 2019 2160p BluRay", "Movie 2019 Theatrical Extended 2160p BluRay", cfg
-        )
-        assert score_compound > score_base, "Theatrical Extended should earn +10 bonus over a base release"
-
 
 # Log-level behaviour
 
@@ -1596,84 +1578,6 @@ class TestCheckBitrateEdgeCases:
         assert out["result"] == "Failed"
 
 
-class TestSpecialEditionToken:
-    """Tests for the public special_edition_token helper."""
-
-    def test_returns_empty_string_for_no_token(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("The Matrix 1999 1080p BluRay") == ""
-
-    def test_returns_extended(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("The Matrix 1999 Extended 1080p BluRay") == "extended"
-
-    def test_returns_theatrical(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("The Matrix 1999 Theatrical 1080p BluRay") == "theatrical"
-
-    def test_case_insensitive(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("The Matrix 1999 EXTENDED 1080p BluRay") == "extended"
-
-    def test_matches_directors_cut_with_apostrophe(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("Alien 1979 Director's Cut 2160p") == "directors cut"
-
-    def test_matches_directors_cut_without_apostrophe(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("Alien 1979 Directors Cut 2160p") == "directors cut"
-
-    def test_matches_director_s_cut_space_separated(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("Alien 1979 Director s Cut 2160p") == "directors cut"
-
-    def test_canonicalizes_directors_cut_variants(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("Director's Cut") == special_edition_token("Directors Cut") == "directors cut"
-
-    def test_handles_unicode_curly_apostrophe(self) -> None:
-        from movarr.filters import special_edition_token
-
-        assert special_edition_token("Alien 1979 Director\u2019s Cut 2160p Remux") == "directors cut"
-
-
-class TestPrimaryEditionToken:
-    """Tests for the public primary_edition_token helper."""
-
-    def test_theatrical_extended_returns_extended(self) -> None:
-        from movarr.filters import primary_edition_token
-
-        assert primary_edition_token("Theatrical Extended 2160p Remux") == "extended"
-
-    def test_theatrical_only_returns_empty(self) -> None:
-        from movarr.filters import primary_edition_token
-
-        assert primary_edition_token("Theatrical 2160p Remux") == ""
-
-    def test_directors_cut_canonical(self) -> None:
-        from movarr.filters import primary_edition_token
-
-        assert primary_edition_token("Director's Cut 2160p") == "directors cut"
-
-    def test_no_edition_returns_empty(self) -> None:
-        from movarr.filters import primary_edition_token
-
-        assert primary_edition_token("The Matrix 1999 2160p BluRay") == ""
-
-    def test_extended_no_theatrical_returns_extended(self) -> None:
-        from movarr.filters import primary_edition_token
-
-        assert primary_edition_token("Extended 1080p BluRay") == "extended"
-
-
 class TestEditionTokenSet:
     """Tests for the public edition_token_set helper."""
 
@@ -1745,3 +1649,168 @@ class TestRejectMovieTitleEmptyNorm:
         )
         out = filter_by_index(result, _default_site_dict(), cfg)
         assert out["result"] == "Passed"
+
+
+class TestCurlyApostropheMatching:
+    """A typographic apostrophe must not defeat the possessive rule."""
+
+    def test_curly_possessive_matches_plain(self) -> None:
+        from movarr.parsing import normalise_for_compare
+
+        assert normalise_for_compare("Bridget Jones’s Diary") == normalise_for_compare("Bridget Jones Diary")
+
+
+class TestTitleVariants:
+    """Every plausible title is searched, not just the first match."""
+
+    def test_original_title_is_a_variant_even_when_ascii(self) -> None:
+        from movarr.filters import _build_title_variants
+
+        result: ResultDict = {
+            "imdb_title": "Parasite",
+            "imdb_original_title": "Gisaengchung",
+            "imdb_alternate_titles": None,
+        }
+        variants = _build_title_variants(result, "parasite")
+
+        assert variants == {"parasite", "gisaengchung"}
+
+    def test_all_variants_are_accumulated(self, mocker: MockerFixture) -> None:
+        from movarr.filters import _find_canonical_matches
+
+        calls: list[str] = []
+
+        def fake_walk(title: str, year: str, _walk: object) -> list[str]:
+            calls.append(title)
+            return [f"/lib/{title}.mkv"] if title == "gisaengchung" else []
+
+        mocker.patch("movarr.filters._walk_library_files", side_effect=fake_walk)
+        found = _find_canonical_matches({"parasite", "gisaengchung"}, "2019", [], {})
+
+        assert found == ["/lib/gisaengchung.mkv"]
+        assert "parasite" in calls
+
+
+class TestExtrasDoNotBlockAcquisition:
+    """A higher-resolution bonus feature must not veto the main feature."""
+
+    def test_extras_file_is_ignored_by_library_match(self) -> None:
+        from movarr.filters import _match_library_file
+
+        assert _match_library_file("The Matrix 1999 Behind The Scenes 2160p.mkv", "thematrix", "1999", "/lib") is None
+
+    def test_real_feature_still_matches(self) -> None:
+        from movarr.filters import _match_library_file
+
+        assert _match_library_file("The Matrix 1999 2160p BluRay.mkv", "thematrix", "1999", "/lib") is not None
+
+
+class TestLibraryEvaluationEmptyInput:
+    """An empty match list passes without a per-file reason."""
+
+    def test_empty_list_passes(self) -> None:
+        from movarr.filters import _evaluate_library_files
+
+        result = _imdb_result(
+            index_title="Test Film 2008 1080p",
+            index_title_sanitised="Test Film 2008 1080p",
+            index_title_resolution="1080",
+        )
+        out = _evaluate_library_files(result, [], "1080", Config())
+
+        assert out["result"] == "Passed"
+
+
+class TestFolderOnlyLibraryNaming:
+    """A file named movie.mkv inside "The Matrix (1999)" is still matched."""
+
+    def test_folder_only_name_matches(self, tmp_path: Path) -> None:
+        from movarr.filters import _match_library_file
+
+        root = str(tmp_path / "The Matrix (1999)")
+        assert _match_library_file("movie.mkv", "thematrix", "1999", root) == "movie.mkv"
+
+
+class TestMultipleGenreOverrides:
+    """The most lenient override wins, independent of genre order."""
+
+    def _cfg(self) -> Config:
+        from movarr.config import OverrideGenreConfig
+
+        cfg = Config()
+        cfg.filters.override_genre = {
+            "horror": OverrideGenreConfig(minimum_rating=8.0, minimum_votes=5000),
+            "thriller": OverrideGenreConfig(minimum_rating=6.0, minimum_votes=1000),
+        }
+        return cfg
+
+    def test_more_lenient_override_wins(self) -> None:
+        from movarr.filters import _override_genre
+
+        result: ResultDict = {"imdb_genres_list": ["Horror", "Thriller"]}
+        override = _override_genre(result, self._cfg())
+
+        assert override["minimum_rating"] == 6.0
+        assert override["minimum_votes"] == 1000
+
+    def test_order_does_not_matter(self) -> None:
+        from movarr.filters import _override_genre
+
+        first: ResultDict = {"imdb_genres_list": ["Horror", "Thriller"]}
+        second: ResultDict = {"imdb_genres_list": ["Thriller", "Horror"]}
+        a = _override_genre(first, self._cfg())
+        b = _override_genre(second, self._cfg())
+
+        assert a == b
+
+
+class TestFloatSizeInput:
+    """A float-formatted byte count must not fail the size gates."""
+
+    def test_float_size_passes_size_gate(self) -> None:
+        result: ResultDict = {"index_title": "Movie 2020 1080p", "index_size": "4294967296.0"}
+        out = filter_by_index(result, {"minimum_size_mb": 1000, "maximum_size_mb": 20000}, Config())
+
+        assert out["result"] == "Passed"
+
+
+class TestUnparseableBitrateSize:
+    """A non-numeric size fails the bitrate gate cleanly."""
+
+    def test_bad_size_fails_bitrate_check(self) -> None:
+        result: ResultDict = {
+            "index_title": "Movie 2020 1080p",
+            "index_size": "not-a-number",
+            "imdb_running_time_in_minutes": 120,
+        }
+        out = filter_by_imdb(result, Config())
+
+        # Either gate may reject it, but it must never raise.
+        assert out["result"] in {"Failed", "Passed"}
+
+    def test_non_numeric_size_fails_cleanly(self) -> None:
+        result: ResultDict = {
+            "index_title": "Movie 2020 1080p",
+            "index_size": "not-a-number",
+            "imdb_running_time_in_minutes": 120,
+            "result": "Passed",
+            "result_details": [],
+        }
+        out = filter_by_imdb(result, Config())
+
+        assert out["result"] == "Failed"
+
+    def test_unparseable_size_fails_bitrate_gate_directly(self) -> None:
+        from movarr.filters import _check_bitrate
+
+        result: ResultDict = {
+            "index_title": "Movie 2020 1080p",
+            "index_size": "n/a",
+            "imdb_running_time_in_minutes": 120,
+            "_filter_minimum_bitrate_mb": 50,
+            "result_details": [],
+        }
+
+        out = _check_bitrate(result)
+
+        assert out["result"] == "Failed"

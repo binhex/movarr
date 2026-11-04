@@ -13,7 +13,7 @@
 ## File Map
 
 | File | Change |
-|------|--------|
+| ------ | -------- |
 | `src/movarr/config.py:371` | Change `pid_path` default from `"configs"` → `"pids"` |
 | `src/movarr/cli.py:24-25` | Add `pid_path` handling in `_apply_general_overrides` |
 | `src/movarr/cli.py:104` | Insert `@click.option("--pid-path", ...)` decorator (after `--db-path`) |
@@ -31,6 +31,7 @@
 ### Task 1: Change config default and add CLI option
 
 **Files:**
+
 - Modify: `src/movarr/config.py:371`
 - Modify: `src/movarr/cli.py:24-25, 104, 210, 241`
 
@@ -134,6 +135,7 @@ git commit -m "feat: add --pid-path CLI option, change default pid_path to pids"
 ### Task 2: Update CLI tests
 
 **Files:**
+
 - Modify: `tests/unit/test_cli.py:84-88` (remove stale test)
 - Modify: `tests/unit/test_cli.py:after line 88` (add help mention test in `TestCliHelp`)
 - Modify: `tests/unit/test_cli.py:after line 335` (add `TestCliPidPathOverride` class — renamed to avoid collision with existing `TestCliPidPath` at line 264)
@@ -224,6 +226,7 @@ git commit -m "test: add --pid-path CLI option tests, remove stale absence asser
 ### Task 3: Update config default test
 
 **Files:**
+
 - Modify: `tests/unit/test_config.py:1077`
 
 - [ ] **Step 1: Change expected default in test**
@@ -260,6 +263,7 @@ git commit -m "test: update pid_path default assertion from configs to pids"
 ### Task 4: Update reference config
 
 **Files:**
+
 - Modify: `configs/movarr.yml:11`
 
 - [ ] **Step 1: Update `pid_path` in reference config**
@@ -288,6 +292,7 @@ git commit -m "chore: update reference config pid_path to new default pids"
 ### Task 5: Update README documentation
 
 **Files:**
+
 - Modify: `README.md:130`
 
 - [ ] **Step 1: Update `pid_path` row in README config table**

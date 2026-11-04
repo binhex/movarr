@@ -29,23 +29,22 @@ from movarr.parsing import (
     extract_movie_title,
     extract_resolution,
     extract_year,
+    is_extras_filename,
     is_tv_content,
     normalise_for_compare,
     quality_score,
     sanitise,
 )
+from movarr.utils import parse_size_bytes
 
 if TYPE_CHECKING:
-    from movarr.config import Config
+    from movarr.config import Config, OverrideGenreConfig
     from movarr.models import ResultDict
 
 __all__ = [
-    "composite_quality_score",
     "filter_by_index",
     "filter_by_imdb",
     "edition_token_set",
-    "primary_edition_token",
-    "special_edition_token",
     "supersession_quality_score",
 ]
 
@@ -57,55 +56,21 @@ _UNICODE_APOSTROPHES = re.compile(r"[\u2018\u2019\u02bc\u02bb]")
 # Public entry points
 
 
-def special_edition_token(san: str) -> str:
-    """Return the special-edition token found in *san* (lowercase), or empty string.
-
-    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
-    Typographic apostrophes are normalized to ASCII before matching.
-    """
-    normalized = _UNICODE_APOSTROPHES.sub("'", san)
-    m = _RE_SPECIAL.search(normalized)
-    if not m:
-        return ""
-    token = m.group(0).lower()
-    if "director" in token and "cut" in token:
-        return "directors cut"
-    return token
-
-
-def primary_edition_token(san: str) -> str:
-    """Return the primary non-theatrical special-edition token found in *san*.
-
-    Unlike ``special_edition_token``, this function iterates over **all** edition
-    tokens and returns the first one that is not ``theatrical``, which is treated
-    as the base edition.  Returns empty string when no non-theatrical token is
-    found (the file is untagged or tagged only as theatrical).
-
-    All director\u2019s-cut spelling variants are canonicalized to ``"directors cut"``.
-    Typographic apostrophes are normalized to ASCII before matching.
-    """
-    norm = _UNICODE_APOSTROPHES.sub("'", san)
-    for m in _RE_SPECIAL.finditer(norm):
-        token = m.group(0).lower()
-        if token == "theatrical":
-            continue
-        if "director" in token and "cut" in token:
-            return "directors cut"
-        return token
-    return ""
-
-
 def edition_token_set(san: str) -> frozenset[str]:
     """Return the set of all non-theatrical special-edition tokens in *san*.
 
-    Unlike ``primary_edition_token``, this function returns every non-theatrical
-    edition token as a frozenset, allowing order-insensitive comparison between
-    filenames with the same tags in a different order.
+    Edition tokens are returned as a frozenset, allowing order-insensitive
+    comparison between filenames with the same tags in a different order.
 
     ``theatrical`` is excluded (base edition). Director's-cut variants are
     canonicalized. Typographic apostrophes are normalized before matching.
     """
+    # Filenames use dots/dashes/brackets where releases use spaces:
+    # "Movie.2019.[Directors.Cut].2160p" must yield "directors cut" just like
+    # "Movie 2019 Directors Cut 2160p".  Without this normalisation one side of
+    # every edition comparison was empty and different cuts compared equal.
     norm = _UNICODE_APOSTROPHES.sub("'", san)
+    norm = re.sub(r"[._\-\[\]{}()]+", " ", norm)
     tokens: set[str] = set()
     for m in _RE_SPECIAL.finditer(norm):
         token = m.group(0).lower()
@@ -130,7 +95,7 @@ def filter_by_index(
         result: Pipeline dict populated by the Jackett parser.
         index_site: The active index site config dict.
         config: Application configuration.
-        library_walk: Pre-built os.walk generator for library dedup (optional).
+        library_walk: Pre-built os.walk result list for library dedup (optional).
 
     Returns:
         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
@@ -189,7 +154,7 @@ def filter_by_imdb(
     Args:
         result: Pipeline dict fully populated with IMDb metadata.
         config: Application configuration.
-        library_walk: Pre-built os.walk generator for library dedup (optional).
+        library_walk: Pre-built os.walk result list for library dedup (optional).
 
     Returns:
         Updated result dict; ``result['result']`` is ``'Passed'`` on success.
@@ -257,8 +222,10 @@ def _check_reject_index_group(result: ResultDict, config: Config) -> ResultDict:
 def _check_search_criteria(result: ResultDict, index_site: dict) -> ResultDict:
     index_title = (result.get("index_title") or "").lower()
     criteria = (index_site.get("criteria") or "").lower()
+    sep = r"[\s.\-_\[\(\]\)]"
     for token in criteria.split():
-        if token not in index_title:
+        # Delimiter-anchored: "1080p" must not be satisfied by "H1080pY".
+        if not re.search(rf"(?:^|{sep}){re.escape(token)}(?:{sep}|$)", index_title):
             return _fail(result, f"Index title '{index_title}' missing criteria token '{token}'.")
     return _pass(result, f"Index title passes search criteria '{criteria}'.")
 
@@ -294,7 +261,10 @@ def _check_size_bound(result: ResultDict, threshold_mb: int, bound: str) -> Resu
         return _fail(result, f"No index size available; {direction} threshold assumed.")
 
     try:
-        size_mb = int(raw_size) // 1_000_000
+        parsed = parse_size_bytes(raw_size)
+        if parsed is None:
+            raise ValueError(raw_size)
+        size_mb = parsed // 1_000_000
     except (ValueError, TypeError):
         return _fail(result, f"Could not parse index size '{raw_size}'.")
     ok = (size_mb >= threshold_mb) if bound == "minimum" else (size_mb <= threshold_mb)
@@ -444,7 +414,10 @@ def _check_bitrate(result: ResultDict) -> ResultDict:
         runtime_int = int(runtime)
         if runtime_int <= 0:
             return _fail(result, f"Invalid runtime '{runtime}' for bitrate check.")
-        size_mb = int(raw_size) // 1_000_000
+        parsed = parse_size_bytes(raw_size)
+        if parsed is None:
+            return _fail(result, f"Could not parse size '{raw_size}' for bitrate check.")
+        size_mb = parsed // 1_000_000
         bitrate_mb = size_mb // runtime_int
     except (ValueError, TypeError):
         return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
@@ -559,20 +532,41 @@ def _override_movie_title(result: ResultDict, config: Config) -> bool:
 
 
 def _override_genre(result: ResultDict, config: Config) -> dict:
-    """Return a dict with relaxed thresholds if any genre overrides match."""
+    """Return the *most lenient* thresholds across all matching genre overrides.
+
+    When a film carries several overridden genres, taking the last one made the
+    result depend on IMDb's genre ordering.  Overrides exist to relax thresholds,
+    so the lowest value wins deterministically.
+    """
+    overrides = _matching_genre_overrides(result, config)
+    override: dict = {}
+    min_rating = _lowest_or_none([cfg.minimum_rating for cfg in overrides])
+    if min_rating is not None:
+        override["minimum_rating"] = min_rating
+    min_votes = _lowest_or_none([cfg.minimum_votes for cfg in overrides])
+    if min_votes is not None:
+        override["minimum_votes"] = min_votes
+    return override
+
+
+def _matching_genre_overrides(result: ResultDict, config: Config) -> list[OverrideGenreConfig]:
+    """Return the override configs whose genre appears in the result's genres."""
     genres = result.get("imdb_genres_list") or []
-    override = {}
+    found: list[OverrideGenreConfig] = []
     for genre in genres:
         genre_cfg = config.filters.override_genre.get(genre.lower())
-        if genre_cfg is None:
-            continue
-        # Use is not None so that an explicit 0 value (meaning "no minimum")
-        # is stored in the override dict rather than being treated as falsy.
-        if genre_cfg.minimum_rating is not None:
-            override["minimum_rating"] = genre_cfg.minimum_rating
-        if genre_cfg.minimum_votes is not None:
-            override["minimum_votes"] = genre_cfg.minimum_votes
-    return override
+        if genre_cfg is not None:
+            found.append(genre_cfg)
+    return found
+
+
+def _lowest_or_none(values: list[float | int | None]) -> float | int | None:
+    """Return the lowest non-None value, or None when every value is None.
+
+    ``None`` means "not overridden" and must not be treated as zero.
+    """
+    present = [v for v in values if v is not None]
+    return min(present) if present else None
 
 
 def _check_rating(result: ResultDict, config: Config, override: dict) -> bool:
@@ -641,45 +635,71 @@ def _find_canonical_matches(
     library_walk: list[tuple[str, list[str], list[str]]],
     result: ResultDict,
 ) -> list[str]:
-    """Walk library for any title in *title_compares*, stopping on first match.
+    """Return every library file matching any title variant and year.
 
-    When the exact IMDb year finds nothing, try the index (release/remaster)
-    year from *result* for each title so that library files named with a
-    different year than the original IMDb production still match.
+    All variants are searched and the results unioned: stopping at the first
+    variant that matched (the previous behaviour) missed the better copy when a
+    film is filed under one title in one resolution and another title in a
+    different resolution.  The index (release/remaster) year is also tried when
+    it differs from the IMDb year.
     """
     fallback_year = str(result.get("movie_title_year") or "")
     use_fallback = bool(fallback_year and fallback_year != imdb_year)
 
-    for title_compare in title_compares:
-        matches = _walk_library_files(title_compare, imdb_year, library_walk)
-        if matches:
-            return matches
+    found: list[str] = []
+    seen: set[str] = set()
+    for title_compare in sorted(title_compares):
+        years = [imdb_year]
         if use_fallback:
-            matches = _walk_library_files(title_compare, fallback_year, library_walk)
-            if matches:
-                return matches
-    return []
+            years.append(fallback_year)
+        for year in years:
+            for path in _walk_library_files(title_compare, year, library_walk):
+                if path not in seen:
+                    seen.add(path)
+                    found.append(path)
+    return found
 
 
 def _build_title_variants(result: ResultDict, canonical_compare: str) -> set[str]:
     """Return a set of normalised titles to search for in the library.
 
-    Includes the canonical IMDb title plus up to 3 alternate titles from
-    IMDbPie's ``alternateTitlesSample`` when the original title contains
-    non-ASCII characters (indicating a foreign-language film).
+    Includes the canonical IMDb title, the film's original title when it differs,
+    and (for likely non-English films) up to 3 alternate titles from IMDbPie's
+    ``alternateTitlesSample``.
     """
     title_variants: set[str] = {canonical_compare}
-    alternate_titles = result.get("imdb_alternate_titles")
-    if not alternate_titles:
-        return title_variants
-    original = result.get("imdb_original_title") or result.get("imdb_title") or ""
-    if not _contains_non_ascii(original):
-        return title_variants
-    for alt in alternate_titles:
+    original = str(result.get("imdb_original_title") or "")
+    original_norm = normalise_for_compare(original)
+    if original_norm and original_norm != canonical_compare:
+        # A romanised original title ("Gisaengchung") is ASCII, so it must be
+        # added regardless of the alternate-title gate below.
+        title_variants.add(original_norm)
+    if _uses_alternate_titles(result, original):
+        title_variants.update(_alternate_title_variants(result))
+    return title_variants
+
+
+def _uses_alternate_titles(result: ResultDict, original: str) -> bool:
+    """Return True when alternate titles are worth consulting for this film.
+
+    Alternates are noisy for English-language films (they include literal
+    translations), so they are only used when the film is likely non-English,
+    which the ASCII-ness of the canonical + original titles shows.
+    """
+    alternates = result.get("imdb_alternate_titles") or []
+    if not alternates:
+        return False
+    return _contains_non_ascii(original) or _contains_non_ascii(str(result.get("imdb_title") or ""))
+
+
+def _alternate_title_variants(result: ResultDict) -> set[str]:
+    """Return the normalised first three alternate titles."""
+    variants: set[str] = set()
+    for alt in (result.get("imdb_alternate_titles") or [])[:3]:
         norm = normalise_for_compare(alt)
         if norm:
-            title_variants.add(norm)
-    return title_variants
+            variants.add(norm)
+    return variants
 
 
 def _check_library_canonical(
@@ -754,10 +774,27 @@ def _match_library_file(
     san = sanitise(fname)
     if not san:
         return None
+    if is_extras_filename(san):
+        # A higher-resolution bonus feature must never block the main feature.
+        return None
+    return _match_by_filename_or_folder(fname, san, title_compare, year, root)
+
+
+def _match_by_filename_or_folder(
+    fname: str,
+    san: str,
+    title_compare: str,
+    year: str,
+    root: str,
+) -> str | None:
+    """Match *fname* by its own title/year, falling back to its folder name."""
     lib_title = extract_movie_title(san)
     lib_year = extract_year(san)
     if not lib_title or not lib_year:
-        return None
+        # Filename carries no parsable title/year (e.g. "movie.mkv"): the
+        # containing folder is then the only identity, which is the documented
+        # layout ("The Matrix (1999)/movie.mkv").
+        return fname if _match_folder_name(root, title_compare, year) else None
     norm = normalise_for_compare(lib_title)
     if not norm:
         return None
@@ -765,7 +802,6 @@ def _match_library_file(
     # substring false positives (e.g. "rings" matching "thelordoftherings").
     if norm == title_compare and lib_year == year:
         return fname
-
     # Filename did not match — try the parent folder name as a fallback.
     return _try_folder_fallback(root, fname, norm, lib_year, title_compare, year)
 
@@ -824,13 +860,14 @@ def _evaluate_single_library_file(
     index_resolution: str,
     index_san: str,
     config: Config,
-) -> tuple[str, str] | None:
+) -> tuple[str, str]:
     """Evaluate one library file against the index entry.
 
     Returns:
         ("fail", reason) — library is at least as good; caller should fail the result.
         ("better", reason) — index is better; continue checking other files.
-        None — resolution unparseable; skip this file.
+
+    An unparseable resolution fails closed rather than returning "skip".
     """
     lib_fname = os.path.basename(lib_path)
     lib_san = sanitise(lib_fname) or ""
@@ -846,7 +883,12 @@ def _evaluate_single_library_file(
         idx_res_int = int(index_resolution)
         lib_res_int = int(lib_res)
     except (ValueError, TypeError):
-        return None
+        # Fail closed: silently skipping let a caller pass "1080p" instead of
+        # "1080" and bypass the entire library comparison.
+        return (
+            "fail",
+            f"Cannot compare resolutions ('{index_resolution}' vs '{lib_res}'); assuming the library copy is present.",
+        )
 
     if idx_res_int < lib_res_int:
         return "fail", f"Library has higher resolution ({lib_res}p > {index_resolution}p)."
@@ -892,10 +934,7 @@ def _evaluate_library_files(
     best_reason = ""
 
     for lib_path in library_files:
-        outcome = _evaluate_single_library_file(lib_path, index_resolution, index_san, config)
-        if outcome is None:
-            continue
-        outcome_type, reason = outcome
+        outcome_type, reason = _evaluate_single_library_file(lib_path, index_resolution, index_san, config)
         if outcome_type == "fail":
             return _fail(result, reason)
         best_reason = reason  # outcome_type == "better"
@@ -938,34 +977,14 @@ def _special_edition_bonus(candidate_san: str, other_san: str) -> int:
     return 0
 
 
-def composite_quality_score(san: str, other_san: str, config: Config) -> int:
-    """Return the composite quality score for *san* relative to *other_san*.
-
-    Combines ``quality_score`` with the preferred-group and special-edition
-    bonuses so callers outside this module get a consistent score without
-    importing private symbols.
-
-    ``quality_score`` is already imported at the module level in this file.
-
-    Args:
-        san: Sanitised title of the candidate file.
-        other_san: Sanitised title of the file being compared against.
-        config: Application configuration (used for preferred group list).
-    """
-    score = quality_score(san)
-    score += _group_bonus(san, other_san, config)
-    score += _special_edition_bonus(san, other_san)
-    return score
-
-
 def supersession_quality_score(san: str, other_san: str, config: Config) -> int:
     """Return the quality score for *san* relative to *other_san* for supersession comparisons.
 
-    Like ``composite_quality_score`` but deliberately excludes
-    ``_special_edition_bonus``. Special-edition tokens (extended, director's cut,
-    theatrical, unrated) represent different cuts of a film, not superior audio/video
-    quality. Including them in a deletion-decision score would permanently destroy
-    alternate editions the user may have intentionally kept.
+    Deliberately excludes ``_special_edition_bonus``. Special-edition tokens
+    (extended, director's cut, theatrical, unrated) represent different cuts of
+    a film, not superior audio/video quality. Including them in a
+    deletion-decision score would permanently destroy alternate editions the
+    user may have intentionally kept.
 
     Args:
         san: Sanitised title of the candidate file.

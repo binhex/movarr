@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -11,6 +10,7 @@ from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
 from movarr.models import build_result_dict
+from movarr.parsing import normalise_imdb_id
 from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
@@ -19,11 +19,7 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["ProwlarrClient", "ProwlarrError"]
-
-
-class ProwlarrError(Exception):
-    """Raised when Prowlarr returns an unusable response."""
+__all__ = ["ProwlarrClient"]
 
 
 class ProwlarrClient:
@@ -97,8 +93,12 @@ class ProwlarrClient:
 
         encoded_criteria = urllib.parse.quote_plus(criteria.replace(",", " "))
         cat_params = "&".join(f"categories={cat.strip()}" for cat in category.split(","))
+        # Prowlarr caps results server-side; request an explicit page size so a
+        # busy index set is not silently truncated relative to Jackett mode.
+        limit = self._cfg.limit
         base_url = (
-            f"http://{self._cfg.host}:{self._cfg.port}/api/v1/search?query={encoded_criteria}&type=search&{cat_params}"
+            f"http://{self._cfg.host}:{self._cfg.port}/api/v1/search"
+            f"?query={encoded_criteria}&type=search&limit={limit}&{cat_params}"
         )
         url = base_url if indexer_id is None else f"{base_url}&indexerIds={indexer_id}"
         items = self._fetch_search_results(url, index_site)
@@ -165,42 +165,46 @@ class ProwlarrClient:
 
     @staticmethod
     def _extract_imdb_id(item: dict) -> str | None:
-        """Extract and normalise an IMDb ID from a Prowlarr result item."""
-        imdb_id_raw = item.get("imdbId")
-        if not imdb_id_raw:
-            return None
-        with contextlib.suppress(ValueError, TypeError):
-            if isinstance(imdb_id_raw, str) and imdb_id_raw.startswith("tt"):
-                return imdb_id_raw
-            return f"tt{int(imdb_id_raw):07d}"
-        return None
+        """Extract and normalise an IMDb ID from a Prowlarr result item.
+
+        Delegates to :func:`movarr.parsing.normalise_imdb_id` so a malformed
+        indexer-supplied value can never reach a notification or torrent tag.
+        """
+        return normalise_imdb_id(item.get("imdbId"))
 
     def _parse_result(self, item: dict) -> ResultDict | None:
         """Extract a :class:`~movarr.models.ResultDict` from one Prowlarr JSON result."""
-        index_title: str | None = item.get("title")
-        if not index_title:
+        if not self._is_usable_item(item):
             return None
-
-        # Skip non-torrent results (e.g. Usenet/NZB from mixed indexer setups).
-        if (item.get("protocol") or "torrent").lower() != "torrent":
-            return None
-
+        index_title = str(item["title"])
         size_bytes = item.get("size", 0) or 0
-        imdb_id = self._extract_imdb_id(item)
         result: ResultDict = build_result_dict(
             index_title=index_title,
             index_tracker=item.get("indexer", ""),
             index_pubdate=item.get("publishDate", ""),
             index_details=item.get("infoUrl", ""),
-            index_seeders=str(item.get("seeders", "")),
-            index_peers=str(item.get("leechers", "")),
+            index_seeders=str(item.get("seeders")) if item.get("seeders") is not None else "",
+            index_peers=str(item.get("leechers")) if item.get("leechers") is not None else "",
             index_size=str(size_bytes),
             index_size_mb=bytes_to_mb(size_bytes),
             torrent_url=item.get("downloadUrl", "") or "",
             magnet_url=item.get("magnetUrl", "") or "",
             category="",
         )
+        imdb_id = self._extract_imdb_id(item)
         if imdb_id:
             result["imdb_id"] = imdb_id
+            result["_imdb_id_source"] = "indexer"
 
         return result
+
+    @staticmethod
+    def _is_usable_item(item: object) -> bool:
+        """Return True when *item* is a torrent result this client can parse."""
+        if not isinstance(item, dict):
+            _logger.debug("Skipping malformed Prowlarr result (not an object).")
+            return False
+        if not item.get("title"):
+            return False
+        # Skip non-torrent results (e.g. Usenet/NZB from mixed indexer setups).
+        return (item.get("protocol") or "torrent").lower() == "torrent"

@@ -1,7 +1,14 @@
 # Queue Supersession — Cancel Inferior Downloads When a Better Version Is Queued
 
 **Date:** 2026-07-20
-**Status:** Design — awaiting implementation
+**Status:** Implemented, with two deviations from this design:
+
+- the supersede tag stores the IMDb ID **with** the `tt` prefix (`movarr-<hex>-imdb-ttNNNNNNN-score-N`);
+- the inferior torrent is deleted only **after** a successful `torrents_add`, never before;
+- supersession is skipped entirely when `add_paused` is enabled (the replacement would not start);
+- completed torrents are never superseded (their data may be the only copy);
+- the tag's `score-N` segment is written but never read — scores are recomputed from the release name,
+  so `_parse_score_from_tags`/`_compute_stored_score` described below no longer exist.
 
 ## Motivation
 
@@ -27,9 +34,9 @@ movarr-a1b2c3d4-imdb-tt1234567-score-134
 ```
 
 | Segment | Content | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `movarr-a1b2c3d4` | Short UUID (first 8 hex chars of `uuid4`) | Uniqueness within qBittorrent; existing `extract_movarr_tag()` still works |
-| `imdb-tt1234567` | IMDb ID without `tt` prefix | Same-movie matching |
+| `imdb-tt1234567` | IMDb ID **with** the `tt` prefix | Same-movie matching |
 | `score-134` | Composite quality score (see below) | Comparison — higher score wins |
 
 ### Stored score (in tag)
@@ -80,8 +87,8 @@ When `supersede_enabled` is true and a new result passes all filters:
 ### Edge cases
 
 | Case | Behavior |
-|------|----------|
-| Old-format tag (no `imdb-` segment) | Ignored — `_parse_imdb_id_from_tags` returns `None` |
+| ------ | ---------- |
+| Old-format tag (no `imdb-` segment) | Ignored — `parse_imdb_id_from_tags` returns `None` |
 | Same score | New torrent is skipped; existing download continues |
 | qBittorrent unreachable | Log warning, skip supersession, queue normally |
 | Tag parse failure | Log warning, skip that torrent's supersession check |
@@ -119,10 +126,10 @@ via model serialization — no additional changes needed.
 ## Files changed
 
 | File | Change |
-|------|--------|
+| ------ | -------- |
 | `src/movarr/config.py` | Add `supersede_enabled: bool = False` to `QueueManagementConfig`. Add `2.21.0 → 2.22.0` migration entry. Bump `_CONFIG_VERSION` to `"2.22.0"`. |
-| `src/movarr/qbittorrent.py` | New helpers: `_build_supersede_tag`, `_parse_imdb_id_from_tags`, `_parse_score_from_tags`. Modify `add_torrent` to embed IMDb ID + score in the tag. Shorten UUID to 8 hex chars. |
-| `src/movarr/search.py` | New function `_supersede(result, session)`. Called from `_process_single_result` before `_queue_and_persist` when `supersede_enabled` is true. Imports `_group_bonus` or `composite_quality_score` from `filters`. |
+| `src/movarr/qbittorrent.py` | New helpers: `_build_supersede_tag`, `parse_imdb_id_from_tags` (the score segment is written but not read). Modify `add_torrent` to embed IMDb ID + score in the tag. Shorten UUID to 8 hex chars. |
+| `src/movarr/search.py` | New function `_supersede(result, session)`. Called from `_process_single_result` before `_queue_and_persist` when `supersede_enabled` is true. Imports `_group_bonus (private)` or `supersession_quality_score` from `filters`. |
 | `tests/unit/test_qbittorrent.py` | Tag parsing: valid, missing IMDb, missing score, old format, score comparison edge cases. |
 | `tests/unit/test_search.py` | Supersession logic: no match, lower score superseded, higher score skips new, multiple inferiors, qBittorrent unreachable, disabled. |
 | `README.md` | Document `supersede_enabled` under `queue_management` table. |
@@ -148,10 +155,10 @@ via model serialization — no additional changes needed.
 ### Unit tests for tag helpers (`test_qbittorrent.py`)
 
 - `_build_supersede_tag` returns tag `movarr-<8hex>-imdb-<ttid>-score-<quality_score>`.
-- `_parse_imdb_id_from_tags("movarr-a1b2c3d4-imdb-tt1234567-score-134")` → `"tt1234567"`.
-- `_parse_imdb_id_from_tags("movarr-oldformat")` → `None`.
-- `_parse_score_from_tags(...)` → `134`.
-- `_parse_score_from_tags("movarr-oldformat")` → `None`.
+- `parse_imdb_id_from_tags("movarr-a1b2c3d4-imdb-tt1234567-score-134")` → `"tt1234567"`.
+- `parse_imdb_id_from_tags("movarr-oldformat")` → `None`.
+- (the `score-134` segment is written into the tag but never read back).
+- `parse_imdb_id_from_tags("movarr-a1b2c3d4-score-134")` → `None` (no `imdb-` segment).
 - `extract_movarr_tag` works with new format.
 
 ### Unit tests for supersession logic (`test_search.py`)

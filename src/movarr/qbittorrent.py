@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-__all__ = ["QBittorrentClient", "QBittorrentError"]
+from movarr.parsing import normalise_imdb_id
+
+__all__ = ["QBittorrentClient", "QBittorrentError", "extract_movarr_tag", "parse_imdb_id_from_tags"]
 
 # Tag prefix so movarr torrents can be distinguished from all others.
 _TAG_PREFIX = "movarr-"
@@ -47,10 +49,11 @@ def _build_supersede_tag(imdb_id: str, score: int) -> str:
     return f"movarr-{short_uuid}-imdb-{imdb_id}-score-{score}"
 
 
-def _parse_imdb_id_from_tags(tags_str: str) -> str | None:
+def parse_imdb_id_from_tags(tags_str: str) -> str | None:
     """Extract an IMDb ID from a movarr torrent tag.
 
-    Looks for ``imdb-ttNNNNNNN`` segment. Returns ``None`` if not found.
+    Matches a complete ``movarr-<hex>-imdb-ttNNNNNNN-score-N`` tag; a bare
+    ``imdb-tt...`` segment is not enough. Returns ``None`` if not found.
 
     Args:
         tags_str: Comma-separated tag string from qBittorrent.
@@ -58,23 +61,11 @@ def _parse_imdb_id_from_tags(tags_str: str) -> str | None:
     Returns:
         The IMDb ID string (e.g. ``"tt1234567"``) or ``None``.
     """
-    m = re.search(r"imdb-(tt\d{7,8})", tags_str)
+    # Only a complete movarr supersede tag qualifies.  Matching a bare
+    # "imdb-tt..." segment would let a manually-tagged torrent in the movarr
+    # category be treated as ours -- and supersession deletes data.
+    m = re.search(r"(?:^|,\s*)" + re.escape(_TAG_PREFIX) + r"[0-9a-f]+-imdb-(tt\d{7,})-score-\d+", tags_str)
     return m.group(1) if m else None
-
-
-def _parse_score_from_tags(tags_str: str) -> int | None:
-    """Extract the base quality score from a movarr torrent tag.
-
-    Looks for ``score-NNN`` segment. Returns ``None`` if not found.
-
-    Args:
-        tags_str: Comma-separated tag string from qBittorrent.
-
-    Returns:
-        The integer score or ``None``.
-    """
-    m = re.search(r"score-(\d+)", tags_str)
-    return int(m.group(1)) if m else None
 
 
 class QBittorrentError(Exception):
@@ -100,12 +91,28 @@ class QBittorrentClient:
             port=qbt_cfg.port,
             username=qbt_cfg.username,
             password=qbt_cfg.password,
-            VERIFY_WEBUI_CERTIFICATE=False,
+            VERIFY_WEBUI_CERTIFICATE=qbt_cfg.verify_webui_certificate,
         )
 
     # ------------------------------------------------------------------
     # Connectivity
     # ------------------------------------------------------------------
+
+    def is_reachable(self) -> bool:
+        """Return True if the qBittorrent WebUI API answers at all.
+
+        This is a pure reachability probe and says nothing about
+        qBittorrent's own internet status — use :meth:`is_connected` for the
+        connection state.  Health monitoring must use this probe: conflating
+        "no internet" with "service down" produced false outage alerts for a
+        perfectly reachable qBittorrent.
+        """
+        try:
+            self._client.app_version()
+            return True
+        except qbittorrentapi.APIError as exc:
+            _logger.warning("qBittorrent WebUI is unreachable: {}.", exc)
+            return False
 
     def is_connected(self) -> bool:
         """Return True if qBittorrent has internet access (connected or firewalled).
@@ -138,7 +145,8 @@ class QBittorrentClient:
                 self._client.torrents_reannounce(torrent_hashes=new_hash)
             else:
                 _logger.debug("Could not find new torrent by tag '{}' for reannounce.", tag)
-        except qbittorrentapi.APIError as exc:
+        except Exception as exc:  # noqa: BLE001
+            # Never fatal: the torrent is already queued and tagged.
             _logger.warning("Reannounce failed for '{}': {}; continuing.", index_title, exc)
 
     @staticmethod
@@ -146,7 +154,9 @@ class QBittorrentClient:
         """Build a movarr tag from an acquisition pipeline result dict."""
         from movarr.parsing import quality_score
 
-        imdb_id = result.get("imdb_id") or ""
+        # Normalise first: the raw indexer value would otherwise be interpolated
+        # into the comma-separated tag list, letting a crafted ID inject tags.
+        imdb_id = normalise_imdb_id(result.get("imdb_id"))
         if imdb_id:
             sanitised = result.get("index_title_sanitised") or ""
             score = quality_score(sanitised) if sanitised else 0
@@ -172,28 +182,43 @@ class QBittorrentClient:
 
         tag = self._build_tag_from_result(result)
         try:
-            self._client.torrents_add(
+            response = self._client.torrents_add(
                 urls=download_url,
                 category=self._category,
                 is_paused=self._add_paused,
                 tags=tag,
             )
-            _logger.debug(
-                "Added torrent '{}' with tag '{}', category '{}', paused={}.",
-                result.get("index_title"),
-                tag,
-                self._category,
-                self._add_paused,
-            )
         except qbittorrentapi.APIError as exc:
             _logger.warning("Failed to add torrent '{}': {}.", result.get("index_title"), exc)
             return None
 
+        # qBittorrent reports a rejected add (duplicate hash, unusable magnet) by
+        # returning "Fails." rather than raising, so a discarded return value would
+        # record the title as Passed with a tag no torrent carries.
+        if isinstance(response, str) and response.strip().lower().startswith("fails"):
+            _logger.warning(
+                "qBittorrent rejected torrent '{}': {}.",
+                result.get("index_title"),
+                response.strip(),
+            )
+            return None
+
+        _logger.debug(
+            "Added torrent '{}' with tag '{}', category '{}', paused={}.",
+            result.get("index_title"),
+            tag,
+            self._category,
+            self._add_paused,
+        )
+
+        # Stamp the tag immediately: the torrent already exists in qBittorrent,
+        # and a failure in the (optional) reannounce below must not leave a
+        # tagged torrent with no history row for post-processing to find.
+        result["torrent_tag"] = tag
+
         # Reannounce only the newly added torrent rather than every active
         # torrent in qBittorrent to avoid violating tracker re-announce intervals.
         self._reannounce_by_tag(tag, result.get("index_title") or "")
-
-        result["torrent_tag"] = tag
         return result
 
     # ------------------------------------------------------------------
@@ -285,14 +310,15 @@ class QBittorrentClient:
     @staticmethod
     def _collect_deletion_candidates(
         torrent_map: dict[str, Any],
-        state: str,
+        state: str | set[str],
         filter_type: str,
         now: datetime.datetime,
     ) -> dict[str, Any]:
-        """Build the candidate map for *state* torrents with a measurable age."""
+        """Build the candidate map for torrents in *state* with a measurable age."""
+        wanted = {state} if isinstance(state, str) else set(state)
         candidates: dict[str, Any] = {}
         for torrent_hash, info in torrent_map.items():
-            if info.get("state") != state or "name" not in info:
+            if info.get("state") not in wanted or "name" not in info:
                 continue
             age_mins = QBittorrentClient._compute_torrent_age_mins(info, filter_type, now)
             if age_mins is None:
@@ -300,7 +326,7 @@ class QBittorrentClient:
             candidates[torrent_hash] = {
                 "name": info["name"],
                 "age_mins": age_mins,
-                "state": state,
+                "state": info.get("state"),
             }
         return candidates
 
@@ -313,6 +339,9 @@ class QBittorrentClient:
     ) -> dict[str, Any]:
         """Return torrents matching *state* that exceed *delay_max_mins*.
 
+        ``"metaDL"`` also matches ``"forcedMetaDL"``, the force-started form of
+        the same state.
+
         Args:
             torrent_map: ``{hash: torrent_info}`` from :meth:`list_by_category`.
             state: qBittorrent state string (e.g. ``"stalledDL"`` or ``"metaDL"``).
@@ -323,7 +352,12 @@ class QBittorrentClient:
             raise ValueError("filter_type must be 'last_activity' or 'added_on'.")
 
         now = datetime.datetime.now(tz=datetime.UTC)
-        candidates = self._collect_deletion_candidates(torrent_map, state, filter_type, now)
+        states = {state}
+        if state == "metaDL":
+            # qBittorrent reports a force-started magnet as forcedMetaDL; it is
+            # the same "never got metadata" state and must be cleaned up too.
+            states.add("forcedMetaDL")
+        candidates = self._collect_deletion_candidates(torrent_map, states, filter_type, now)
         return {h: v for h, v in candidates.items() if v["age_mins"] > delay_max_mins}
 
     # ------------------------------------------------------------------

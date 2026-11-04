@@ -1,0 +1,20 @@
+# Tool and test artifacts, so a fresh clone is self-contained.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+*.egg-info/
+
+# Runtime artefacts created by movarr itself.
+logs/
+db/
+pids/
+configs/
+*.yml.bak.*

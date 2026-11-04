@@ -1,6 +1,13 @@
 # Simplify `delete_lower_quality` — Remove Redundant Re-comparison
 
 **Date:** 2026-05-14
+**Status:** Implemented, with deviations:
+
+- the deletion pass is *not* unconditional: it also requires a configured `general.library_path_list`, a matching
+  title/year, an equal edition set, and refuses to delete any file that scores higher than the newly-copied one;
+- scoring/edition/extras decisions use the **release** name (the index title), not the canonical `<folder><ext>`
+  destination name, which carries no quality tokens.
+
 **Scope:** `src/movarr/post_processor.py`
 
 ## Motivation
@@ -43,7 +50,7 @@ Files that are **never** deletion candidates:
 ### What is removed
 
 | Function | Reason |
-|---|---|
+| --- | --- |
 | `_should_delete_file` | No longer needed — all non-protected video files are deleted |
 | `_collect_superseded_files` | Replaced by simple loop with protected-set filtering |
 | `_candidate_basic_match` | Title/year matching is unnecessary — the folder IS per-movie |

@@ -10,11 +10,12 @@ are null-guarded here.
 from __future__ import annotations
 
 import re
-import urllib.parse
 from typing import TYPE_CHECKING
 
 import apprise
 from loguru import logger
+
+from movarr.parsing import normalise_imdb_id
 
 _AMAZON_POSTER_RES_RE = re.compile(r"_[SU][XWYL]\d+")
 _AMAZON_POSTER_V1_RE = re.compile(r"\._V1_[^.]*\.")
@@ -91,10 +92,10 @@ def send_service_alert(service_name: str, hours_elapsed: float, config: Config) 
     )
     body_text = (
         f"movarr service health alert\n\n"
-        f"Service: {safe_service}\n"
+        f"Service: {service_name}\n"
         f"Duration: Unavailable for {hours_str} hours.\n\n"
         f"movarr will keep retrying every cycle. "
-        f"Check that {safe_service} is running and accessible."
+        f"Check that {service_name} is running and accessible."
     )
 
     if not _dispatch_apprise(subject, list(urls), body_markdown=body_md, body_text=body_text):
@@ -182,15 +183,16 @@ def _try_apprise_notify(
     group_label: str,
 ) -> int:
     """Build an Apprise instance and attempt notification; return 1 or 0."""
-    ap = apprise.Apprise()
-    for url in urls:
-        ap.add(_ensure_ntfy_markdown(url) if ensure_ntfy_url else url)
+    label = f" ({group_label})" if group_label else ""
     try:
+        ap = apprise.Apprise()
+        for url in urls:
+            ap.add(_ensure_ntfy_markdown(url) if ensure_ntfy_url else url)
         if ap.notify(title=title, body=body, body_format=body_format):
             return 1
-    except Exception:  # noqa: BLE001
-        label = f" ({group_label})" if group_label else ""
-        logger.warning("Apprise notification failed{}.", label)
+        logger.warning("Apprise reported no successful delivery{}.", label)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Apprise notification failed{}: {}.", label, exc)
     return 0
 
 
@@ -241,9 +243,10 @@ def _dispatch_apprise(
 
 
 def _ensure_ntfy_markdown(url: str) -> str:
-    """Append ``?format=markdown`` to an Apprise ntfy URL if not already present.
+    """Ensure an Apprise ntfy URL carries ``?format=markdown``.
 
-    Ntfy's Apprise plugin defaults to ``NotifyFormat.TEXT`` unless the
+    The parameter is appended when absent, and any other ``format=`` value is
+    replaced.  Ntfy's Apprise plugin defaults to ``NotifyFormat.TEXT`` unless the
     URL carries a ``?format=markdown`` query parameter.  Without it,
     Markdown formatting (bold text, links, etc.) is lost.  Automatically
     adding the parameter ensures Markdown rendering without requiring
@@ -253,6 +256,10 @@ def _ensure_ntfy_markdown(url: str) -> str:
         return url
     if "format=markdown" in url:
         return url
+    if "format=" in url:
+        # Replace any existing format value; appending would leave the first one
+        # in force and silently drop Markdown rendering.
+        return re.sub(r"format=[^&]*", "format=markdown", url, count=1)
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}format=markdown"
 
@@ -270,32 +277,13 @@ def _build_subject(result: ResultDict) -> str:
     return f"movarr: {title}{year_str}"
 
 
-def _safe_url(raw: str) -> str:
-    """Return a sanitised URL for Markdown link contexts, or '#' if invalid/empty.
-
-    Accepts only http and https schemes.  Any parse error also falls back to '#'.
-
-    Unlike HTML contexts, Markdown ``[text](url)`` expects raw URLs --
-    HTML-entity encoding would produce literal ``&amp;`` in the rendered
-    link.  We return the raw URL; the caller wraps it in
-    ``<url>`` angle-bracket syntax for safety against ``)`` and spaces.
-    """
-    if not raw:
-        return "#"
-    try:
-        parsed = urllib.parse.urlparse(raw)
-        if parsed.scheme not in ("http", "https"):
-            return "#"
-    except Exception:  # noqa: BLE001
-        return "#"
-    return raw
-
-
 def _extract_imdb_fields(result: ResultDict) -> dict[str, str]:
     """Extract and format IMDb identity fields."""
     title = _escape_markdown_text(result.get("imdb_title") or "Unknown")
     year = _escape_markdown_text(str(result.get("imdb_year") or ""))
-    imdb_id = result.get("imdb_id") or ""
+    # Normalise before interpolation: the ID reaches the Markdown link target, so
+    # a malformed indexer-supplied value must never be rendered verbatim.
+    imdb_id = normalise_imdb_id(result.get("imdb_id")) or ""
     rating = _escape_markdown_text(str(result.get("imdb_rating") or "?"))
     votes = _escape_markdown_text(str(result.get("imdb_votes") or "?"))
     return {"title": title, "year": year, "imdb_id": imdb_id, "rating": rating, "votes": votes}
@@ -310,6 +298,15 @@ def _escape_markdown_text(text: str) -> str:
     """
     meta = "\\`*_[]>\u003c&"
     return "".join("\\" + c if c in meta else c for c in text)
+
+
+def _unescape_markdown_text(text: str) -> str:
+    """Remove the backslash escapes added by :func:`_escape_markdown_text`.
+
+    The text-only body (email, generic webhooks) must show the original
+    characters: ``Fast & Furious`` must not arrive as ``Fast \\& Furious``.
+    """
+    return re.sub(r"\\(.)", r"\1", text)
 
 
 def _extract_plot(result: ResultDict) -> str:
@@ -334,12 +331,10 @@ def _extract_index_fields(result: ResultDict) -> dict[str, str]:
     """Extract and format index/torrent release fields."""
     index_title = _escape_markdown_text(result.get("index_title") or "")
     index_size_mb = _escape_markdown_text(str(result.get("index_size_mb") or "?"))
-    index_details = _safe_url(result.get("index_details") or "")
     index_tracker = _escape_markdown_text(result.get("index_tracker") or "Unknown")
     return {
         "index_title": index_title,
         "index_size_mb": index_size_mb,
-        "index_details": index_details,
         "index_tracker": index_tracker,
     }
 
@@ -422,27 +417,31 @@ def _build_text_body(f: dict[str, str]) -> str:
     Args:
         f: Extracted body fields from :func:`_extract_body_fields`.
     """
+    # ``result_details_text``/``queue_status`` are already plain text; unescaping
+    # them would strip genuine backslashes (e.g. a Windows path in a hook error).
+    already_plain = {"result_details_text", "queue_status", "result_details_md"}
+    p = {key: value if key in already_plain else _unescape_markdown_text(value) for key, value in f.items()}
     lines = [
-        f"Status: {f['queue_status']}",
+        f"Status: {p['queue_status']}",
         "",
-        f"Score: {f['rating']} from {f['votes']} users",
+        f"Score: {p['rating']} from {p['votes']} users",
         "",
-        f"Plot: {f['plot']}",
+        f"Plot: {p['plot']}",
         "",
-        f"Actors: {f['actors_str']}",
+        f"Actors: {p['actors_str']}",
         "",
-        f"Directors: {f['directors_str']}",
+        f"Directors: {p['directors_str']}",
         "",
-        f"Genres: {f['genres_str']}",
+        f"Genres: {p['genres_str']}",
         "",
-        f"Site: {f['index_tracker']}",
+        f"Site: {p['index_tracker']}",
         "",
-        f"Release: {f['index_title']}",
+        f"Release: {p['index_title']}",
         "",
-        f"Size: {f['index_size_mb']} MB",
+        f"Size: {p['index_size_mb']} MB",
     ]
 
-    links = _build_links_section(f, use_markdown=False)
+    links = _build_links_section(p, use_markdown=False)
     if links:
         lines.append("")
         lines.append(links)

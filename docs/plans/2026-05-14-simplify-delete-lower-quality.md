@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Historical. The shipped `_delete_superseded_loop` is *more* conservative than this plan: it also
+requires a matching title/year, an equal edition set, parseable quality for the file being removed, and refuses
+to delete a file that outranks the new copy.
+
 **Goal:** Remove redundant resolution/quality re-comparison from `_delete_superseded_files` — the search pipeline already guarantees the new file is better.
 
 **Architecture:** Replace the 5-function deletion decision chain (`_should_delete_file` → `_collect_superseded_files` → `_candidate_basic_match` / `_compare_parsed_resolutions` / `_resolution_supersedes`) with a simple loop: for each video file in the destination folder, delete it unless it's the new primary, a companion from the same torrent run, or extras/bonus content.
@@ -13,7 +17,7 @@
 ## File Map
 
 | File | Action | Responsibility |
-|---|---|---|
+| --- | --- | --- |
 | `src/movarr/post_processor.py` | Modify | Remove 5 functions, simplify `_delete_superseded_files`, inline `_run_deletion`, clean up imports |
 | `tests/unit/test_post_processor.py` | Modify | Remove 10 old conservative tests, add 3 new tests for simplified behavior, keep ~20 unchanged |
 
@@ -22,6 +26,7 @@
 ### Task 1: Remove old conservative deletion tests
 
 **Files:**
+
 - Modify: `tests/unit/test_post_processor.py`
 
 - [ ] **Step 1: Remove 10 tests that verify old re-comparison behavior**
@@ -137,11 +142,13 @@ git commit -m "test: update delete_lower_quality tests for simplified behavior"
 ### Task 2: Remove unused functions from post_processor.py
 
 **Files:**
+
 - Modify: `src/movarr/post_processor.py`
 
 - [ ] **Step 1: Remove `_should_delete_file` (lines ~796-815)**
 
 Remove:
+
 ```python
 def _should_delete_file(
     fname: str,
@@ -167,6 +174,7 @@ def _should_delete_file(
 - [ ] **Step 2: Remove `_collect_superseded_files` (lines ~817-840)**
 
 Remove:
+
 ```python
 def _collect_superseded_files(
     video_files: list[str],
@@ -196,6 +204,7 @@ def _collect_superseded_files(
 - [ ] **Step 3: Remove `_candidate_basic_match` (lines ~694-720)**
 
 Remove:
+
 ```python
 def _candidate_basic_match(
     fname: str,
@@ -228,6 +237,7 @@ def _candidate_basic_match(
 - [ ] **Step 4: Remove `_compare_parsed_resolutions` (lines ~729-764)**
 
 Remove:
+
 ```python
 def _compare_parsed_resolutions(
     fname: str,
@@ -246,8 +256,8 @@ def _compare_parsed_resolutions(
             logger.debug(
                 "Skipping auto-delete for '{}': edition mismatch despite higher resolution (new='{}', lib='{}').",
                 fname,
-                primary_edition_token(new_san) or "base",
-                primary_edition_token(lib_san) or "base",
+                edition_token_set(new_san) or "base",
+                edition_token_set(lib_san) or "base",
             )
             return None
         return True
@@ -256,8 +266,8 @@ def _compare_parsed_resolutions(
             logger.debug(
                 "Skipping auto-delete for '{}': edition mismatch at same resolution (new='{}', lib='{}').",
                 fname,
-                primary_edition_token(new_san) or "base",
-                primary_edition_token(lib_san) or "base",
+                edition_token_set(new_san) or "base",
+                edition_token_set(lib_san) or "base",
             )
             return None
         new_score = supersession_quality_score(new_san, lib_san, config)
@@ -269,6 +279,7 @@ def _compare_parsed_resolutions(
 - [ ] **Step 5: Remove `_resolution_supersedes` (lines ~766-794)**
 
 Remove:
+
 ```python
 def _resolution_supersedes(
     fname: str,
@@ -320,6 +331,7 @@ git commit -m "refactor: remove unused deletion comparison functions"
 ### Task 3: Simplify `_delete_superseded_files` and remove `_run_deletion`
 
 **Files:**
+
 - Modify: `src/movarr/post_processor.py`
 
 - [ ] **Step 1: Remove `_run_deletion` function entirely (lines ~970-1003)**
@@ -407,11 +419,13 @@ def _delete_superseded_files(
 Change the imports:
 
 **Old (line 31):**
+
 ```python
-from movarr.filters import edition_token_set, primary_edition_token, supersession_quality_score
+from movarr.filters import edition_token_set, edition_token_set, supersession_quality_score
 ```
 
 **New:**
+
 ```python
 # (no imports from movarr.filters needed for deletion path)
 ```
@@ -419,11 +433,13 @@ from movarr.filters import edition_token_set, primary_edition_token, supersessio
 Remove the entire line 31.
 
 **Old (line 32):**
+
 ```python
 from movarr.parsing import extract_after_year, extract_movie_title, extract_resolution, extract_year, sanitise
 ```
 
 **New:**
+
 ```python
 from movarr.parsing import extract_after_year, extract_resolution, sanitise
 ```
@@ -450,6 +466,7 @@ git commit -m "refactor: simplify delete_lower_quality to delete all other video
 ### Task 4: Run full QC suite
 
 **Files:**
+
 - (none modified — verification only)
 
 - [ ] **Step 1: Run ruff check and fix**

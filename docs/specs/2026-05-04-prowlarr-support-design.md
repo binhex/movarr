@@ -1,7 +1,11 @@
 # Prowlarr Support Design
 
 **Date:** 2026-05-04
-**Status:** Approved
+**Status:** Implemented, with deviations:
+
+- authentication uses an `X-Api-Key` request header, **not** a `?apiKey=` query parameter;
+- `prowlarr_indexer: all` omits `indexerIds` entirely rather than sending `-1`;
+- there is no `ProwlarrError` class (failures are logged and skipped).
 **Scope:** Add Prowlarr as an alternative index proxy alongside the existing Jackett support.
 
 ---
@@ -36,7 +40,7 @@ config.index_proxy.selected = "jackett" | "prowlarr"
 ### Files changed
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `src/movarr/indexer.py` | **New** — `IndexProxyProtocol` + `get_indexer_client()` factory |
 | `src/movarr/prowlarr.py` | **New** — `ProwlarrClient` + `ProwlarrError` |
 | `src/movarr/jackett.py` | Unchanged |
@@ -131,7 +135,7 @@ indicates the service is reachable. Returns `False` + warning log on any failure
 ### Result mapping
 
 | Prowlarr JSON field | `ResultDict` key | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `title` | `index_title` | |
 | `indexer` | `index_tracker` | |
 | `publishDate` | `index_pubdate` | |
@@ -164,7 +168,7 @@ Fields absent or null in the Prowlarr response default to `""`.
 ## Testing
 
 | Test file | Coverage |
-|---|---|
+| --- | --- |
 | `tests/unit/test_prowlarr.py` | `ProwlarrClient`: search success, empty results, HTTP error, JSON parse error, `is_reachable()` pass/fail, `"all"` vs numeric indexer ID, `imdbId` extraction, missing optional fields |
 | `tests/unit/test_indexer.py` | Factory returns `JackettClient` for `"jackett"`, `ProwlarrClient` for `"prowlarr"`, raises `ValueError` for unknown value |
 | `tests/unit/test_config.py` | Migration v2.4.0 → v2.5.0: adds `prowlarr` block; adds `prowlarr_indexer`; backup created; existing values untouched |

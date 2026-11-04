@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 from unittest.mock import MagicMock
 
 from click.testing import CliRunner
@@ -268,17 +271,23 @@ class TestCliPidPath:
 
 class TestVersionUnknown:
     def test_version_is_unknown_when_package_not_found(self, mocker: MockerFixture) -> None:
+        """The import-time fallback is exercised, and the real value is restored."""
         import importlib
         from importlib.metadata import PackageNotFoundError
 
-        mocker.patch("importlib.metadata.version", side_effect=PackageNotFoundError("movarr"))
         import movarr.cli as cli_mod
 
-        importlib.reload(cli_mod)
-        assert cli_mod._VERSION == "unknown"
+        def _raise(_name: str) -> str:
+            raise PackageNotFoundError("movarr")
 
-
-# _log_format inner function — tracker prefix branch
+        patcher = mocker.patch("importlib.metadata.version", side_effect=_raise)
+        try:
+            importlib.reload(cli_mod)
+            assert cli_mod._VERSION == "unknown"
+        finally:
+            # Restore the real module so later tests are not order-dependent.
+            patcher.stop()
+            importlib.reload(cli_mod)
 
 
 class TestLogFormat:
@@ -532,3 +541,25 @@ class TestCliPidPathOverride:
         mocker.patch("movarr.config.load_config", return_value=mock_cfg)
         CliRunner().invoke(cli, ["--test"])
         assert mock_cfg.general.pid_path == "/custom/pids"
+
+
+class TestOnceFlag:
+    """--once runs each enabled task a single time and exits."""
+
+    def test_once_invokes_run_once(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.config import create_default_config
+
+        create_default_config(tmp_path)  # --config-path takes a directory
+        mock_once = mocker.patch("movarr.scheduler.run_once")
+        mock_run = mocker.patch("movarr.scheduler.run")
+
+        result = CliRunner().invoke(cli, ["--config-path", str(tmp_path), "--once"])
+
+        assert result.exit_code == 0
+        mock_once.assert_called_once()
+        mock_run.assert_not_called()
+
+    def test_help_mentions_once(self) -> None:
+        result = CliRunner().invoke(cli, ["--help"])
+
+        assert "--once" in result.output

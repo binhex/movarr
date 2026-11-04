@@ -1,7 +1,12 @@
 # Notification Markdown Formatting for Apprise
 
 **Date:** 2026-07-11
-**Status:** Implemented
+**Status:** Implemented, with deviations:
+
+- the `_safe_url` helper and the `TestSafeUrlEdgeCases` class it shipped with were later removed:
+  the Links section deliberately excludes torrent URLs, so only the IMDb link is rendered.
+- `_extract_index_fields` returns three keys (`index_title`, `index_size_mb`, `index_tracker`);
+  an `index_details` field is not produced.
 
 ## Problem
 
@@ -31,7 +36,7 @@ Rather than sending one body format to all services, split the configured Appris
 Following gamarr's `_MARKDOWN_SCHEMES` set:
 
 | Scheme | Service |
-|--------|---------|
+| -------- | --------- |
 | `ntfy`, `ntfys` | Ntfy push notifications |
 | `discord` | Discord webhooks |
 | `slack` | Slack webhooks |
@@ -43,6 +48,7 @@ ntfy URLs get `?format=markdown` auto-appended if not already present, since the
 ### Notification Body Format
 
 **Before (one format for all services):**
+
 ```
 **Status:** Started
 **Score:** 8.8 from 2000000 users
@@ -60,6 +66,7 @@ _2 checks passed_
 ```
 
 **After — Markdown body (ntfy, discord, etc.):**
+
 ```
 **Status:** Started
 **Score:** 8.8 from 2000000 users
@@ -78,6 +85,7 @@ _2 checks passed_
 ```
 
 **After — Text body (email, non-markdown services):**
+
 ```
 Status: Started
 Score: 8.8 from 2000000 users
@@ -104,7 +112,7 @@ When no `imdb_id` is available, the Links section is omitted entirely.
 ### Functions
 
 | Function | Change |
-|----------|--------|
+| ---------- | -------- |
 | `_build_markdown_body(fields)` | Replaces old `_build_body(result, config)`. Produces markdown body with Links section |
 | `_build_text_body(fields)` | New. Produces plain-text body for non-markdown services |
 | `_build_links_section(fields, *, use_markdown)` | New. Builds `**Links:** [IMDb](url)` or `Links: url` |
@@ -128,6 +136,7 @@ When no `imdb_id` is available, the Links section is omitted entirely.
 106 tests in `tests/unit/test_notifications.py`, all passing. 100% coverage on `notifications.py` (203 statements, 0 missed).
 
 Key test classes:
+
 - `TestBuildMarkdownBody` — 20 tests for markdown body format
 - `TestBuildTextBody` — 4 tests for text body format
 - `TestBuildLinksSection` — 4 tests for links section construction

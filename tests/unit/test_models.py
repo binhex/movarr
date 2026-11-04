@@ -32,13 +32,11 @@ class TestResultDictConstruction:
         """Parsed index fields can be set and read back."""
         result: ResultDict = {
             "index_title_sanitised": "The Matrix",
-            "index_title_group": "YIFY",
             "index_title_resolution": "1080p",
             "index_title_after_year_to_end": "BluRay x264",
         }
         assert result["index_title_sanitised"] == "The Matrix"
         assert result["index_title_resolution"] == "1080p"
-        assert result["index_title_group"] == "YIFY"
 
     def test_movie_metadata_fields(self) -> None:
         """Movie metadata fields can be set and read back."""
@@ -200,7 +198,6 @@ class TestResultDictFullPayload:
             "index_pubdate": "2023-06-15",
             "index_details": "http://example.com/details",
             "index_title_sanitised": "Inception",
-            "index_title_group": "SPARKS",
             "index_title_resolution": "1080p",
             "index_title_after_year_to_end": "BluRay x264-SPARKS",
             "movie_title": "Inception",

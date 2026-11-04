@@ -13,11 +13,12 @@ if TYPE_CHECKING:
 
 from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
 from movarr.database import HistoryRecord
-from movarr.filters import composite_quality_score, supersession_quality_score
+from movarr.filters import supersession_quality_score
 from movarr.post_processor import (
     _build_copy_list,
     _canonical_filename,
     _cert_acceptable,
+    _copy_files,
     _delete_superseded_files,
     _first_level_dir,
     _kill_process,
@@ -34,37 +35,13 @@ from movarr.post_processor import (
 )
 
 
-class TestCompositeQualityScore:
-    """composite_quality_score is the public scoring surface used by the deletion step."""
-
-    def test_higher_score_for_remux(self) -> None:
-        cfg = Config()
-        new_san = "The Matrix 1999 1080p Remux"
-        lib_san = "The Matrix 1999 1080p BluRay"
-        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
-
-    def test_equal_score_for_identical_titles(self) -> None:
-        cfg = Config()
-        san = "The Matrix 1999 1080p BluRay"
-        assert composite_quality_score(san, san, cfg) == composite_quality_score(san, san, cfg)
-
-    def test_preferred_group_bonus_applied(self) -> None:
-        from movarr.config import FiltersConfig
-
-        cfg = Config()
-        cfg = cfg.model_copy(update={"filters": FiltersConfig(preferred_index_group_list=["PublicHD"])})
-        new_san = "The Matrix 1999 1080p BluRay PublicHD"
-        lib_san = "The Matrix 1999 1080p BluRay OtherGroup"
-        assert composite_quality_score(new_san, lib_san, cfg) > composite_quality_score(lib_san, new_san, cfg)
-
-
 class TestSupersessionQualityScore:
-    """supersession_quality_score excludes special-edition bonus unlike composite_quality_score."""
+    """supersession_quality_score excludes special-edition bonus."""
 
     def test_special_edition_does_not_beat_non_edition(self) -> None:
         """Extended cut must NOT score higher than theatrical in a supersession comparison.
 
-        composite_quality_score would award +10 to the extended cut; supersession must not.
+        A composite score would award +10 to the extended cut; supersession must not.
         """
         cfg = Config()
         extended_san = "The Matrix 1999 1080p BluRay Extended"
@@ -407,7 +384,10 @@ class TestDeleteSupersededFiles:
                     # exclude the large remux by regex so it's filtered from src_files
                     exclude_file_regex_list=["Remux"],
                     default_copy_library=DefaultCopyLibraryConfig(hd_path=str(dst_base)),
-                )
+                ),
+                # Must be set so _maybe_delete_superseded reaches the
+                # copied_fnames guard instead of returning on the library gate.
+                "general": Config().general.model_copy(update={"library_path_list": [str(dst_base)]}),
             }
         )
 
@@ -621,7 +601,7 @@ class TestDeleteSupersededFiles:
         movie_dir.mkdir()
         new_fname = "Charles.R.The.Making.Of.A.Monarch.2023.1080p.WEBRip.mkv"
         (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "Charles R The Making Of A Monarch 2023 720p HDTV.mkv"
+        lib_fname = "Charles R The Making Of A Monarch 2023 480p HDTV.mkv"
         (movie_dir / lib_fname).write_bytes(b"old")
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
@@ -971,25 +951,28 @@ class TestDeleteSupersededFiles:
         assert count == 0
         assert (movie_dir / lib_fname).exists()
 
-    def test_deletes_all_other_video_files_regardless_of_quality(self, tmp_path: Path) -> None:
-        """All other video files are deleted regardless of resolution/quality/edition."""
+    def test_deletes_worse_same_title_and_preserves_everything_else(self, tmp_path: Path) -> None:
+        """Only a same-title, lower-quality, parseable file is superseded."""
         movie_dir = tmp_path / "The Matrix (1999)"
         movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay.mkv"
+        new_fname = "The Matrix 1999 2160p Remux.mkv"
         (movie_dir / new_fname).write_bytes(b"new")
-        # Files that would have been protected by the old logic
-        higher_res = "The Matrix 1999 2160p BluRay.mkv"
+        # The deletion pass caps a directory at 4 video files, so keep the
+        # fixture at exactly that many.
+        worse = "The Matrix 1999 720p HDTV.mkv"
         diff_title = "The Matrix Reloaded 2003 2160p BluRay.mkv"
         unparseable = "The Matrix.mkv"
-        for name in [higher_res, diff_title, unparseable]:
+        for name in [worse, diff_title, unparseable]:
             (movie_dir / name).write_bytes(b"old")
 
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+        count = _delete_superseded_files(
+            str(movie_dir), str(tmp_path), new_fname, Config(), release_san="The Matrix 1999 2160p Remux"
+        )
 
-        assert count == 3
-        assert not (movie_dir / higher_res).exists()
-        assert not (movie_dir / diff_title).exists()
-        assert not (movie_dir / unparseable).exists()
+        assert count == 1
+        assert not (movie_dir / worse).exists()
+        assert (movie_dir / diff_title).exists(), "a different film (sequel) must never be deleted"
+        assert (movie_dir / unparseable).exists(), "an unparseable quality must never be deleted"
         assert (movie_dir / new_fname).exists()
 
     def test_skips_extras_from_prior_runs(self, tmp_path: Path) -> None:
@@ -1715,7 +1698,7 @@ class TestRunPostProcessing:
         cfg = Config()
         cfg.post_process.post_process_enabled = True
         qbt = mocker.MagicMock()
-        qbt.is_connected.return_value = False
+        qbt.is_reachable.return_value = False
         db = mocker.MagicMock()
 
         run_post_processing(cfg, qbt, db)
@@ -1726,6 +1709,7 @@ class TestRunPostProcessing:
         cfg = Config()
         cfg.post_process.post_process_enabled = True
         qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
         qbt.is_connected.return_value = True
         qbt.list_completed.return_value = []
         db = mocker.MagicMock()
@@ -1739,6 +1723,7 @@ class TestRunPostProcessing:
         cfg.post_process.post_process_enabled = True
         mock_process_one = mocker.patch("movarr.post_processor._process_one")
         qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
         qbt.is_connected.return_value = True
         qbt.list_completed.return_value = [
             {"torrent_hash": "abc", "torrent_tag": "tag1"},
@@ -1756,6 +1741,7 @@ class TestRunPostProcessing:
         mock_process_one = mocker.patch("movarr.post_processor._process_one")
         torrent = {"torrent_hash": "abc", "torrent_tag": "tag1"}
         qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
         qbt.is_connected.return_value = True
         qbt.list_completed.return_value = [torrent]
         db = mocker.MagicMock()
@@ -2146,7 +2132,10 @@ class TestProcessOneSupersession:
                     remove_completed=False,
                     delete_lower_quality=enabled,
                     default_copy_library=DefaultCopyLibraryConfig(hd_path=dst_dir),
-                )
+                ),
+                # Superseded-file deletion requires a library path list: without it
+                # the acquisition filter never proved the new copy is better.
+                "general": Config().general.model_copy(update={"library_path_list": [dst_dir]}),
             }
         )
 
@@ -2264,6 +2253,7 @@ class TestProcessOneHooks:
     def _config(self) -> Config:
         cfg = Config()
         cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="/media/hd", uhd_path="")
+        cfg.general.library_path_list = ["/media/hd"]
         return cfg
 
     def _torrent(self) -> dict[str, Any]:
@@ -2839,26 +2829,6 @@ class TestDeleteSupersededFilesPreDeleteRenamedPrimary:
         mock_delete.assert_not_called()
 
 
-class TestDeleteSupersededFilesEdgeCases:
-    """Covers lines 717-718: extract_resolution returns non-numeric string."""
-
-    def test_non_numeric_resolution_file_deleted(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        movie_dir = tmp_path / "The Matrix (1999)"
-        movie_dir.mkdir()
-        new_fname = "The Matrix 1999 1080p BluRay.mkv"
-        (movie_dir / new_fname).write_bytes(b"new")
-        lib_fname = "The Matrix 1999 1080p HDTV.mkv"
-        (movie_dir / lib_fname).write_bytes(b"lib")
-
-        # Return a truthy non-numeric string so int() raises ValueError.
-        mocker.patch("movarr.post_processor.extract_resolution", return_value="unknown")
-
-        count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
-
-        assert count == 1
-        assert not (movie_dir / lib_fname).exists()
-
-
 class TestDeleteSupersededFilesDeleteFileFails:
     """Covers line 751: delete_file returns False — error is logged, count stays 0."""
 
@@ -2948,10 +2918,12 @@ def _assert_safe_tmpdir(path: Path) -> None:
     than risk touching production media.
     """
     import os
+    import tempfile
 
+    temp_root = os.path.realpath(tempfile.gettempdir())
     resolved = os.path.realpath(str(path))
-    assert resolved.startswith("/tmp"), (
-        f"SAFETY VIOLATION: test directory '{resolved}' is outside /tmp. "
+    assert resolved.startswith(temp_root), (
+        f"SAFETY VIOLATION: test directory '{resolved}' is outside {temp_root}. "
         "Refusing to run destructive tests against a non-temporary path. "
         "Check TMPDIR / PYTEST_TMPDIR environment variables."
     )
@@ -3054,35 +3026,31 @@ class TestDeleteSupersededFilesEndToEnd:
         assert (movie_dir / new_fname).exists(), f"higher-scored file ({new_score}) must survive"
         assert witness.exists(), "post_delete hook must have run (witness file missing)"
 
-    def test_higher_quality_library_file_deleted(self, tmp_path: Path) -> None:
-        """Library file is deleted regardless of quality score under simplified logic."""
+    def test_higher_quality_library_file_survives(self, tmp_path: Path) -> None:
+        """A library file that scores higher than the new copy is preserved.
+
+        Quality is not re-compared to pick a winner, but it *is* used as a
+        safety net: the deletion pass refuses to remove a file that outranks
+        what was just copied (it may have appeared after the search ran).
+        """
         _assert_safe_tmpdir(tmp_path)
 
-        # new file is 1080p BluRay; library file is 2160p Remux — library wins.
         new_san = "Inception 2010 1080p BluRay"
         lib_san = "Inception 2010 2160p Remux"
         config = Config()
 
-        new_score = supersession_quality_score(new_san, lib_san, config)
-        lib_score = supersession_quality_score(lib_san, new_san, config)
-        assert new_score < lib_score, (
-            f"Precondition failed: new score ({new_score}) must be less than "
-            f"lib score ({lib_score}) for this test to be meaningful"
-        )
-
         movie_dir = tmp_path / "Inception (2010)"
         movie_dir.mkdir()
         new_fname = f"{new_san}.mkv"
-        lib_fname = f"{lib_san}.mkv"
-        (movie_dir / new_fname).write_bytes(b"new-lower-quality")
-        (movie_dir / lib_fname).write_bytes(b"lib-higher-quality")
+        old_fname = f"{lib_san}.mkv"
+        (movie_dir / new_fname).write_bytes(b"new-low-quality")
+        (movie_dir / old_fname).write_bytes(b"old-high-quality")
 
         count = _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, config)
 
-        assert count == 1, (
-            f"library file scored higher ({lib_score} > {new_score}); but simplified logic deletes it anyway"
-        )
-        assert not (movie_dir / lib_fname).exists(), "library file must be deleted under simplified logic"
+        assert count == 0, "the superior library file must not be deleted"
+        assert (movie_dir / old_fname).exists()
+        assert (movie_dir / new_fname).exists()
 
     def test_pre_delete_hook_runs_before_unlink(self, tmp_path: Path) -> None:
         """Score-driven deletion with pre_delete hook: 2160p Remux beats 1080p BluRay.
@@ -3181,10 +3149,11 @@ class TestSavePosterArt:
     """Tests for _save_poster_art — poster download + save to disk."""
 
     @staticmethod
-    def _make_response(headers: dict[str, str]) -> Any:
+    def _make_response(headers: dict[str, str], payload: bytes = b"jpegbytes") -> Any:
         """Return a MagicMock that acts as a context manager returning itself."""
         resp = MagicMock()
         resp.headers = headers
+        resp.read.return_value = payload
         resp.__enter__.return_value = resp
         return resp
 
@@ -3222,9 +3191,6 @@ class TestSavePosterArt:
             "movarr.post_processor.urllib.request.urlopen",
             return_value=mock_response,
         )
-        mock_copyfileobj = mocker.patch("movarr.post_processor.shutil.copyfileobj")
-        mocker.patch("builtins.open", mocker.mock_open())
-
         _save_poster_art(record, str(tmp_path), cfg)
 
         mock_urlopen.assert_called_once()
@@ -3232,7 +3198,7 @@ class TestSavePosterArt:
         # The first argument may be a Request object or a plain URL string
         call_url = str(getattr(call_arg, "full_url", call_arg))
         assert "_SX500" in call_url
-        mock_copyfileobj.assert_called_once()
+        assert (tmp_path / "poster.jpg").read_bytes() == b"jpegbytes"
 
     def test_skips_on_non_image_content_type(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """Skips save when response Content-Type is not image/*."""
@@ -3243,11 +3209,10 @@ class TestSavePosterArt:
 
         mock_response = self._make_response({"Content-Type": "text/html"})
         mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
-        mocker.patch("builtins.open", mocker.mock_open())
-        mock_copyfileobj = mocker.patch("movarr.post_processor.shutil.copyfileobj")
 
         _save_poster_art(record, str(tmp_path), cfg)
-        mock_copyfileobj.assert_not_called()
+
+        assert not (tmp_path / "poster.jpg").exists()
 
     def test_handles_download_failure_gracefully(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """Does not raise on network failure."""
@@ -3269,12 +3234,487 @@ class TestSavePosterArt:
         record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
         mock_response = self._make_response({"Content-Type": "image/jpeg"})
         mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
-        m_open = mocker.patch("builtins.open", mocker.mock_open())
-        mocker.patch("movarr.post_processor.shutil.copyfileobj")
 
         _save_poster_art(record, str(tmp_path), cfg)
 
-        call_args = m_open.call_args
-        assert call_args is not None
-        file_path = call_args[0][0]
-        assert file_path.endswith(".jpg")
+        written = sorted(p.name for p in tmp_path.iterdir())
+        assert written == ["poster.jpg"]
+
+
+class TestResolveDestinationRulesOnly:
+    """A rules-only configuration (no default paths) must still route."""
+
+    def _record(self, mocker: MockerFixture, genres: str = '["Action"]') -> Any:
+        rec = mocker.MagicMock()
+        rec.imdb_genres_list = genres
+        rec.imdb_certification = ""
+        rec.imdb_cert_source = ""
+        rec.index_title = "Movie 2020 1080p BluRay"
+        return rec
+
+    def test_rule_path_resolves_without_default_paths(self, mocker: MockerFixture) -> None:
+        """The matched rule supplies the destination when default paths are unset."""
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="", uhd_path="")
+        cfg.post_process.copy_library_rules = [
+            CopyLibraryRuleConfig(name="action", genres=["Action"], hd_path="/media/action")
+        ]
+
+        assert _resolve_destination(self._record(mocker), cfg) == "/media/action"
+
+    def test_unmatched_rule_without_default_paths_returns_none(self, mocker: MockerFixture) -> None:
+        """No rule match and no default path still yields None (and cannot copy)."""
+        cfg = Config()
+        cfg.post_process.default_copy_library = DefaultCopyLibraryConfig(hd_path="", uhd_path="")
+        cfg.post_process.copy_library_rules = [
+            CopyLibraryRuleConfig(name="horror", genres=["Horror"], hd_path="/media/horror")
+        ]
+
+        assert _resolve_destination(self._record(mocker), cfg) is None
+
+
+class TestSupersededDeletionRequiresLibraryPaths:
+    """Deletion is skipped when the library quality check could not run."""
+
+    def test_no_deletion_without_library_path_list(self, tmp_path: Path) -> None:
+        """An empty library_path_list must leave existing library files alone."""
+        cfg = Config()
+        cfg.post_process.delete_lower_quality = True
+        cfg.general.library_path_list = []
+
+        movie = tmp_path / "Movie (2020)"
+        movie.mkdir()
+        better = movie / "Movie 2020 2160p Remux.mkv"
+        better.write_bytes(b"better")
+
+        from movarr.post_processor import _maybe_delete_superseded
+
+        _maybe_delete_superseded(cfg, str(movie), str(tmp_path), "Movie 2020 1080p.mkv", {"Movie 2020 1080p.mkv"})
+
+        assert better.exists()
+
+
+class TestCopyFilesCollision:
+    """Two source files mapping to one destination name must abort the copy."""
+
+    def test_duplicate_basenames_abort_before_writing(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A CD1/CD2 pair sharing a filename aborts instead of overwriting."""
+        src_a = tmp_path / "CD1" / "feature.mkv"
+        src_b = tmp_path / "CD2" / "feature.mkv"
+        for src in (src_a, src_b):
+            src.parent.mkdir(parents=True, exist_ok=True)
+            src.write_bytes(b"data")
+        dst_dir = tmp_path / "library"
+        dst_dir.mkdir()
+        mock_copy = mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+
+        ok, copied = _copy_files([str(src_a), str(src_b)], str(dst_dir), "", "feature.mkv")
+
+        assert ok is False
+        assert copied == set()
+        mock_copy.assert_not_called()
+
+
+class TestRunPostProcessingIsolation:
+    """One failing torrent must not abort the rest of the cycle."""
+
+    def test_failure_does_not_stop_remaining_torrents(self, mocker: MockerFixture) -> None:
+        """A raise from _process_one is logged and the loop continues."""
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.is_connected.return_value = True
+        qbt.list_completed.return_value = [{"name": "bad"}, {"name": "good"}]
+        db = mocker.MagicMock()
+        mock_process = mocker.patch(
+            "movarr.post_processor._process_one",
+            side_effect=[RuntimeError("boom"), None],
+        )
+
+        run_post_processing(cfg, qbt, db)
+
+        assert mock_process.call_count == 2
+
+
+class TestSavePosterArtHardening:
+    """The poster downloader must never abort post-processing."""
+
+    def _record(self, mocker: MockerFixture) -> Any:
+        rec = mocker.MagicMock(spec=HistoryRecord)
+        rec.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        rec.imdb_title = "Inception"
+        return rec
+
+    def test_value_error_is_swallowed(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A ValueError (unknown URL scheme) must not escape."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        mocker.patch("movarr.post_processor.urllib.request.urlopen", side_effect=ValueError("unknown url type"))
+
+        _save_poster_art(self._record(mocker), str(tmp_path), cfg)
+
+        assert not (tmp_path / "poster.jpg").exists()
+
+    def test_oversized_poster_is_skipped(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A payload larger than the cap is discarded rather than written."""
+        from movarr.post_processor import _MAX_POSTER_BYTES
+
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        resp = MagicMock()
+        resp.headers = {"Content-Type": "image/jpeg"}
+        resp.read.return_value = b"x" * (_MAX_POSTER_BYTES + 1)
+        resp.__enter__.return_value = resp
+        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=resp)
+
+        _save_poster_art(self._record(mocker), str(tmp_path), cfg)
+
+        assert not (tmp_path / "poster.jpg").exists()
+
+
+class TestSameTitleGuard:
+    """A per-movie folder may hold a different film; only same-title files are superseded."""
+
+    def _delete(self, tmp_path: Path, new_fname: str, lib_fname: str) -> int:
+        movie_dir = tmp_path / "Folder (2000)"
+        movie_dir.mkdir()
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / lib_fname).write_bytes(b"lib")
+        return _delete_superseded_files(str(movie_dir), str(tmp_path), new_fname, Config())
+
+    def test_different_year_is_preserved(self, tmp_path: Path) -> None:
+        assert self._delete(tmp_path, "The Matrix 1999 1080p.mkv", "The Matrix Reloaded 2003 2160p.mkv") == 0
+
+    def test_same_year_lower_quality_is_deleted(self, tmp_path: Path) -> None:
+        assert self._delete(tmp_path, "Movie 2000 1080p.mkv", "Movie 2000 720p.mkv") == 1
+
+    def test_same_year_higher_quality_is_preserved(self, tmp_path: Path) -> None:
+        assert self._delete(tmp_path, "Movie 2000 1080p.mkv", "Movie 2000 2160p.mkv") == 0
+
+    def test_unparseable_library_name_is_preserved(self, tmp_path: Path) -> None:
+        """A library file with no parseable quality may be the better copy."""
+        assert self._delete(tmp_path, "The Matrix 1999 1080p.mkv", "The Matrix.mkv") == 0
+
+    def test_unrelated_title_without_year_is_preserved(self, tmp_path: Path) -> None:
+        assert self._delete(tmp_path, "Alien.mkv", "Predator.mkv") == 0
+
+
+class TestUserAgent:
+    """The poster User-Agent is derived from the installed package version."""
+
+    def test_user_agent_carries_movarr_and_a_version(self) -> None:
+        from movarr.post_processor import _user_agent
+
+        agent = _user_agent()
+        assert agent.startswith("movarr")
+        assert agent.count("/") <= 1
+
+    def test_poster_request_uses_derived_user_agent(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.post_processor import _user_agent
+
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
+        record.imdb_title = "Inception"
+        resp = MagicMock()
+        resp.headers = {"Content-Type": "image/jpeg"}
+        resp.read.return_value = b"x"
+        resp.__enter__.return_value = resp
+        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=resp)
+
+        _save_poster_art(record, str(tmp_path), cfg)
+
+        request = urlopen.call_args[0][0]
+        assert request.get_header("User-agent") == _user_agent()
+
+
+class TestUserAgentFallback:
+    """The UA falls back to a bare token when package metadata is unavailable."""
+
+    def test_falls_back_when_version_lookup_fails(self, mocker: MockerFixture) -> None:
+        import importlib.metadata
+
+        from movarr.post_processor import _user_agent
+
+        mocker.patch.object(importlib.metadata, "version", side_effect=importlib.metadata.PackageNotFoundError)
+
+        assert _user_agent() == "movarr"
+
+
+class TestSameTitleGuards:
+    """_same_title requires positive identity, not merely a matching year."""
+
+    def test_same_year_different_film_is_rejected(self) -> None:
+        """A different film released the same year must not be superseded."""
+        from movarr.post_processor import _same_title, _title_key
+
+        assert (
+            _same_title("The Matrix 1999 1080p BluRay", "Fight Club 1999 1080p BluRay", _title_key("The Matrix 1999"))
+            is False
+        )
+
+    def test_same_year_folder_title_matches(self) -> None:
+        from movarr.post_processor import _same_title, _title_key
+
+        assert (
+            _same_title(
+                "IWTV 1994 2160p",
+                "Interview with the Vampire 1994 1080p",
+                _title_key("Interview with the Vampire 1994"),
+            )
+            is True
+        )
+
+    def test_leading_article_is_ignored(self) -> None:
+        from movarr.post_processor import _same_title
+
+        assert _same_title("Making of a Lady 2012 2160p", "The Making of a Lady 2012 1080p", ()) is True
+
+    def test_different_year_is_rejected(self) -> None:
+        from movarr.post_processor import _same_title, _title_key
+
+        assert _same_title("The Thing 2011 1080p", "The Thing 1982 1080p", _title_key("The Thing 2011")) is False
+
+    def test_unresolvable_title_never_deletes(self) -> None:
+        from movarr.post_processor import _same_title
+
+        assert _same_title("Movie 2020 1080p", "", ()) is False
+
+
+class TestPostProcessingIdempotency:
+    """A record that is already Completed must not be processed again."""
+
+    def _cfg(self) -> Config:
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        return cfg
+
+    def _run(self, mocker: MockerFixture, cfg: Config, record: Any) -> Any:
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.is_connected.return_value = False  # reachable but offline
+        qbt.list_completed.return_value = [
+            {
+                "name": "The Matrix 1999 1080p",
+                "torrent_tag": "tag1",
+                "torrent_hash": "abc123",
+                "torrent_save_path": "/downloads",
+                "torrent_file_list": [{"file_name": "The Matrix 1999 1080p.mkv", "file_size": 10}],
+            }
+        ]
+        copy = mocker.patch("movarr.post_processor._process_one")
+        run_post_processing(cfg, qbt, db)
+        return copy
+
+    def test_completed_record_is_skipped(self, mocker: MockerFixture) -> None:
+        record = mocker.MagicMock()
+        record.result = "Completed"
+        record.verified = "true"
+        from movarr.post_processor import _process_one
+
+        cfg = self._cfg()
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+
+        _process_one(
+            {
+                "torrent_tag": "tag1",
+                "torrent_hash": "abc123",
+                "torrent_save_path": "/downloads",
+                "torrent_file_list": [],
+            },
+            cfg,
+            qbt,
+            db,
+        )
+
+        db.mark_completed.assert_not_called()
+
+    def test_reachable_offline_client_still_processes(self, mocker: MockerFixture) -> None:
+        record = mocker.MagicMock()
+        record.result = "Passed"
+        record.verified = "false"
+        copy = self._run(mocker, self._cfg(), record)
+
+        copy.assert_called_once()
+
+
+class TestDestinationInsideSavePath:
+    """A library inside the download tree would be deleted by remove_completed."""
+
+    def test_copy_refused_when_destination_is_inside_save_path(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.post_processor import _build_copy_target
+
+        cfg = Config()
+        save = tmp_path / "downloads"
+        save.mkdir()
+        cfg.post_process.exclude_file_min_kb = 0
+        cfg.post_process.default_copy_library.hd_path = str(save / "library")
+        record = mocker.MagicMock()
+        record.imdb_title = "The Matrix"
+        record.imdb_year = "1999"
+        record.imdb_genres_list = "[]"
+        record.imdb_certification = ""
+        record.imdb_cert_source = ""
+        record.index_title = "The Matrix 1999 1080p BluRay"
+        torrent = {
+            "torrent_save_path": str(save),
+            "torrent_file_list": [{"file_name": "The Matrix 1999 1080p BluRay.mkv", "file_size": 10}],
+        }
+
+        assert _build_copy_target(torrent, record, cfg) is None
+
+
+class TestWindowsPathSeparators:
+    """A Windows-style path from qBittorrent must still be handled."""
+
+    def test_largest_file_normalises_backslashes(self) -> None:
+        torrent = {
+            "torrent_file_list": [{"file_name": "The Matrix (1999)\\movie.mkv", "file_size": 100}],
+        }
+
+        largest_fname, largest_rel = _largest_file(torrent)
+
+        assert largest_fname == "movie.mkv"
+        assert "\\" not in largest_rel
+
+    def test_canonical_filename_follows_the_folder_name(self) -> None:
+        assert _canonical_filename("movie.mkv", "The Matrix (1999)") == "The Matrix 1999.mkv"
+
+
+class TestCompletedRecordRetriesRemoval:
+    """A Completed record whose torrent removal failed is retried."""
+
+    def test_removal_retried_for_completed_record(self, mocker: MockerFixture) -> None:
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        cfg.post_process.remove_completed = True
+        cfg.post_process.copy_completed = True
+        record = mocker.MagicMock()
+        record.result = "Completed"
+        record.verified = "true"
+        record.index_title = "The Matrix 1999 1080p"
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+
+        _process_one(
+            {"torrent_tag": "tag1", "torrent_hash": "abc123", "torrent_save_path": "/dl", "torrent_file_list": []},
+            cfg,
+            qbt,
+            db,
+        )
+
+        qbt.delete_torrent.assert_called_once_with(
+            "abc123", delete_data=False, state="completed", name="The Matrix 1999 1080p"
+        )
+
+
+class TestCompletedRecordWithoutRemoval:
+    """With remove_completed disabled the completed record is simply skipped."""
+
+    def test_no_removal_when_disabled(self, mocker: MockerFixture) -> None:
+        cfg = Config()
+        cfg.post_process.post_process_enabled = True
+        cfg.post_process.remove_completed = False
+        record = mocker.MagicMock()
+        record.result = "Completed"
+        record.verified = "true"
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+
+        _process_one(
+            {"torrent_tag": "tag1", "torrent_hash": "abc123", "torrent_save_path": "/dl", "torrent_file_list": []},
+            cfg,
+            qbt,
+            db,
+        )
+
+        qbt.delete_torrent.assert_not_called()
+
+
+class TestSupersessionSafetyRounds:
+    """Guards added in the round-seven review."""
+
+    def _run(self, tmp_path: Path, new_fname: str, lib_fname: str, *, release: str = "") -> int:
+        movie_dir = tmp_path / "Folder (2000)"
+        movie_dir.mkdir(exist_ok=True)
+        (movie_dir / new_fname).write_bytes(b"new")
+        (movie_dir / lib_fname).write_bytes(b"lib")
+        return _delete_superseded_files(
+            str(movie_dir), str(tmp_path), new_fname, Config(), release_san=release or new_fname
+        )
+
+    def test_higher_resolution_library_file_is_preserved(self, tmp_path: Path) -> None:
+        """1080p Remux must not delete a 2160p WEB-DL."""
+        assert self._run(tmp_path, "Movie 2000 1080p Remux.mkv", "Movie 2000 2160p WEB-DL.mkv") == 0
+
+    def test_tie_is_preserved(self, tmp_path: Path) -> None:
+        """Equal scores keep the existing copy, matching the acquisition rule."""
+        assert self._run(tmp_path, "Movie 2000 1080p WEBRip.mkv", "Movie 2000 720p HDTV.mkv") == 0
+
+    def test_bracketed_edition_is_not_superseded(self, tmp_path: Path) -> None:
+        """[Extended] vs [Unrated] are different cuts."""
+        assert self._run(tmp_path, "Movie 2000 2160p [Extended].mkv", "Movie 2000 1080p [Unrated].mkv") == 0
+
+
+class TestNoVideoCopied:
+    """Copying only non-video files must not mark the torrent completed."""
+
+    def test_subtitle_only_copy_is_not_completed(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        cfg = Config()
+        cfg.post_process.copy_completed = True
+        cfg.post_process.remove_completed = True
+        cfg.post_process.exclude_file_min_kb = 0
+        cfg.post_process.default_copy_library.hd_path = str(tmp_path / "lib")
+        record = mocker.MagicMock()
+        record.imdb_title = "The Matrix"
+        record.imdb_year = "1999"
+        record.imdb_genres_list = "[]"
+        record.imdb_certification = ""
+        record.imdb_cert_source = ""
+        record.index_title = "The Matrix 1999 1080p BluRay"
+        db = mocker.MagicMock()
+        db.find_by_tag.return_value = record
+        qbt = mocker.MagicMock()
+        mocker.patch("movarr.post_processor._build_copy_list", return_value=["/dl/movie.srt"])
+        mocker.patch("movarr.post_processor.make_directory", return_value=True)
+        mocker.patch("movarr.post_processor.copy_with_verify", return_value=True)
+
+        _process_one(
+            {"torrent_tag": "t", "torrent_hash": "h", "torrent_save_path": "/dl", "torrent_file_list": []},
+            cfg,
+            qbt,
+            db,
+        )
+
+        # The record is marked completed to stop the per-cycle re-processing,
+        # but the data is never removed.
+        db.mark_completed.assert_called_once_with("t")
+        qbt.delete_torrent.assert_not_called()
+
+
+class TestDeletionOutsideLibraryRoots:
+    """Deletion requires the destination to live under a configured library root."""
+
+    def test_outside_library_root_is_skipped(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        from movarr.post_processor import _maybe_delete_superseded
+
+        lib_root = tmp_path / "library"
+        lib_root.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "Movie 2000 720p.mkv").write_bytes(b"old")
+        cfg = Config()
+        cfg.post_process.delete_lower_quality = True
+        cfg.general.library_path_list = [str(lib_root)]
+
+        _maybe_delete_superseded(cfg, str(outside), str(tmp_path), "Movie 2000 1080p.mkv", {"Movie 2000 1080p.mkv"})
+
+        assert (outside / "Movie 2000 720p.mkv").exists()

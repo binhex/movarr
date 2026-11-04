@@ -15,7 +15,7 @@ from loguru import logger as _loguru_logger
 
 from movarr.config import Config, SearchCriteriaConfig
 from movarr.database import Database
-from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, run_search
+from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, _supersede, run_search
 
 # Helpers
 
@@ -135,7 +135,7 @@ class TestRunSearch:
     def test_qbittorrent_unreachable_skips_search(self, mocker: MockerFixture) -> None:
         cfg = Config()
         qbt = mocker.MagicMock()
-        qbt.is_connected.return_value = False
+        qbt.is_reachable.return_value = False
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_process = mocker.patch("movarr.search._process_criteria")
         db = mocker.MagicMock()
@@ -837,7 +837,7 @@ class TestProcessCriteriaNoYear:
         ]
         qbt = mocker.MagicMock()
         db = mocker.MagicMock()
-        db.is_seen.return_value = False
+        db.is_duplicate_exact.return_value = False
         db.is_duplicate_exact.return_value = False
         return _SearchSession(config=cfg, indexer=mock_jackett, qbt=qbt, db=db, library_walk=None)
 
@@ -888,7 +888,7 @@ class TestRunSearchHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_indexer = MagicMock()
         mock_indexer.is_reachable.return_value = False
@@ -912,7 +912,7 @@ class TestRunSearchHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         # A minimal ResultDict that IS yielded as a raw result from the indexer
         # (it will fail filters and not be queued, but it still counts as a raw result)
@@ -946,7 +946,7 @@ class TestRunSearchHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_indexer = MagicMock()
         mock_indexer.is_reachable.return_value = True
@@ -972,7 +972,7 @@ class TestRunSearchHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = False
+        qbt.is_reachable.return_value = False
 
         with patch("movarr.search.check_and_notify") as mock_health:
             run_search(config, qbt, db)
@@ -1003,7 +1003,7 @@ class TestRunSearchCircuitBreaker:
         db = Database(tmp_path / "test.db")
         db.kv_set(_KV_SEARCH_FAILED_AT, datetime.datetime.now(datetime.UTC).isoformat())
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_factory = mocker.patch("movarr.search.get_indexer_client")
         mock_process = mocker.patch("movarr.search._process_criteria")
@@ -1023,7 +1023,7 @@ class TestRunSearchCircuitBreaker:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_indexer = MagicMock()
         mock_indexer.is_reachable.return_value = True
@@ -1041,6 +1041,7 @@ class TestRunSearchCircuitBreaker:
         ):
             run_search(config, qbt, db)
 
+        # A real search error opens the circuit.
         assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
 
     def test_successful_search_closes_circuit(self, tmp_path: Path) -> None:
@@ -1056,7 +1057,7 @@ class TestRunSearchCircuitBreaker:
         stale = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)).isoformat()
         db.kv_set(_KV_SEARCH_FAILED_AT, stale)
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         raw_result = {
             "index_title": "Some.Movie.2020.1080p",
@@ -1077,8 +1078,8 @@ class TestRunSearchCircuitBreaker:
 
         assert db.kv_get(_KV_SEARCH_FAILED_AT) is None
 
-    def test_unreachable_proxy_opens_circuit(self, tmp_path: Path) -> None:
-        """When the proxy is unreachable, the circuit is opened too."""
+    def test_unreachable_proxy_does_not_open_circuit(self, tmp_path: Path) -> None:
+        """A probe failure skips the cycle but leaves the circuit closed."""
         from unittest.mock import MagicMock, patch
 
         from movarr.index_proxy_health import _KV_SEARCH_FAILED_AT
@@ -1087,7 +1088,7 @@ class TestRunSearchCircuitBreaker:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_indexer = MagicMock()
         mock_indexer.is_reachable.return_value = False
@@ -1098,7 +1099,9 @@ class TestRunSearchCircuitBreaker:
         ):
             run_search(config, qbt, db)
 
-        assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
+        # One lightweight probe blip must not block acquisition for the whole
+        # cooldown window; only real search errors open the circuit.
+        assert db.kv_get(_KV_SEARCH_FAILED_AT) is None
 
     def test_sticky_flag_across_tiers(self, tmp_path: Path) -> None:
         """A failure in tier 1 persists even when tier 2 succeeds (sticky flag)."""
@@ -1114,7 +1117,7 @@ class TestRunSearchCircuitBreaker:
         ]
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         call_count = 0
 
@@ -1144,6 +1147,8 @@ class TestRunSearchCircuitBreaker:
         # Circuit should be open.
         assert call_count == 2
         assert mock_indexer.search_failed is True
+        # One lightweight probe blip must not block acquisition for the whole
+        # cooldown window; only real search errors open the circuit.
         assert db.kv_get(_KV_SEARCH_FAILED_AT) is not None
 
 
@@ -1172,7 +1177,7 @@ class TestRunSearchTorrentClientHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = False
+        qbt.is_reachable.return_value = False
 
         with patch("movarr.search.torrent_client_health") as mock_health:
             run_search(config, qbt, db)
@@ -1188,7 +1193,7 @@ class TestRunSearchTorrentClientHealthMonitor:
         config = self._make_config()
         db = Database(tmp_path / "test.db")
         qbt = MagicMock()
-        qbt.is_connected.return_value = True
+        qbt.is_reachable.return_value = True
 
         mock_indexer = MagicMock()
         mock_indexer.is_reachable.return_value = True
@@ -1360,8 +1365,8 @@ class TestProcessCriteriaIgnoreList:
         # jackett ignore_list must not bleed into prowlarr
         db.write.assert_called_once()
 
-    def test_all_ignored_returns_zero(self, mocker: MockerFixture) -> None:
-        """When every result is from an ignored tracker, _process_criteria returns 0."""
+    def test_all_ignored_still_counted_for_proxy_health(self, mocker: MockerFixture) -> None:
+        """Ignored results are not queued, but they still count as the proxy answering."""
         jackett = mocker.MagicMock()
         raw1 = {**_base_result(), "index_tracker": "ignored-tracker"}
         raw2 = {**_base_result("Other Movie 2021 1080p"), "index_tracker": "ignored-tracker"}
@@ -1387,7 +1392,9 @@ class TestProcessCriteriaIgnoreList:
             session=session,
         )
 
-        assert count == 0
+        assert count == 2
+        db.write.assert_not_called()
+        qbt.add_torrent.assert_not_called()
 
 
 # _supersede — in-queue quality supersession
@@ -1415,17 +1422,18 @@ class TestSupersede:
     @staticmethod
     def _make_torrent_map(
         entries: list[tuple[str, str, str, int]],
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         """Build a ``{hash: info}`` torrent map from entry tuples.
 
         Each entry: ``(hash, name, imdb_id, quality_score)``
         """
         from movarr.qbittorrent import _build_supersede_tag
 
-        result: dict[str, dict[str, str]] = {}
+        result: dict[str, dict[str, Any]] = {}
         for h, name, imdb, score in entries:
             tag = _build_supersede_tag(imdb, score)
-            result[h] = {"name": name, "tags": tag, "hash": h}
+            # In-flight by default: supersession never touches completed torrents.
+            result[h] = {"name": name, "tags": tag, "hash": h, "progress": 0.5, "amount_left": 1024}
         return result
 
     def _make_session(self, mocker: MockerFixture, torrent_map: dict | None = None) -> Any:
@@ -1730,3 +1738,398 @@ class TestSupersede:
 
         _delete_superseded_matches(session, to_delete, "tt0133093", result["index_title"])
         session.qbt.delete_torrent.assert_called_once()
+
+
+class TestProxyHealthSemantics:
+    """Proxy health must describe whether the proxy answered, not whether it errored."""
+
+    def _config(self) -> Config:
+        cfg = Config()
+        cfg.index_site.jackett_indexer = "all"
+        cfg.index_site.search = [SearchCriteriaConfig(criteria="1080p")]
+        return cfg
+
+    def test_results_with_a_failing_tier_still_report_healthy(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A tier error after results were returned must not raise a false outage alert."""
+        db = Database(tmp_path / "test.db")
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        indexer = mocker.MagicMock()
+        indexer.is_reachable.return_value = True
+        indexer.search_failed = False
+
+        def _run(session: Any, site_cfg: Any) -> int:
+            # Simulate: tier 1 returned results, tier 2 errored.
+            indexer.search_failed = True
+            return 5
+
+        mocker.patch("movarr.search.get_indexer_client", return_value=indexer)
+        mocker.patch("movarr.search._run_search_for_site", side_effect=_run)
+        mock_health = mocker.patch("movarr.search.check_and_notify")
+
+        run_search(self._config(), qbt, db)
+
+        mock_health.assert_called_once()
+        assert mock_health.call_args.kwargs["has_results"] is True
+
+
+class TestApplyCachedMetadata:
+    """Cache application must not clear fields with NULL values."""
+
+    def test_none_values_are_skipped(self) -> None:
+        """A legacy row without dual-title data must not overwrite existing fields."""
+        from movarr.search import _apply_cached_metadata
+
+        result: dict[str, Any] = {"imdb_title": "The Matrix"}
+        _apply_cached_metadata(
+            result,  # type: ignore[arg-type]
+            {"imdb_title": "The Matrix", "imdb_original_title": None, "imdb_alternate_titles": None},
+        )
+
+        assert "imdb_original_title" not in result
+        assert "imdb_alternate_titles" not in result
+
+
+class TestQueueAndPersistOrdering:
+    """The history row is written before the notification is sent."""
+
+    def _session(self, mocker: MockerFixture, db: Any, qbt: Any) -> Any:
+        return _SearchSession(config=Config(), indexer=mocker.MagicMock(), qbt=qbt, db=db, library_walk=None)
+
+    def test_persist_happens_before_notification(self, mocker: MockerFixture) -> None:
+        from movarr.search import _queue_and_persist
+
+        calls: list[str] = []
+        db = mocker.MagicMock()
+        db.write.side_effect = lambda _r: calls.append("write")
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.side_effect = lambda r: {**r, "torrent_tag": "movarr-abc"}
+        mocker.patch("movarr.search.send_queued_notification", side_effect=lambda *_a, **_k: calls.append("notify"))
+
+        _queue_and_persist({"index_title": "X", "result_details": []}, self._session(mocker, db, qbt))
+
+        assert calls == ["write", "notify"]
+
+    def test_write_failure_does_not_abort_the_cycle(self, mocker: MockerFixture) -> None:
+        from movarr.search import _queue_and_persist
+
+        db = mocker.MagicMock()
+        db.write.side_effect = RuntimeError("database is locked")
+        qbt = mocker.MagicMock()
+        qbt.add_torrent.side_effect = lambda r: {**r, "torrent_tag": "movarr-abc"}
+        notify = mocker.patch("movarr.search.send_queued_notification")
+
+        _queue_and_persist({"index_title": "X", "result_details": []}, self._session(mocker, db, qbt))
+
+        notify.assert_called_once()
+
+
+class TestPerResultIsolation:
+    """One bad indexer result must not abort the rest of the tier."""
+
+    def test_bad_result_is_skipped_and_loop_continues(self, mocker: MockerFixture) -> None:
+        jackett = mocker.MagicMock()
+        jackett.search.return_value = iter(
+            [
+                {"index_title": "Bad 2020 1080p"},
+                {"index_title": "Good 2020 1080p"},
+            ]
+        )
+        session = _SearchSession(
+            config=Config(),
+            indexer=jackett,
+            qbt=mocker.MagicMock(),
+            db=mocker.MagicMock(),
+            library_walk=None,
+        )
+        calls = {"n": 0}
+
+        def _process(*_a: Any, **_k: Any) -> bool:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("database is locked")
+            return True
+
+        mocker.patch("movarr.search._process_single_result", side_effect=_process)
+
+        count = _process_criteria(
+            criteria_cfg=SearchCriteriaConfig(criteria="1080p"),
+            category="2000",
+            indexer="all",
+            session=session,
+        )
+
+        assert count == 2
+        assert calls["n"] == 2
+
+
+class TestSupersessionPreconditions:
+    """Supersession must not delete a download it cannot replace."""
+
+    def test_add_paused_skips_supersession(self, mocker: MockerFixture) -> None:
+        from movarr.search import _supersede
+
+        cfg = Config()
+        cfg.queue_management.supersede_enabled = True
+        cfg.torrent_client.qbittorrent.add_paused = True
+        session = _SearchSession(
+            config=cfg, indexer=mocker.MagicMock(), qbt=mocker.MagicMock(), db=mocker.MagicMock(), library_walk=None
+        )
+
+        matches = _supersede({"imdb_id": "tt0133093", "index_title_sanitised": "x"}, session)
+
+        assert matches == []
+
+
+class TestMetadataReleaseCheck:
+    """A mis-tagged indexer IMDb ID must not queue the wrong film."""
+
+    def test_unrelated_title_and_year_is_rejected(self) -> None:
+        from movarr.search import _metadata_matches_release
+
+        result: ResultDict = {
+            "imdb_title": "Fight Club",
+            "imdb_year": 1999,
+            "movie_title": "The Matrix",
+            "movie_title_compare": "thematrix",
+            "movie_title_year": "1999",
+            "result_details": [],
+        }
+
+        assert _metadata_matches_release(result) is False
+        assert result["result"] == "Failed"
+
+    def test_remaster_year_is_accepted_when_title_matches(self) -> None:
+        from movarr.search import _metadata_matches_release
+
+        result: ResultDict = {
+            "imdb_title": "The Thing",
+            "imdb_year": 1982,
+            "movie_title": "The Thing",
+            "movie_title_compare": "thething",
+            "movie_title_year": "2011",
+            "result_details": [],
+        }
+
+        assert _metadata_matches_release(result) is True
+
+
+class TestMetadataMismatchEnrichment:
+    """The enrichment stage persists the failure when metadata disagrees."""
+
+    def test_mismatched_metadata_writes_failure(self, mocker: MockerFixture) -> None:
+        from movarr.search import _enrich_result
+
+        db = mocker.MagicMock()
+        db.find_imdb_metadata.return_value = None
+        session = _SearchSession(
+            config=Config(),
+            indexer=mocker.MagicMock(),
+            qbt=mocker.MagicMock(),
+            db=db,
+            library_walk=None,
+        )
+        mocker.patch(
+            "movarr.search.fetch_metadata",
+            side_effect=lambda r, _c: {
+                **r,
+                "result": "Passed",
+                "imdb_title": "Fight Club",
+                "imdb_year": "1999",
+            },
+        )
+        result: ResultDict = {
+            "index_title": "The Matrix 1999 1080p",
+            "imdb_id": "tt9999999",
+            "movie_title_compare": "thematrix",
+            "movie_title_year": "1999",
+            "result": "Passed",
+            "result_details": [],
+        }
+
+        assert _enrich_result(result, session) is False
+        db.write.assert_called_once()
+
+    def test_missing_release_title_accepts_metadata(self) -> None:
+        from movarr.search import _release_matches_metadata_titles
+
+        assert _release_matches_metadata_titles({"imdb_title": "X"}, "") is True
+
+
+class TestSupersessionGuards:
+    """Edge cases in the completed/in-flight classification."""
+
+    def _session(self, mocker: MockerFixture, torrent_map: Any) -> Any:
+        qbt = mocker.MagicMock()
+        qbt.list_by_category.return_value = torrent_map
+        cfg = Config()
+        cfg.queue_management.supersede_enabled = True
+        return _SearchSession(config=cfg, indexer=mocker.MagicMock(), qbt=qbt, db=mocker.MagicMock(), library_walk=None)
+
+    def test_completed_torrent_is_never_superseded(self, mocker: MockerFixture) -> None:
+        from movarr.qbittorrent import _build_supersede_tag
+
+        tag = _build_supersede_tag("tt0133093", 10)
+        session = self._session(
+            mocker,
+            {"h1": {"name": "The Matrix 1999 720p", "tags": tag, "progress": 1.0}},
+        )
+
+        assert _supersede({"imdb_id": "tt0133093", "index_title_sanitised": "The Matrix 1999 2160p"}, session) == []
+
+    def test_torrent_without_parseable_name_is_skipped(self, mocker: MockerFixture) -> None:
+        from movarr.qbittorrent import _build_supersede_tag
+
+        tag = _build_supersede_tag("tt0133093", 10)
+        session = self._session(mocker, {"h1": {"name": "", "tags": tag, "progress": 0.2}})
+
+        assert _supersede({"imdb_id": "tt0133093", "index_title_sanitised": "The Matrix 1999 2160p"}, session) == []
+
+    def test_non_dict_entry_counts_as_complete(self) -> None:
+        from movarr.search import _is_torrent_complete
+
+        assert _is_torrent_complete("not-a-dict") is True
+
+    def test_amount_left_zero_counts_as_complete(self) -> None:
+        from movarr.search import _is_torrent_complete
+
+        assert _is_torrent_complete({"amount_left": 0}) is True
+        assert _is_torrent_complete({"amount_left": 100}) is False
+
+
+class TestTitleWordComparison:
+    """Punctuation must not break title identity."""
+
+    def test_parenthesised_numeric_title_matches(self) -> None:
+        from movarr.search import _release_matches_metadata_titles
+
+        result: ResultDict = {"imdb_title": "(500) Days of Summer"}
+        assert _release_matches_metadata_titles(result, "500 Days of Summer") is True
+
+    def test_slash_title_matches(self) -> None:
+        from movarr.search import _release_matches_metadata_titles
+
+        result: ResultDict = {"imdb_title": "Face/Off"}
+        assert _release_matches_metadata_titles(result, "Face Off") is True
+
+    def test_different_film_still_rejected(self) -> None:
+        from movarr.search import _release_matches_metadata_titles
+
+        result: ResultDict = {"imdb_title": "The Matrix"}
+        assert _release_matches_metadata_titles(result, "The Matrix Reloaded") is False
+
+
+class TestCompletionSignals:
+    """Either completion signal is sufficient."""
+
+    def test_zero_progress_with_zero_left_is_complete(self) -> None:
+        from movarr.search import _is_torrent_complete
+
+        assert _is_torrent_complete({"progress": 0.0, "amount_left": 0}) is True
+
+    def test_zero_progress_with_data_left_is_in_flight(self) -> None:
+        from movarr.search import _is_torrent_complete
+
+        assert _is_torrent_complete({"progress": 0.0, "amount_left": 100}) is False
+
+
+class TestSupersessionEditionAndDeleteFailure:
+    """Different cuts are never cancelled, and a failed delete keeps the record."""
+
+    def _session(self, mocker: MockerFixture, torrent_map: Any, delete_ok: bool = True) -> Any:
+        qbt = mocker.MagicMock()
+        qbt.list_by_category.return_value = torrent_map
+        qbt.delete_torrent.return_value = delete_ok
+        cfg = Config()
+        cfg.queue_management.supersede_enabled = True
+        return _SearchSession(config=cfg, indexer=mocker.MagicMock(), qbt=qbt, db=mocker.MagicMock(), library_walk=None)
+
+    def test_different_edition_is_not_superseded(self, mocker: MockerFixture) -> None:
+        from movarr.qbittorrent import _build_supersede_tag
+
+        tag = _build_supersede_tag("tt0133093", 10)
+        session = self._session(
+            mocker,
+            {"h1": {"name": "The Matrix 1999 Extended 1080p", "tags": tag, "progress": 0.4}},
+        )
+
+        matches = _supersede({"imdb_id": "tt0133093", "index_title_sanitised": "The Matrix 1999 2160p Remux"}, session)
+
+        assert matches == []
+
+    def test_failed_delete_does_not_mark_stalled(self, mocker: MockerFixture) -> None:
+        from movarr.qbittorrent import _build_supersede_tag
+        from movarr.search import _delete_superseded_matches
+
+        tag = _build_supersede_tag("tt0133093", 10)
+        session = self._session(mocker, {}, delete_ok=False)
+
+        _delete_superseded_matches(session, [("h1", "The Matrix 1999 720p", tag)], "tt0133093", "new")
+
+        session.db.mark_stalled.assert_not_called()
+
+    def test_successful_delete_marks_stalled(self, mocker: MockerFixture) -> None:
+        from movarr.qbittorrent import _build_supersede_tag
+        from movarr.search import _delete_superseded_matches
+
+        tag = _build_supersede_tag("tt0133093", 10)
+        session = self._session(mocker, {}, delete_ok=True)
+
+        _delete_superseded_matches(session, [("h1", "The Matrix 1999 720p", tag)], "tt0133093", "new")
+
+        session.db.mark_stalled.assert_called_once_with(tag)
+
+
+class TestResolvedIdMismatchContinues:
+    """A mismatched ID we resolved ourselves must not fail the candidate."""
+
+    def test_resolved_id_mismatch_only_warns(self, mocker: MockerFixture) -> None:
+        from movarr.search import _enrich_result
+
+        db = mocker.MagicMock()
+        db.find_imdb_metadata.return_value = None
+        session = _SearchSession(
+            config=Config(), indexer=mocker.MagicMock(), qbt=mocker.MagicMock(), db=db, library_walk=None
+        )
+        mocker.patch(
+            "movarr.search.fetch_metadata",
+            side_effect=lambda r, _c: {**r, "result": "Passed", "imdb_title": "Fight Club", "imdb_year": 1999},
+        )
+        mocker.patch("movarr.search.filter_by_imdb", side_effect=lambda r, *a, **k: {**r, "result": "Passed"})
+        result: ResultDict = {
+            "index_title": "The Matrix 1999 1080p",
+            "imdb_id": "tt0133093",
+            "movie_title": "The Matrix",
+            "movie_title_compare": "thematrix",
+            "movie_title_year": "1999",
+            "result": "Passed",
+            "result_details": [],
+        }
+
+        assert _enrich_result(result, session) is True
+        db.write.assert_not_called()
+
+    def test_indexer_id_mismatch_fails(self, mocker: MockerFixture) -> None:
+        from movarr.search import _enrich_result
+
+        db = mocker.MagicMock()
+        db.find_imdb_metadata.return_value = None
+        session = _SearchSession(
+            config=Config(), indexer=mocker.MagicMock(), qbt=mocker.MagicMock(), db=db, library_walk=None
+        )
+        mocker.patch(
+            "movarr.search.fetch_metadata",
+            side_effect=lambda r, _c: {**r, "result": "Passed", "imdb_title": "Fight Club", "imdb_year": 1999},
+        )
+        result: ResultDict = {
+            "index_title": "The Matrix 1999 1080p",
+            "imdb_id": "tt0133093",
+            "_imdb_id_source": "indexer",
+            "movie_title": "The Matrix",
+            "movie_title_compare": "thematrix",
+            "movie_title_year": "1999",
+            "result": "Passed",
+            "result_details": [],
+        }
+
+        assert _enrich_result(result, session) is False

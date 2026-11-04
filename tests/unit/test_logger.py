@@ -47,14 +47,19 @@ class TestCreateLoggerWithoutFile:
 
         assert callable(mock_add.call_args.kwargs["sink"])
 
-    def test_colorize_is_true(self, mocker: MockerFixture) -> None:
-        """Console handler should have colorize=True."""
+    def test_colorize_follows_the_tty(self, mocker: MockerFixture) -> None:
+        """ANSI colours are enabled only for an interactive terminal."""
         mocker.patch("movarr.logger._logger.remove")
         mock_add = mocker.patch("movarr.logger._logger.add")
 
+        mocker.patch("movarr.logger.sys.stdout.isatty", return_value=True)
         create_logger(log_format="{message}", log_level="INFO")
-
         assert mock_add.call_args.kwargs.get("colorize") is True
+
+        mock_add.reset_mock()
+        mocker.patch("movarr.logger.sys.stdout.isatty", return_value=False)
+        create_logger(log_format="{message}", log_level="INFO")
+        assert mock_add.call_args.kwargs.get("colorize") is False
 
     def test_backtrace_is_false(self, mocker: MockerFixture) -> None:
         """Console handler should have backtrace=False."""
@@ -207,3 +212,43 @@ class TestCreateLoggerFileSinkLevel:
 
         file_kwargs = mock_add.call_args_list[1].kwargs
         assert file_kwargs.get("level") == "DEBUG"
+
+
+class TestCreateLoggerDirectoryLogPath:
+    """A directory log_path must get movarr.log appended."""
+
+    def test_directory_log_path_appends_filename(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A path without a suffix is treated as a directory."""
+        mock_add = mocker.patch("movarr.logger._logger.add")
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        create_logger(log_format="{message}", log_level="INFO", log_path=str(log_dir))
+
+        sinks = [c.kwargs.get("sink") for c in mock_add.call_args_list]
+        assert str(log_dir / "movarr.log") in sinks
+
+    def test_dotted_directory_log_path_appends_filename(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A directory whose name contains a dot is still a directory."""
+        mock_add = mocker.patch("movarr.logger._logger.add")
+        log_dir = tmp_path / "movarr-1.3"
+        log_dir.mkdir()
+
+        create_logger(log_format="{message}", log_level="INFO", log_path=str(log_dir))
+
+        sinks = [c.kwargs.get("sink") for c in mock_add.call_args_list]
+        assert str(log_dir / "movarr.log") in sinks
+
+
+class TestUnwritableLogDirectory:
+    """An unwritable log directory degrades to console-only logging."""
+
+    def test_oserror_is_swallowed(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        mocker.patch("movarr.logger._logger.remove")
+        mock_add = mocker.patch("movarr.logger._logger.add")
+        mocker.patch("movarr.logger.os.makedirs", side_effect=OSError("read-only"))
+
+        create_logger(log_format="{message}", log_level="INFO", log_path=str(tmp_path / "logs"))
+
+        # Only the console sink was added.
+        assert mock_add.call_count == 1

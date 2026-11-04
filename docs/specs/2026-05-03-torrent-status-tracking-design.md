@@ -1,7 +1,11 @@
 # Torrent Status Tracking Design
 
 **Date:** 2026-05-03
-**Status:** Approved
+**Status:** Implemented, with deviations:
+
+- the `Database.has_passed`, `set_verified` and `is_verified` helpers described here were removed;
+  supersession now uses `is_duplicate_exact` plus the `result` column, and `mark_completed` is the
+  only place that sets `verified`.
 
 ## Problem
 
@@ -72,7 +76,7 @@ database:
 ### New methods
 
 | Method | Signature | Behaviour |
-|--------|-----------|-----------|
+| -------- | ----------- | ----------- |
 | `mark_stalled` | `(torrent_tag: str) -> None` | Sets `result="Stalled"`, `stalled_at=utcnow` on the record matching `torrent_tag` |
 | `mark_completed` | `(torrent_tag: str) -> None` | Sets `result="Completed"`, `verified="true"` on the record matching `torrent_tag` |
 | `expire_stalled` | `(days: int) -> int` | Deletes all `result="Stalled"` rows where `stalled_at` is older than `days` days; returns count deleted. No-op if `days == 0`. |

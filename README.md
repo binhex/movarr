@@ -14,7 +14,8 @@ Automated movie downloader based on IMDb criteria filtering.
   titles at a lower rating floor than live-action).
 - **Library deduplication** — resolves candidate titles to IMDb IDs and checks against all configured library
   paths before queuing, preventing duplicate downloads.
-- **Database deduplication** — records every evaluated title in SQLite; previously passed, failed, or stalled
+- **Database deduplication** — records every evaluated title in SQLite (titles whose release name has no
+  parseable title/year are skipped without a record); previously passed, failed, or stalled
   titles are skipped on subsequent runs.
 - **Configurable TTL expiry** — failed, stalled, and passed records are automatically pruned after configurable
   retention windows so titles can be re-evaluated over time.
@@ -33,7 +34,7 @@ Automated movie downloader based on IMDb criteria filtering.
 - **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
   configurable interval.
 - **Automatic scheduler mode** — runs in continuous scheduling mode when any scheduler task is enabled in the
-  config; falls back to a single pass when all schedulers are disabled.
+  config; with every scheduler disabled it logs that nothing is scheduled and exits.
 - **Automatic config migration** — upgrades the YAML config schema automatically on startup, backing up the
   previous version before applying changes.
 - **Search circuit breaker** — when the index proxy (Jackett/Prowlarr) search endpoint errors, the acquisition
@@ -47,6 +48,10 @@ Automated movie downloader based on IMDb criteria filtering.
 - [Astral uv](https://github.com/astral-sh/uv#installation) (optional)
 - [Jackett](https://github.com/Jackett/Jackett) or [Prowlarr](https://github.com/Prowlarr/Prowlarr) — torrent indexer proxy
 - [qBittorrent](https://www.qbittorrent.org/) with Web UI enabled
+
+Jackett and Prowlarr are contacted over plain HTTP only, and the qBittorrent WebUI certificate is not
+verified. Run them on a trusted network (or behind a local reverse proxy) — TLS termination in front of
+these services is not supported by movarr itself.
 
 ## Quick start
 
@@ -85,9 +90,11 @@ All options are optional overrides. When an option is omitted, the value from `m
 | ------ | ----------- | ------- |
 | `--config-path <dir>` | Directory containing `movarr.yml`. | `configs` |
 | `--log-path <dir>` | Override the log directory from config. The file `movarr.log` is created inside. | *(from config)* |
-| `--log-level <level>` | Override the console log level. Choices: `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`. Useful for temporary debugging without editing the config file. | *(from config)* |
+| `--log-level <level>` | Override the console log level. Choices: `TRACE`, `DEBUG`, `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`. Useful for temporary debugging without editing the config file. | *(from config)* |
 | `--db-path <dir>` | Override the database directory from config. The file `movarr.db` is created inside. | *(from config)* |
+| `--pid-path <dir>` | Override the PID-file directory from config. The file `movarr.pid` is created inside. | *(from config)* |
 | `--library-path <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
+| `--once` | Run each enabled scheduler task once, then exit (foreground mode). | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
 
@@ -112,8 +119,9 @@ All options are optional overrides. When an option is omitted, the value from `m
 | `--prowlarr-port <port>` | Override Prowlarr port from config. | *(from config)* |
 | `--prowlarr-api-key <key>` | Override Prowlarr API key from config. | *(from config)* |
 
-> **Unraid users:** map container environment variables directly to these flags so a working
-> deployment requires no manual config file editing.
+> **Unraid users:** movarr itself has no environment-variable support — the container entrypoint maps
+> variables onto these CLI flags. Run movarr outside that image and you must pass the flags (or edit
+> `configs/movarr.yml`) yourself.
 
 ## Configuration
 
@@ -125,8 +133,8 @@ automatically on first run. The file is divided into the sections below.
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `config_version` | Schema version — managed automatically; do not edit. | *(current)* |
-| `log_level_console` | Console logging level (`debug`, `info`, `success`, `warning`, `error`). Overridden by `--log-level`. | `info` |
-| `log_level_file` | File logging level. | `info` |
+| `log_level_console` | Console logging level (`trace`, `debug`, `info`, `success`, `warning`, `error`, `critical`). Overridden by `--log-level`. | `info` |
+| `log_level_file` | File logging level (`trace`, `debug`, `info`, `success`, `warning`, `error`, `critical`). | `info` |
 | `log_path` | Directory for the log file (`movarr.log` is created inside). Empty string disables file logging. Overridden by `--log-path`. | `"logs"` |
 | `library_path_list` | Root paths to scan when checking whether a movie already exists in the library. Overridden by `--library-path`. | `[]` |
 | `db_path` | Directory for the SQLite history database (`movarr.db` is created inside). Overridden by `--db-path`. | `"db"` |
@@ -152,23 +160,23 @@ Controls which torrents pass the IMDb quality gate.
 | --- | ----------- | ------- |
 | `minimum_year` | Reject movies released before this year. | `1970` |
 | `minimum_runtime_mins` | Reject movies shorter than this many minutes. | `60` |
-| `minimum_rating` | Minimum IMDb rating (0–10). | `7.0` |
+| `minimum_rating` | Minimum IMDb rating (0–10). A value above `10` is treated as "no rating threshold". | `7.0` |
 | `minimum_votes` | Minimum IMDb vote count. | `5000` |
 | `override_genre` | Map of genre → `{minimum_rating, minimum_votes}` to relax thresholds for specific genres. | `{}` |
 | `allow_imdb_title_type_list` | Allowed IMDb title types. | `[movie, video, tvmovie]` |
 | `allow_country_list` | Allowed production country codes (ISO 3166-1 alpha-2). Empty = allow all. | `[]` |
 | `allow_language_list` | Allowed spoken language codes (ISO 639-1). Empty = allow all. | `[]` |
-| `reject_index_title_list` | Index titles containing any of these keywords (case-insensitive) are rejected before IMDb lookup. | *(see default config)* |
+| `reject_index_title_list` | Reject an index title when one of these keywords appears as a delimited token *after* the release year (case-insensitive). A title with no year is searched in full. Keywords before the year (e.g. a disabled `[CAM]` tag) are not matched. Empty by default — add your own (`CAM`, `TS`, ...) to enable. | `[]` |
 | `reject_genre_list` | Reject any movie whose IMDb genres include one of these values. | `[]` |
 | `reject_genre_exclusive_list` | Reject a movie only when ALL of its IMDb genres are in this list (e.g. add `Horror` to reject pure horror, keep horror/sci-fi hybrids). | `[]` |
 | `reject_movie_title_list` | Reject movies whose resolved title exactly matches any entry. | `[]` |
 | `reject_index_group_list` | Reject torrents from these release groups (case-insensitive). | `[]` |
-| `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing all other filters. | `[]` |
-| `override_writer_list` | Force-accept any movie written by one of these writers. | `[]` |
-| `override_director_list` | Force-accept any movie directed by one of these directors. | `[]` |
-| `override_movie_title_list` | Force-accept any movie whose title contains one of these strings. | `[]` |
-| `override_character_list` | Force-accept any movie featuring one of these characters. | `[]` |
-| `preferred_index_group_list` | Preferred release group names. Matching torrents sort higher. | `[]` |
+| `override_cast_list` | Force-accept any movie featuring one of these cast members, bypassing the rating and vote-count minimums. Other filters (title type, genre, year, runtime, language, country, bitrate) and the library check still apply. | `[]` |
+| `override_writer_list` | Force-accept any movie written by one of these writers. Same bypass scope as `override_cast_list`. | `[]` |
+| `override_director_list` | Force-accept any movie directed by one of these directors. Same bypass scope as `override_cast_list`. | `[]` |
+| `override_movie_title_list` | Force-accept a movie whose normalised title (or title + year) exactly equals one of these entries. Substring entries never match. Same bypass scope as `override_cast_list`. | `[]` |
+| `override_character_list` | Force-accept any movie featuring one of these characters. Same bypass scope as `override_cast_list`. | `[]` |
+| `preferred_index_group_list` | Preferred release group names. Gives a scoring bonus in the library and supersession comparisons (it does not reorder indexer results). | `[]` |
 
 ### `torrent_client`
 
@@ -178,6 +186,7 @@ Controls which torrents pass the IMDb quality gate.
 | `qbittorrent.host` | qBittorrent Web UI hostname or IP address. | `localhost` |
 | `qbittorrent.port` | qBittorrent Web UI port. | `8080` |
 | `qbittorrent.username` | Web UI username. | `admin` |
+| `qbittorrent.verify_webui_certificate` | Verify the qBittorrent WebUI TLS certificate. Leave `false` for a self-signed LAN certificate; enable it when the WebUI is reachable beyond your trusted network. | `false` |
 | `qbittorrent.password` | Web UI password. | `adminadmin` |
 | `qbittorrent.add_paused` | Add torrents in paused state. | `false` |
 | `qbittorrent.category` | Category tag applied to all movarr-managed torrents. | `movies-movarr` |
@@ -202,13 +211,14 @@ Apprise supports ntfy, Discord, Telegram, email, Slack, and many other services.
 | `jackett.port` | Jackett port. | `9117` |
 | `jackett.api_key` | Jackett API key (found in the Jackett dashboard). | `""` |
 | `jackett.read_timeout` | HTTP read timeout in seconds. | `60.0` |
-| `jackett.limit` | Maximum number of results to request per search query. | `500` |
-| `jackett.offset` | Result offset for pagination. | `0` |
+| `jackett.limit` | Maximum number of results to request per page. Must be greater than `0`. | `500` |
+| `jackett.offset` | Maximum pagination offset. Pages are fetched from offset `0` upwards while the offset is less than or equal to this value, so `0` fetches a single page and `500` fetches pages `0` and `500`. | `0` |
 | `jackett.ignore_list` | Jackett indexer names to skip when querying with `jackett_indexer: all`. Case-insensitive. | `[]` |
 | `prowlarr.host` | Prowlarr hostname or IP address. | `localhost` |
 | `prowlarr.port` | Prowlarr port. | `9696` |
 | `prowlarr.api_key` | Prowlarr API key (found in *Settings → General*). | `""` |
 | `prowlarr.read_timeout` | HTTP read timeout in seconds. | `60.0` |
+| `prowlarr.limit` | Maximum number of results to request per query. | `500` |
 | `prowlarr.ignore_list` | Prowlarr indexer names to skip when querying with `prowlarr_indexer: all`. Case-insensitive. | `[]` |
 | `circuit_open_minutes` | Minutes to skip search after a proxy search error (circuit breaker). Set to `0` to disable. | `30` |
 
@@ -226,9 +236,9 @@ Controls what is searched and which indexers are used.
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `jackett_indexer` | Jackett indexer to query. Use `all` to query every configured indexer simultaneously. | `all` |
-| `prowlarr_indexer` | Prowlarr indexer ID to query. Use `all` (maps to `-1`) or a numeric indexer ID from Prowlarr. | `all` |
+| `prowlarr_indexer` | Prowlarr indexer ID to query. Use `all` to search every configured indexer. | `all` |
 | `search` | List of search criteria blocks (see below). | *(1080p only)* |
-| `override_search` | Per-indexer overrides for search parameters, keyed by indexer name. | `{}` |
+| `override_search` | Per-indexer overrides for the search **category**, keyed by indexer name. Only the `category` key is read; any other key is ignored. | `{}` |
 
 Each entry in `search`:
 
@@ -236,9 +246,9 @@ Each entry in `search`:
 | --- | ----------- | ------- |
 | `criteria` | Search string passed to the index proxy (e.g. `1080p`, `2160p remux`). | — |
 | `category` | Torrent category codes, comma-separated (Torznab format). | `2000,5000` |
-| `minimum_size_mb` | Minimum torrent size in MB. | `3000` (1080p), `7000` (2160p) |
-| `maximum_size_mb` | Maximum torrent size in MB. | `20000` (1080p), `170000` (2160p) |
-| `minimum_bitrate_mb` | Minimum video bitrate in MB/min. Set `0` to disable. | `50` (1080p), `115` (2160p) |
+| `minimum_size_mb` | Minimum torrent size in MB. | `3000` (the shipped 1080p tier; ~`7000` suits a 2160p tier you add) |
+| `maximum_size_mb` | Maximum torrent size in MB. | `20000` (the shipped 1080p tier; ~`170000` suits a 2160p tier you add) |
+| `minimum_bitrate_mb` | Minimum video bitrate in MB/min. Set `0` to disable. | `50` (the shipped 1080p tier; ~`115` suits a 2160p tier you add) |
 
 ### `queue_management`
 
@@ -249,9 +259,9 @@ Each entry in `search`:
 | `metadata_monitor_enabled` | Remove torrents stuck in metadata-fetching state. | `true` |
 | `stalled_delete_torrent_data` | Also delete downloaded data when removing a stalled torrent. | `true` |
 | `metadata_delete_torrent_data` | Also delete downloaded data when removing a metadata-stuck torrent. | `true` |
-| `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. | `120` |
-| `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. | `30` |
-| `supersede_enabled` | When a higher-quality torrent for the same IMDb ID is queued, cancel the inferior download and delete its partial data. Requires the IMDb ID in the qBittorrent tag (automatic with v2.22.0+). | `false` |
+| `stalled_delete_torrent_max_mins` | Minutes a torrent must be continuously stalled before it is removed. Must be at least `1`. | `120` |
+| `metadata_delete_torrent_max_mins` | Minutes a torrent must be stuck in metadata-fetching state before removal. Must be at least `1`. | `30` |
+| `supersede_enabled` | When a higher-quality torrent for the same IMDb ID is queued, cancel the inferior download and delete its partial data. Requires the IMDb ID in the qBittorrent tag (automatic with v2.22.0+). Never applies to completed torrents, a different edition/cut, or when `add_paused` is enabled (the replacement would not start). | `false` |
 
 ### `post_process`
 
@@ -259,14 +269,21 @@ Each entry in `search`:
 | --- | ----------- | ------- |
 | `post_process_enabled` | Master switch for the post-processing pipeline. | `true` |
 | `copy_completed` | Copy completed files to the media library. | `true` |
-| `remove_completed` | Remove source files after a successful copy. | `true` |
+| `remove_completed` | Remove the torrent from qBittorrent after a successful copy, deleting its data. With `copy_completed: false` the torrent is still removed but the data is always kept (the download itself is the library copy). | `true` |
 | `exclude_file_min_kb` | Files smaller than this size (kilobytes) are not copied (skips small extras and samples). | `1500000` |
 | `exclude_file_regex_list` | Regex patterns matched against file names — matching files are skipped. | `[]` |
 | `exclude_folder_regex_list` | Regex patterns matched against folder names — matching folders and their contents are skipped. | `[]` |
-| `copy_library_rules` | Ordered list of routing rules (see below). | `[]` |
-| `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches. | `""` |
-| `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches. | `""` |
-| `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Files matching known extras/bonus naming patterns, and releases of a different edition or cut, are not deleted. Defaults to `false`. Permanent deletion — use with care. | `false` |
+| `copy_library_rules` | List of routing rules (see below). The rule with the highest genre-overlap score wins. | `[]` |
+| `default_copy_library.hd_path` | Fallback destination for HD movies when no rule matches or two rules tie. | `""` |
+| `default_copy_library.uhd_path` | Fallback destination for UHD/4K movies when no rule matches or two rules tie. Empty falls back to `hd_path`. | `""` |
+| `delete_lower_quality` | Auto-delete lower-quality library files when a better version is copied. Extras/bonus files and releases of a different edition or cut are preserved. Requires `general.library_path_list` — without it the quality check cannot run, so deletion is skipped. Permanent deletion — use with care. | `false` |
+
+### `post_process.poster_art`
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `filename` | Filename for the poster image saved into the movie folder (always stored as `.jpg`). Empty disables poster saving. | `""` (disabled) |
+| `download_width` | Requested image width in pixels, applied to Amazon poster URLs. `0` downloads the original size. | `0` |
 
 Each entry in `copy_library_rules`:
 
@@ -274,7 +291,7 @@ Each entry in `copy_library_rules`:
 | --- | ----------- |
 | `name` | Human-readable label for this rule (e.g. a viewer's name). |
 | `genres` | List of IMDb genres that match this rule. |
-| `max_certification` | Optional age-rating ceiling (e.g. `12A`). Movies rated above this are skipped for this rule. |
+| `max_certification` | Optional age-rating ceiling (e.g. `12A`). Movies rated above this are skipped for this rule. Only applied when the certificate came from IMDbPie (BBFC); MPAA ratings from OMDb fall back to `default_copy_library`. |
 | `hd_path` | Destination directory for 1080p / HD movies. |
 | `uhd_path` | Destination directory for 2160p / UHD movies. |
 
@@ -286,6 +303,14 @@ Each entry in `copy_library_rules`:
 | `post_copy` | Shell command to run after each successful copy. `{dir}` is substituted with the absolute destination directory. `{leaf}` substituted likewise. | `""` (disabled) |
 | `pre_delete` | Shell command to run before the deletion pass. Failure aborts deletion. `{dir}` and `{leaf}` substituted. | `""` (disabled) |
 | `post_delete` | Shell command to run after the deletion pass. Failure is non-fatal. `{dir}` and `{leaf}` substituted. | `""` (disabled) |
+| `hook_timeout_mins` | Timeout in minutes for each hook. `0` disables the timeout, so a hung hook blocks the post-processing thread indefinitely. | `5.0` |
+
+`post_copy` is skipped when only non-video files (subtitles, artwork) were copied — the torrent is then marked
+completed without being treated as a successful feature copy.
+
+`pre_delete` and `post_delete` only fire from the superseded-file deletion pass, so they need
+`delete_lower_quality: true` **and** a non-empty `general.library_path_list`. A hook configured without
+those two settings never runs.
 
 Hooks must not rename or move the target files. Use only in-place operations (e.g. `chattr -i`, `trimarr`).
 
@@ -311,9 +336,9 @@ flowchart TD
     D -- Yes --> SKIP1([⛔ Skip])
     D -- No --> E{Size within\nlimits?}
     E -- No --> SKIP2([⛔ Skip])
-    E -- Yes --> F{Already\nin library?}
+    E -- Yes --> F{Already in\ndatabase?}
     F -- Yes --> SKIP3([⛔ Skip])
-    F -- No --> G{Already in\ndatabase?}
+    F -- No --> G{Already\nin library?}
     G -- Yes --> SKIP4([⛔ Skip])
     G -- No --> H[Resolve IMDb ID]
     H --> I{Title type\nallowed?}
@@ -323,10 +348,11 @@ flowchart TD
     J -- No --> K{Pass rating, votes,\nyear, runtime,\nlanguage, country?}
     K -- No --> FAIL3([❌ Fail])
     K -- Yes --> L{Override list\nmatch?}
-    L -- Yes --> PASS([✅ Add to qBittorrent])
+    L -- Yes --> PASS2([Remove rating/votes gate,\nthen continue])
     L -- No --> M{All standard\nfilters pass?}
     M -- No --> FAIL4([❌ Fail])
-    M -- Yes --> PASS
+    M -- Yes --> PASS([✅ Add to qBittorrent])
+    PASS2 --> M
 ```
 
 ### Queue management pipeline
@@ -347,16 +373,17 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 
 1. Detects torrents with a completed status.
 2. Scans the download directory, skipping files and folders that match the exclude rules.
-3. Evaluates `copy_library_rules` in order — the first matching rule determines the destination.
-4. Falls back to `default_copy_library` if no rule matches.
-5. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
-6. Deletes superseded library files when `delete_lower_quality` is enabled.
-7. Marks the history record as `Completed`.
+3. Resolves the destination: the `copy_library_rules` entry with the highest
+   genre-overlap score wins; a tie or no match falls back to `default_copy_library`.
+4. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
+5. Deletes superseded library files when `delete_lower_quality` is enabled.
+6. Marks the history record as `Completed`.
 
 ## Scheduler
 
-movarr runs three schedulers concurrently. Each uses a **run-then-sleep** strategy: the interval is measured
-from the *start* of the previous run, so drift does not accumulate over time.
+movarr runs three schedulers concurrently on a **fixed interval** (APScheduler). The next fire time is computed
+from the previous *scheduled* time, so drift does not accumulate; `max_instances=1` prevents overlap, and a run
+that overruns its interval is followed immediately by one coalesced run rather than a skipped one.
 
 | Task | Default interval | Config key |
 | ---- | ---------------- | ---------- |
@@ -372,7 +399,7 @@ Any task can be disabled independently by setting `enabled: false` in its schedu
 git clone https://github.com/binhex/movarr
 cd movarr
 uv venv --quiet
-uv sync --extra dev
+uv sync
 ```
 
 If you wish to perform linting on all files before committing (PR will not be
@@ -388,17 +415,28 @@ uv run pytest
 
 **Q: movarr queued a movie I already have. Why?**
 
-Library matching works by extracting the movie title and year from the torrent's index title and scanning your `library_path_list` for video files whose sanitised filename contains the same title and year. If the filename does not match (e.g. it contains a garbled release-group string), the **parent folder name** is checked as a fallback. Ensure your media files include the release year in their filename (e.g. `The Matrix 1999 1080p BluRay.mkv`) or organise movies into folders whose names contain the full movie title and year. movarr also attempts an IMDb ID lookup as a secondary match when the index title can be resolved.
+Library matching extracts the movie title and year from the torrent's index title and scans your
+`library_path_list` for video files whose sanitised filename has the same normalised title and year
+(an exact match). If the filename does not match but the containing folder does, the folder name is used
+as a fallback, and that fallback accepts a truncated or extended title (a substring match). Ensure your
+media files include the release year in their filename (e.g. `The Matrix 1999 1080p BluRay.mkv`) or
+organise movies into folders whose names contain the full movie title and year (a folder-only layout such as
+`The Matrix (1999)/movie.mkv` is matched, but because the file carries no resolution token movarr treats the
+existing copy as better and will not upgrade it). For foreign-language
+titles movarr also matches the film's original title and up to three IMDb alternate titles, so a library
+file named with the English release title is still recognised when the index title is the
+original-language one.
 
 **Q: How do I prevent movarr from downloading non-English movies?**
 
-Set `filters.allow_language_list` to `[en]`. movarr will reject any title where the primary IMDb language is
-not English.
+Set `filters.allow_language_list` to `[en]`. A title passes when **any** of its IMDb spoken languages is in the
+list, so a film tagged `[French, English]` is accepted.
 
 **Q: Can I force-accept a specific director's entire filmography?**
 
-Yes — add the director's name to `filters.override_director_list`. All filter checks (rating, votes, genre,
-year, etc.) are bypassed for matching titles. The same pattern applies to `override_cast_list`,
+Yes — add the director's name to `filters.override_director_list`. For matching titles the rating and
+vote-count minimums are bypassed; every other filter (title type, genre, year, runtime, language, country,
+bitrate) and the library check still apply. The same pattern applies to `override_cast_list`,
 `override_writer_list`, `override_movie_title_list`, and `override_character_list`.
 
 **Q: What happens if qBittorrent is not reachable?**
@@ -413,7 +451,7 @@ sent to qBittorrent, even if qBittorrent is reset externally.
 
 **Q: I am using no_ransom script to secure my media, is it possible to use the 'pre_delete' hook to unlock existing media before deletion?**
 
-Yes - however there are thee additional changes you will need to make to the movarr container for this to work with the no_ransom script:
+Yes - however there are three additional changes you will need to make to the movarr container for this to work with the no_ransom script:
 
 - Grant chattr additional permissions inside the container
 This is done by adding in the following to the extra parameters field for the container: `--cap-add LINUX_IMMUTABLE`.

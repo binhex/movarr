@@ -13,6 +13,7 @@ For each configured search criteria tier:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -78,7 +79,7 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         logger.info("No search criteria configured; skipping search.")
         return
 
-    if not qbt.is_connected():
+    if not qbt.is_reachable():
         logger.warning("qBittorrent is unreachable; skipping search.")
         torrent_client_health.check_and_notify(is_reachable=False, db=db, config=config)
         return
@@ -96,11 +97,14 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     indexer_client = get_indexer_client(config)
 
     if not indexer_client.is_reachable():
+        # A single lightweight probe (no retries) is not a search failure: do
+        # not open the circuit for it, or one blip blocks acquisition for the
+        # whole cooldown window.  Documented contract: the circuit tracks
+        # *search request* errors.
         logger.warning(
-            "{} is not reachable; skipping search.",
+            "{} is not reachable; skipping this cycle (circuit unchanged).",
             proxy_name,
         )
-        record_search_failure(db)
         check_and_notify(has_results=False, proxy_name=proxy_name, db=db, config=config)
         return
 
@@ -122,8 +126,12 @@ def run_search(config: Config, qbt: QBittorrentClient, db: Database) -> None:
         record_search_failure(db)
     else:
         record_search_success(db)
+    # Proxy health answers "did the proxy return anything?"; a tier that errored
+    # is recorded separately by the circuit breaker.  Conflating the two raised a
+    # false outage alert whenever a later tier failed after an earlier one
+    # returned results.
     check_and_notify(
-        has_results=total_raw > 0 and not indexer_client.search_failed,
+        has_results=total_raw > 0,
         proxy_name=proxy_name,
         db=db,
         config=config,
@@ -141,8 +149,15 @@ def _queue_and_persist(result: ResultDict, session: _SearchSession) -> None:
         session.db.write(result)
         return
     result = updated
+    # Persist first so the history row exists before the user is told the
+    # torrent was queued.  A failed write is logged and the notification is
+    # still attempted (the torrent IS in qBittorrent); post-processing will
+    # skip it, so the log line is the operator's signal.
+    try:
+        session.db.write(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to persist queued torrent '{}': {}; continuing.", result.get("index_title"), exc)
     send_queued_notification(result, session.config)
-    session.db.write(result)
 
 
 def _validate_metadata_present(result: ResultDict) -> bool:
@@ -161,6 +176,7 @@ def _collect_supersede_matches(
     new_imdb_id: str,
     new_san: str,
     config: Config,
+    new_raw_title: str = "",
 ) -> tuple[list[tuple[str, str, str]], bool, str]:
     """Scan torrent_map for same-IMDb-ID entries and return matches.
 
@@ -170,24 +186,23 @@ def _collect_supersede_matches(
         if new beats every existing torrent, and *best_existing_name*
         is the name of the highest-scored existing torrent.
     """
-    from movarr.filters import supersession_quality_score
-    from movarr.qbittorrent import _parse_imdb_id_from_tags
+    from movarr.filters import edition_token_set, supersession_quality_score
+    from movarr.qbittorrent import parse_imdb_id_from_tags
 
     matches: list[tuple[str, str, str]] = []
     all_new_wins = True
     best_existing_name = ""
     best_existing_score = -1
 
+    raw_new = new_raw_title or new_san
     for torrent_hash, info in torrent_map.items():
         tags_str = info.get("tags", "") or ""
-        existing_imdb = _parse_imdb_id_from_tags(tags_str)
-        if existing_imdb != new_imdb_id:
+        if parse_imdb_id_from_tags(tags_str) != new_imdb_id:
             continue
-
-        torrent_name = info.get("name", "")
-        existing_san = sanitise(torrent_name) if torrent_name else ""
-        if not existing_san:
+        candidate = _supersede_candidate(info, new_san, raw_new, edition_token_set)
+        if candidate is None:
             continue
+        torrent_name, existing_san = candidate
 
         new_score = supersession_quality_score(new_san, existing_san, config)
         existing_score = supersession_quality_score(existing_san, new_san, config)
@@ -202,6 +217,54 @@ def _collect_supersede_matches(
             best_existing_name = torrent_name
 
     return matches, all_new_wins, best_existing_name
+
+
+def _supersede_candidate(
+    info: dict[str, Any],
+    new_san: str,
+    raw_new: str,
+    edition_token_set: Any,
+) -> tuple[str, str] | None:
+    """Return ``(name, sanitised_name)`` when *info* may be superseded, else None.
+
+    Vetoes completed torrents (their data may be the only copy), unparseable
+    names, and different editions — a different cut is a different product.
+    """
+    # A completed torrent has already been post-processed (or its data is the
+    # library copy itself when copy_completed is false).  Deleting it would
+    # destroy finished content, and `delete_data=True` makes that irreversible.
+    if _is_torrent_complete(info):
+        logger.debug("Not superseding completed torrent '{}'.", info.get("name", ""))
+        return None
+    torrent_name = info.get("name", "")
+    existing_san = sanitise(torrent_name) if torrent_name else ""
+    if not existing_san:
+        return None
+    # Compare the RAW names: sanitise() drops trailing bracket tags, which would
+    # make "[Extended]" and "Theatrical" look identical.
+    if edition_token_set(torrent_name) != edition_token_set(raw_new):
+        logger.debug("Not superseding '{}': different edition.", torrent_name)
+        return None
+    return torrent_name, existing_san
+
+
+def _is_torrent_complete(info: Any) -> bool:
+    """Return True when qBittorrent reports the torrent as fully downloaded.
+
+    ``progress`` is a 0..1 float; ``amount_left`` is a byte count.  Either
+    signal is enough, and a record with no usable signal is treated as
+    *complete* so the deletion path stays conservative.
+    """
+    if not isinstance(info, dict):
+        return True
+    amount_left = info.get("amount_left")
+    if isinstance(amount_left, (int, float)) and float(amount_left) <= 0:
+        return True
+    progress = info.get("progress")
+    if isinstance(progress, (int, float)):
+        return float(progress) >= 1.0
+    # No usable signal at all: stay conservative and treat it as complete.
+    return not isinstance(amount_left, (int, float))
 
 
 def _apply_supersede_decision(
@@ -244,13 +307,16 @@ def _delete_superseded_matches(
         new_title,
     )
     for torrent_hash, torrent_name, tags_str in matches:
+        deleted = session.qbt.delete_torrent(torrent_hash, delete_data=True, state="superseded", name=torrent_name)
+        if not deleted:
+            logger.warning("Could not delete superseded torrent '{}'; leaving its record untouched.", torrent_name)
+            continue
         movarr_tag = extract_movarr_tag(tags_str)
         if movarr_tag:
             try:
                 session.db.mark_stalled(movarr_tag)
             except Exception:
                 logger.debug("Could not mark superseded torrent tag '{}' in DB.", movarr_tag)
-        session.qbt.delete_torrent(torrent_hash, delete_data=True, state="superseded", name=torrent_name)
 
 
 def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, str, str]]:
@@ -264,7 +330,7 @@ def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, s
     Marks *result* as Failed (via ``_apply_supersede_decision``) when
     an existing torrent has equal or better quality.
     """
-    if not session.config.queue_management.supersede_enabled:
+    if not _supersede_preconditions_met(session):
         return []
 
     new_imdb_id = result.get("imdb_id")
@@ -272,13 +338,7 @@ def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, s
         return []
 
     new_san = result.get("index_title_sanitised") or ""
-
-    try:
-        torrent_map = session.qbt.list_by_category()
-    except Exception:
-        logger.warning("Failed to query qBittorrent for supersession check; skipping.")
-        return []
-
+    torrent_map = _fetch_torrent_map(session)
     if not torrent_map:
         return []
 
@@ -287,6 +347,7 @@ def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, s
         new_imdb_id,
         new_san,
         session.config,
+        new_raw_title=str(result.get("index_title") or ""),
     )
 
     if not matches:
@@ -303,6 +364,27 @@ def _supersede(result: ResultDict, session: _SearchSession) -> list[tuple[str, s
         return []
 
     return matches
+
+
+def _supersede_preconditions_met(session: _SearchSession) -> bool:
+    """Return True when supersession is enabled and the replacement will start."""
+    if not session.config.queue_management.supersede_enabled:
+        return False
+    if session.config.torrent_client.qbittorrent.add_paused is True:
+        # The replacement is queued paused, so deleting the existing download
+        # would leave the user with no active torrent at all.
+        logger.info("add_paused is enabled; skipping supersession deletion.")
+        return False
+    return True
+
+
+def _fetch_torrent_map(session: _SearchSession) -> dict[str, Any]:
+    """Return the qBittorrent category snapshot, or an empty dict on failure."""
+    try:
+        return session.qbt.list_by_category()
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to query qBittorrent for supersession check; skipping.")
+        return {}
 
 
 def _run_pre_filter_gates(
@@ -395,7 +477,7 @@ def _process_single_result(
 ) -> bool:
     """Process one raw indexer result through the full filter/enrich/queue pipeline.
 
-    Returns True if the result was counted as a used (non-ignored) result.
+    Returns True if the result was handled (not discarded by the ignore list).
     Returns False if it was skipped due to the ignore list.
     """
     result["_filter_minimum_bitrate_mb"] = criteria_cfg.minimum_bitrate_mb
@@ -411,11 +493,15 @@ def _process_criteria(
     session: _SearchSession,
 ) -> int:
     """Fetch and process all indexer results for one criteria tier.
+
     Returns:
-        The number of usable (non-ignored) results yielded by the indexer.
+        The number of raw results yielded by the indexer, including results the
+        ignore list discards.  Proxy health asks whether the indexer returned
+        anything at all, so a tier whose results are all ignored still counts as
+        the proxy having answered.
     """
     site_dict = criteria_cfg.model_dump()
-    used_count = 0
+    raw_count = 0
     proxy = session.config.index_proxy
     if indexer == "all":
         proxy_ignore = proxy.jackett.ignore_list if proxy.selected == "jackett" else proxy.prowlarr.ignore_list
@@ -424,11 +510,19 @@ def _process_criteria(
         ignore_set = frozenset()
 
     for raw_result in session.indexer.search(indexer, criteria_cfg.criteria, category):
-        result = _enrich_index_metadata(raw_result)
-        if _process_single_result(result, session, criteria_cfg, site_dict, ignore_set, indexer):
-            used_count += 1
+        raw_count += 1
+        # One malformed result (or a transient DB lock) must never abort the
+        # rest of the tier -- mirroring run_post_processing's per-item isolation.
+        try:
+            result = _enrich_index_metadata(raw_result)
+            _process_single_result(result, session, criteria_cfg, site_dict, ignore_set, indexer)
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).error(
+                "Failed to process one indexer result for '{}'; continuing.",
+                raw_result.get("index_title", "<unknown>") if isinstance(raw_result, dict) else "<non-dict>",
+            )
 
-    return used_count
+    return raw_count
 
 
 def _resolve_search_category(
@@ -449,7 +543,9 @@ def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> 
     """Run all search criteria for the configured indexer site.
 
     Returns:
-        Total number of usable (non-ignored) indexer results across all criteria.
+        Total number of raw indexer results across all criteria, including
+        results the ignore list later discards.  This is a proxy-health signal
+        ("did the indexer answer?"), not a count of queued titles.
     """
     index_site = (
         site_cfg.jackett_indexer if session.config.index_proxy.selected == "jackett" else site_cfg.prowlarr_indexer
@@ -473,8 +569,16 @@ def _run_search_for_site(session: _SearchSession, site_cfg: IndexSiteConfig) -> 
 
 
 def _apply_cached_metadata(result: ResultDict, cached: dict) -> None:
-    """Apply cached IMDb metadata fields to *result* in place."""
+    """Apply cached IMDb metadata fields to *result* in place.
+
+    ``None`` values are skipped so a pre-v13 history row cannot overwrite an
+    already-populated field with ``None`` — the dual-title fields have no
+    stored value there, and clearing them would silently disable
+    alternate-title library matching.
+    """
     for key, value in cached.items():
+        if value is None:
+            continue
         result[key] = value  # type: ignore[literal-required]
     result["result"] = "Passed"
     result.setdefault("result_details", [])
@@ -505,12 +609,128 @@ def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
             session.db.write(result)
             return False
 
+    if not _metadata_matches_release(result):
+        if result.get("_imdb_id_source") == "indexer":
+            # A feed-supplied ID that resolves to another film is unsafe to queue.
+            session.db.write(result)
+            return False
+        # An ID we resolved ourselves was matched on the release title; keep the
+        # candidate and let the IMDb filters decide (a translated or truncated
+        # title must not fail here).
+        logger.warning(
+            "IMDb metadata title mismatch for '{}' (resolved ID); continuing.",
+            result.get("index_title"),
+        )
+
     result.update(filter_by_imdb(result, session.config, session.library_walk))
     if result.get("result") != "Passed":
         session.db.write(result)
         return False
 
     return True
+
+
+def _metadata_matches_release(result: ResultDict) -> bool:
+    """Return True when fetched IMDb metadata plausibly belongs to this release.
+
+    An indexer-supplied ``imdbid`` is taken on trust, so a mis-tagged feed would
+    otherwise queue a torrent under a different film's metadata.  A release
+    passes when its title (article-stripped, word-for-word) equals the canonical,
+    original or an alternate title the metadata reports — so ``"Matrix"`` still
+    matches ``"The Matrix"`` while ``"The Matrix Reloaded"`` does not.
+    """
+    imdb_title = str(result.get("imdb_title") or "")
+    imdb_year = str(result.get("imdb_year") or "")
+    # ``movie_title`` is the human form ("The Matrix"); ``movie_title_compare``
+    # is already squashed to a single normalised token, which would defeat the
+    # word-level comparison below.
+    release_title = str(result.get("movie_title") or result.get("movie_title_compare") or "")
+    release_year = str(result.get("movie_title_year") or "")
+    if not imdb_title or not release_title:
+        return True
+    if _release_matches_metadata_titles(result, release_title):
+        return True
+    _record_metadata_mismatch(result, imdb_title, imdb_year, release_title, release_year)
+    return False
+
+
+def _record_metadata_mismatch(
+    result: ResultDict,
+    imdb_title: str,
+    imdb_year: str,
+    release_title: str,
+    release_year: str,
+) -> None:
+    """Mark *result* Failed because the metadata names a different film."""
+    details: list[str] = result.get("result_details") or []
+    details.append(
+        f"Failed: indexer IMDb ID {result.get('imdb_id')} resolves to "
+        f"'{imdb_title} ({imdb_year})', which does not match this release."
+    )
+    result["result"] = "Failed"
+    result["result_details"] = details
+    logger.warning(
+        "IMDb metadata mismatch for '{}': '{} ({})' vs release '{} ({})'.",
+        result.get("index_title"),
+        imdb_title,
+        imdb_year,
+        release_title,
+        release_year,
+    )
+
+
+def _release_matches_metadata_titles(result: ResultDict, release_title: str) -> bool:
+    """Return True when the release title matches any title the metadata reports.
+
+    The canonical title alone is not enough: a foreign film's release name is
+    usually its original title, which lives in ``imdb_original_title``.
+    """
+    from movarr.parsing import normalise_for_compare  # noqa: PLC0415
+
+    right = normalise_for_compare(release_title) or ""
+    if not right:
+        return True
+    candidates = [
+        str(result.get("imdb_title") or ""),
+        str(result.get("imdb_original_title") or ""),
+        *(str(t) for t in (result.get("imdb_alternate_titles") or [])),
+    ]
+    return any(_title_matches_candidate(candidate, release_title) for candidate in candidates)
+
+
+def _title_matches_candidate(candidate: str, release_title: str) -> bool:
+    """Return True when *candidate* names the same film as *release_title*."""
+    left_words = _title_words(candidate)
+    if not left_words:
+        return False
+    if left_words == _title_words(release_title):
+        return True
+    # "Face/Off" vs "Face Off" and "M*A*S*H" vs "MASH" only match once all
+    # punctuation is removed.
+    right_squashed = _squash_title(release_title)
+    return bool(right_squashed) and _squash_title(candidate) == right_squashed
+
+
+def _squash_title(title: str) -> str:
+    """Return *title* reduced to lowercase alphanumerics only."""
+    return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
+def _title_words(title: str) -> tuple[str, ...]:
+    """Return article-stripped, normalised words for *title*.
+
+    Word-level comparison means ``"Matrix"`` matches ``"The Matrix"`` while
+    ``"The Matrix Reloaded"`` does not (extra word ``reloaded``).
+    """
+    from movarr.parsing import normalise_for_compare  # noqa: PLC0415
+
+    # Split on anything that is not alphanumeric: "(500) Days of Summer",
+    # "Face/Off" and "M*A*S*H" must compare equal to their plain forms.
+    words = [re.sub(r"[^a-z0-9]+", "", word.lower()) for word in title.split()]
+    words = [normalise_for_compare(word) or word for word in words if word]
+    while words and words[0] in {"the", "a", "an"}:
+        words.pop(0)
+    return tuple(word for word in words if word)
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:
