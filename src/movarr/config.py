@@ -6,17 +6,21 @@ import copy
 import shutil
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from movarr.cron_schedule import build_trigger, parse_expression, resolve_timezone
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.24.0"
+_CONFIG_VERSION = "2.25.0"
+_DEFAULT_POST_PROCESSING_CRON = "*/5 * * * *"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
 # Filenames constructed from directory paths at runtime.  Consumers import these
@@ -397,6 +401,200 @@ def _migrate_v223_to_v224(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+# Cadence steps that a 5-field crontab repeats evenly: divisors of 60 minutes and of 1440
+# minutes. Rounding up to the next divisor keeps post-processing from running more often than
+# the interval the operator configured, measured on the wall clock (a daylight-saving shift can
+# compress a single gap by an hour); longer intervals step up to weekly, monthly and yearly
+# cadences for the same reason.
+_MINUTE_STEPS = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60)
+_HOUR_STEPS = (60, 120, 180, 240, 360, 480, 720, 1440)
+_DAILY_MINUTES = 1440
+_WEEKLY_MINUTES = 10080
+_MONTHLY_MINUTES = 28 * 1440
+_YEARLY_MINUTES = 525600
+_MAX_CADENCE_CRON = "0 0 1 1 *"
+
+
+def _ceil_step(minutes: int, steps: tuple[int, ...]) -> int:
+    """Return the smallest entry in *steps* that is at least *minutes*."""
+    return min(step for step in steps if step >= minutes)
+
+
+def _coerce_minutes(minutes: object) -> int | None:
+    """Return *minutes* as an int, accepting integral floats and numeric strings, else ``None``.
+
+    pydantic's lax mode coerced ``'5'`` and ``5.0`` to ``5`` for the old interval field, so the
+    migration accepts the same shapes instead of downgrading them to the slowest cadence.
+    """
+    if isinstance(minutes, bool):
+        return None
+    if isinstance(minutes, int):
+        return minutes
+    if isinstance(minutes, float) and minutes.is_integer():
+        return int(minutes)
+    if isinstance(minutes, str):
+        try:
+            return int(minutes)
+        except ValueError:
+            pass
+        try:
+            as_float = float(minutes)
+        except ValueError:
+            return None
+        return int(as_float) if as_float.is_integer() else None
+    return None
+
+
+def _minutes_to_cron(minutes: int) -> tuple[str, bool]:
+    """Return ``(expression, exact)`` for a positive post-processing interval in minutes.
+
+    Steps are divisors of 60 minutes or of 1440 minutes, and longer intervals step up to a
+    weekly, monthly or yearly cadence. Up to a week the result never runs more often than
+    *minutes* on the wall clock; above that, calendar cadences vary (a month can be 28 days, a
+    year 366), so the caller warns. ``exact`` is False when the cadence rounds up: 90 minutes
+    becomes every two hours.
+    """
+    if minutes > _DAILY_MINUTES:
+        if minutes <= _WEEKLY_MINUTES:
+            return "0 0 * * 0", minutes == _WEEKLY_MINUTES
+        if minutes <= _MONTHLY_MINUTES:
+            # The shortest month is 28 days, so the monthly boundary is 40320 minutes; longer
+            # months simply fire later, which keeps the cadence monotone.
+            return "0 0 1 * *", False
+        return "0 0 1 1 *", False
+    steps = _MINUTE_STEPS if minutes <= 60 else _HOUR_STEPS
+    step = _ceil_step(minutes, steps)
+    if step == 60:
+        return "0 * * * *", minutes == 60
+    if step == 1440:
+        return "0 0 * * *", minutes == 1440
+    if steps is _HOUR_STEPS:
+        return f"0 */{step // 60} * * *", step == minutes
+    return f"*/{step} * * * *", step == minutes
+
+
+def _negative_minutes(minutes: object) -> bool:
+    """Return True when *minutes* is a negative number, numeric strings included."""
+    if isinstance(minutes, bool):
+        return False
+    if isinstance(minutes, (int, float)):
+        return minutes < 0
+    if isinstance(minutes, str):
+        try:
+            return float(minutes) < 0
+        except ValueError:
+            return False
+    return False
+
+
+def _interval_to_cron(minutes: object) -> str:
+    """Return a cron expression for a legacy interval, warning when the cadence changes.
+
+    The mapping never runs more often than the configured interval up to one year on the wall
+    clock, so an hourly or daily schedule is never turned into a five-minute one. Non-positive values are
+    rejected, and a value that is not a whole number of minutes falls back to the slowest
+    cadence with a warning.
+    """
+    if _negative_minutes(minutes):
+        raise ValueError(f"Post-processing schedule_time_mins must be greater than 0, got {minutes!r}")
+    value = _coerce_minutes(minutes)
+    if value is None:
+        logger.warning(
+            "Post-processing schedule_time_mins {!r} must be a whole number of minutes; using '{}', so "
+            "post-processing will run once a year until 'cron' is set explicitly.",
+            minutes,
+            _MAX_CADENCE_CRON,
+        )
+        return _MAX_CADENCE_CRON
+    if value <= 0:
+        raise ValueError(f"Post-processing schedule_time_mins must be greater than 0, got {value}")
+    expression, exact = _minutes_to_cron(value)
+    if value > _YEARLY_MINUTES:
+        logger.warning(
+            "Post-processing schedule_time_mins {} is longer than a year; using '{}', which may run more "
+            "often than the configured interval.",
+            value,
+            expression,
+        )
+    elif not exact:
+        logger.warning(
+            "Post-processing schedule_time_mins {} has no exact crontab cadence; using '{}', which runs no "
+            "more often than the configured interval (daylight-saving shifts aside).",
+            value,
+            expression,
+        )
+    return expression
+
+
+def _cron_problem(value: object) -> str | None:
+    """Return why *value* cannot be used as a ``cron`` setting, or ``None`` when it is usable.
+
+    Each entry is checked on its own, matching ``ScheduleConfig``'s per-entry validation rather
+    than the union tolerance of :func:`movarr.cron_schedule.build_trigger`: a list holding one
+    expression that can never fire must be replaced here, not kept and then rejected after the
+    file has been rewritten. Checking against UTC is structural; on a host with no timezone
+    database the check degrades to parsing alone (warned) because building a trigger needs a zone.
+    """
+    entries = [value] if isinstance(value, str) else value
+    if not isinstance(entries, list) or not entries:
+        return "it must be a cron expression or a non-empty list of them"
+    if not all(isinstance(entry, str) for entry in entries):
+        return "every list entry must be a string"
+    try:
+        for entry in entries:
+            build_trigger([entry], ZoneInfo("UTC"))
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "The timezone database is missing, so 'cron' values can only be checked structurally; "
+            "expressions that can never fire will not be detected."
+        )
+        for entry in entries:
+            try:
+                parse_expression(entry)
+            except ValueError as exc:
+                return str(exc)
+        return None
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def _is_usable_cron(value: object) -> bool:
+    """Return True when :func:`_cron_problem` finds no problem with *value*."""
+    return _cron_problem(value) is None
+
+
+def _migrate_v224_to_v225(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.24.0 -> v2.25.0: the post-processing interval becomes a cron expression.
+
+    The interval is converted only when the block has no ``cron`` yet, so a hand-written
+    expression that predates the upgrade is kept rather than overwritten.
+    """
+    post_processing = _section(_section(raw, "schedule"), "post_processing")
+    existing = post_processing.pop("schedule_time_mins", None)
+    existing_cron = post_processing.get("cron")
+    if _is_usable_cron(existing_cron):
+        if existing is not None:
+            logger.warning(
+                "Post-processing config already sets 'cron'; keeping it and discarding schedule_time_mins {}.",
+                existing,
+            )
+    elif existing_cron is not None:
+        logger.warning(
+            "Post-processing config has an unusable 'cron' value {!r} ({}) ; replacing it with {}.",
+            existing_cron,
+            _cron_problem(existing_cron),
+            _MAX_CADENCE_CRON if existing is None else "the converted interval",
+        )
+        post_processing["cron"] = [_interval_to_cron(existing) if existing is not None else _MAX_CADENCE_CRON]
+    elif existing is not None:
+        post_processing["cron"] = [_interval_to_cron(existing)]
+    # With neither key present the schema default ("*/5 * * * *") applies, which is the cadence
+    # the old model defaulted to, so nothing is written here.
+    _section(raw, "general")["config_version"] = "2.25.0"
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Bind table-generated functions to module-level names (import compatibility)
 # ---------------------------------------------------------------------------
@@ -448,6 +646,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.21.0": _migrate_v221_to_v222,
     "2.22.0": _migrate_v222_to_v223,
     "2.23.0": _migrate_v223_to_v224,
+    "2.24.0": _migrate_v224_to_v225,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
@@ -480,19 +679,73 @@ class GeneralConfig(BaseModel):
 
 
 class ScheduleTaskConfig(BaseModel):
-    """A single scheduled task configuration."""
+    """A single interval-scheduled task configuration."""
 
     enabled: bool = True
     schedule_time_mins: int = Field(default=30, gt=0, description="Interval in minutes (must be > 0).")
     run_on_start: bool = True
 
 
-class ScheduleConfig(BaseModel):
-    """Schedule intervals for the three background tasks."""
+def _normalise_cron_value(value: object) -> object:
+    """Accept a single 5-field cron expression or a list of them.
 
+    The raw expressions are kept: validation happens on ``ScheduleConfig``, where
+    the timezone is available, and the startup log then shows the operator's own
+    text rather than a rewritten form.
+    """
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, list):
+        raise ValueError("cron must be a 5-field crontab expression or a list of them")
+    if not values:
+        raise ValueError("cron must contain at least one expression")
+    for index, entry in enumerate(values):
+        if not isinstance(entry, str):
+            raise ValueError(f"cron[{index}] must be a string, got {type(entry).__name__}")
+    return values
+
+
+class PostProcessingScheduleConfig(BaseModel):
+    """Cron-scheduled post-processing configuration."""
+
+    enabled: bool = True
+    run_on_start: bool = True
+    cron: list[str] = Field(default_factory=lambda: [_DEFAULT_POST_PROCESSING_CRON])
+
+    @field_validator("cron", mode="before")
+    @classmethod
+    def _normalise_cron(cls, value: object) -> object:
+        """Accept a single 5-field expression or a list of them."""
+        return _normalise_cron_value(value)
+
+
+class ScheduleConfig(BaseModel):
+    """Schedule intervals and cron windows for the three background tasks."""
+
+    timezone: str = ""
     acquisition: ScheduleTaskConfig = Field(default_factory=lambda: ScheduleTaskConfig(schedule_time_mins=30))
     queue_management: ScheduleTaskConfig = Field(default_factory=lambda: ScheduleTaskConfig(schedule_time_mins=5))
-    post_processing: ScheduleTaskConfig = Field(default_factory=lambda: ScheduleTaskConfig(schedule_time_mins=5))
+    post_processing: PostProcessingScheduleConfig = Field(default_factory=PostProcessingScheduleConfig)
+
+    @model_validator(mode="after")
+    def _validate_cron_schedule(self) -> ScheduleConfig:
+        """Reject an unknown timezone or an unusable cron expression at load time.
+
+        Each expression is checked on its own, which is deliberately stricter than
+        :func:`movarr.cron_schedule.build_trigger`, where a union may contain a member that can
+        never fire. Config load fails closed instead, and this runs for every load regardless of
+        ``post_processing.enabled``: a disabled task must still carry a usable expression so that
+        enabling it later cannot surprise the operator.
+        """
+        try:
+            timezone = resolve_timezone(self.timezone)
+        except ValueError as exc:
+            raise ValueError(f"schedule.timezone: {exc}") from exc
+        for index, expression in enumerate(self.post_processing.cron):
+            try:
+                build_trigger([expression], timezone)
+            except ValueError as exc:
+                raise ValueError(f"schedule.post_processing.cron[{index}]: {exc}") from exc
+        return self
 
 
 class OverrideGenreConfig(BaseModel):

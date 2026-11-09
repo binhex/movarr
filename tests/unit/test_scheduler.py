@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -13,6 +14,8 @@ import datetime
 
 import pytest
 from apscheduler.schedulers.base import SchedulerNotRunningError
+from apscheduler.triggers.combining import OrTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from movarr.config import Config, GeneralConfig
 from movarr.scheduler import (
@@ -725,7 +728,9 @@ class TestLogNextRun:
 
         search_callable()
 
-        mock_log_next_run.assert_called_once_with(mock_sched, "search")
+        # start-up announces the post_processing window, so the closure's call must be last.
+        assert mock_log_next_run.call_count == 2
+        assert mock_log_next_run.call_args_list[-1].args == (mock_sched, "search")
 
     def test_queue_management_closure_calls_log_next_run(self, mocker: MockerFixture) -> None:
         """queue_management closure calls _log_next_run with the correct job_id."""
@@ -748,7 +753,8 @@ class TestLogNextRun:
 
         qm_callable()
 
-        mock_log_next_run.assert_called_once_with(mock_sched, "queue_management")
+        assert mock_log_next_run.call_count == 2
+        assert mock_log_next_run.call_args_list[-1].args == (mock_sched, "queue_management")
 
     def test_post_processing_closure_calls_log_next_run(self, mocker: MockerFixture) -> None:
         """post_processing closure calls _log_next_run with the correct job_id."""
@@ -771,7 +777,9 @@ class TestLogNextRun:
 
         pp_callable()
 
-        mock_log_next_run.assert_called_once_with(mock_sched, "post_processing")
+        # The daemon announces the first fire time at start-up, so the closure's call must be last.
+        assert mock_log_next_run.call_count == 2
+        assert mock_log_next_run.call_args_list[-1].args == (mock_sched, "post_processing")
 
     def _get_job_callable(self, mock_sched: Any, job_id: str) -> Any:
         for call in mock_sched.add_job.call_args_list:
@@ -930,3 +938,134 @@ class TestPidCleanupFailure:
         _cleanup_pid_file("/run/movarr")  # must not raise
 
         assert log.warning.called
+
+
+class TestRunDaemonCronTrigger:
+    """post_processing is registered on a cron trigger built from the config."""
+
+    def _daemon(self, mocker: MockerFixture, config: Config) -> Any:
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched = mocker.patch("movarr.scheduler.BackgroundScheduler").return_value
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+        _run_daemon(config)
+        return mock_sched
+
+    def _trigger(self, mock_sched: Any) -> object:
+        for call in mock_sched.add_job.call_args_list:
+            if call.kwargs.get("id") == "post_processing":
+                return call.kwargs["trigger"]
+        raise AssertionError("post_processing job was not registered")
+
+    def test_single_expression_registers_a_cron_trigger(self, mocker: MockerFixture) -> None:
+        """One window builds a CronTrigger rather than an interval trigger."""
+        config = Config()
+        config.schedule.post_processing.cron = ["* 0-5 * * *"]
+
+        assert isinstance(self._trigger(self._daemon(mocker, config)), CronTrigger)
+
+    def test_multiple_expressions_register_an_or_trigger(self, mocker: MockerFixture) -> None:
+        """Several windows are unioned so weekdays and weekends can differ."""
+        config = Config()
+        config.schedule.post_processing.cron = ["* 0-7,23 * * 1-5", "* 0-5 * * 0,6"]
+
+        assert isinstance(self._trigger(self._daemon(mocker, config)), OrTrigger)
+
+    def test_trigger_uses_the_configured_timezone(self, mocker: MockerFixture) -> None:
+        """The trigger evaluates the expression in schedule.timezone."""
+        config = Config()
+        config.schedule.timezone = "Australia/Sydney"
+        trigger = self._trigger(self._daemon(mocker, config))
+
+        assert isinstance(trigger, CronTrigger)
+        assert trigger.timezone == ZoneInfo("Australia/Sydney")
+
+    def test_cron_job_keeps_single_instance_and_coalescing(self, mocker: MockerFixture) -> None:
+        """A copy in flight is never overlapped and an overrun coalesces."""
+        config = Config()
+        mock_sched = self._daemon(mocker, config)
+
+        for call in mock_sched.add_job.call_args_list:
+            if call.kwargs.get("id") == "post_processing":
+                assert call.kwargs["max_instances"] == 1
+                assert call.kwargs["coalesce"] is True
+                return
+        raise AssertionError("post_processing job was not registered")
+
+
+class TestRunDaemonDisabledCron:
+    """A disabled post-processing task must not have its trigger built."""
+
+    def test_invalid_cron_on_a_disabled_task_does_not_abort_the_daemon(self, mocker: MockerFixture) -> None:
+        """The trigger is built after the enabled check, so a disabled task is inert."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mock_sched = mocker.patch("movarr.scheduler.BackgroundScheduler").return_value
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+        config = Config()
+        config.schedule.post_processing.enabled = False
+        config.schedule.post_processing.cron = ["@daily"]
+
+        _run_daemon(config)
+
+        registered = {call.kwargs.get("id") for call in mock_sched.add_job.call_args_list}
+        assert "post_processing" not in registered
+
+
+class TestRunDaemonStartupLog:
+    """The start-up log states the real schedule, including a disabled task."""
+
+    def _daemon(self, mocker: MockerFixture, config: Config) -> list[str]:
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler._connect_qbt")
+        mocker.patch("movarr.scheduler.BackgroundScheduler")
+        mocker.patch("movarr.scheduler.threading.Event", return_value=mocker.MagicMock())
+        mock_info = mocker.patch("movarr.scheduler.logger.info")
+        _run_daemon(config)
+        return [str(call.args[0]).format(*call.args[1:]) for call in mock_info.call_args_list]
+
+    def test_default_timezone_is_logged_as_the_process_timezone(self, mocker: MockerFixture) -> None:
+        """An empty schedule.timezone is reported as the process timezone."""
+        messages = self._daemon(mocker, Config())
+
+        assert any("the process timezone" in message for message in messages)
+
+    def test_enabled_task_logs_its_cron_windows_and_timezone(self, mocker: MockerFixture) -> None:
+        """The enabled branch names the windows and the timezone source."""
+        config = Config()
+        config.schedule.post_processing.cron = ["* 0-5 * * *"]
+        config.schedule.timezone = "Australia/Sydney"
+
+        messages = self._daemon(mocker, config)
+
+        assert any("post_processing on cron" in message for message in messages)
+        assert any("* 0-5 * * *" in message and "Australia/Sydney" in message for message in messages)
+
+    def test_disabled_task_logs_that_it_is_disabled(self, mocker: MockerFixture) -> None:
+        """The disabled branch must not advertise a cron window."""
+        config = Config()
+        config.schedule.post_processing.enabled = False
+
+        messages = self._daemon(mocker, config)
+
+        assert any("post_processing disabled" in message for message in messages)
+        assert not any("post_processing on cron" in message for message in messages)
+
+
+class TestRunOnceCronBypass:
+    """Single-pass mode ignores the cron windows and says so."""
+
+    def test_logs_that_the_window_is_bypassed(self, mocker: MockerFixture) -> None:
+        """run_once announces the bypass before running post-processing."""
+        mocker.patch("movarr.scheduler.Database")
+        mocker.patch("movarr.scheduler.QBittorrentClient")
+        mocker.patch("movarr.scheduler.run_search")
+        mocker.patch("movarr.scheduler.run_queue_management")
+        mock_pp = mocker.patch("movarr.scheduler.run_post_processing")
+        mock_info = mocker.patch("movarr.scheduler.logger.info")
+
+        run_once(Config())
+
+        messages = [str(call.args[0]) for call in mock_info.call_args_list]
+        assert any("bypassed" in message for message in messages)
+        mock_pp.assert_called_once()

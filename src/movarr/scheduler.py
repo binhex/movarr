@@ -1,14 +1,18 @@
 """APScheduler-based task scheduler for movarr.
 
-Three tasks run on configurable intervals:
+Three tasks run on configurable schedules:
   1. **search** — poll Jackett, filter results, add to qBittorrent, persist to DB.
   2. **queue_management** — delete metaDL/stalledDL torrents that exceed wait times.
   3. **post_processing** — copy completed torrents to the library.
 
+``acquisition`` and ``queue_management`` run on fixed intervals;
+``post_processing`` runs on a cron schedule (see :mod:`movarr.cron_schedule`), so it
+can be confined to out-of-hours windows.
+
 The scheduler runs in **daemon mode** — a long-running foreground process
-(suitable for systemd/Docker, writes a PID file) with one interval job per
-enabled task.  ``run_once()`` executes each enabled task a single time; it is
-the foreground/test helper, and it logs and exits when nothing is enabled.
+(suitable for systemd/Docker, writes a PID file) with one job per enabled task.
+``run_once()`` executes each enabled task a single time, ignoring the cron windows;
+it is the foreground/test helper, and it logs and exits when nothing is enabled.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from apscheduler.schedulers.base import SchedulerNotRunningError
 from loguru import logger
 
 from movarr.config import PID_FILENAME
+from movarr.cron_schedule import build_trigger, describe_windows, resolve_timezone
 from movarr.database import Database
 from movarr.post_processor import run_post_processing
 from movarr.qbittorrent import QBittorrentClient
@@ -35,7 +40,7 @@ if TYPE_CHECKING:
     import types
     from collections.abc import Callable
 
-    from movarr.config import Config, ScheduleTaskConfig
+    from movarr.config import Config, PostProcessingScheduleConfig, ScheduleTaskConfig
 
 __all__ = ["run", "run_once"]
 
@@ -125,6 +130,10 @@ def run_once(config: Config) -> None:
         logger.info("Queue management task disabled; skipping.")
 
     if config.schedule.post_processing.enabled:
+        logger.info(
+            "Post-processing cron window bypassed in single-pass mode ({}).",
+            describe_windows(config.schedule.post_processing.cron),
+        )
         _task_post_processing(config, qbt, db)
     else:
         logger.info("Post-processing task disabled; skipping.")
@@ -150,7 +159,6 @@ def _run_daemon(config: Config) -> None:
 
     search_mins = config.schedule.acquisition.schedule_time_mins
     qm_mins = config.schedule.queue_management.schedule_time_mins
-    pp_mins = config.schedule.post_processing.schedule_time_mins
 
     _add_job_if_enabled(
         scheduler,
@@ -171,11 +179,12 @@ def _run_daemon(config: Config) -> None:
         qbt,
         db,
     )
-    _add_job_if_enabled(
+    _add_cron_job_if_enabled(
         scheduler,
         _task_post_processing,
         "post_processing",
         config.schedule.post_processing,
+        config.schedule.timezone,
         config,
         qbt,
         db,
@@ -198,12 +207,24 @@ def _run_daemon(config: Config) -> None:
     signal.signal(signal.SIGINT, _shutdown)
 
     scheduler.start()
-    logger.info(
-        "Scheduler started — search every {}m, queue_management every {}m, post_processing every {}m.",
-        search_mins,
-        qm_mins,
-        pp_mins,
-    )
+    if config.schedule.post_processing.enabled:
+        logger.info(
+            "Scheduler started — search every {}m, queue_management every {}m, post_processing on cron '{}' ({}).",
+            search_mins,
+            qm_mins,
+            describe_windows(config.schedule.post_processing.cron),
+            config.schedule.timezone or "the process timezone",
+        )
+        try:
+            _log_next_run(scheduler, "post_processing")
+        except Exception:
+            logger.exception("Failed to log next post_processing run time.")
+    else:
+        logger.info(
+            "Scheduler started — search every {}m, queue_management every {}m, post_processing disabled.",
+            search_mins,
+            qm_mins,
+        )
 
     stop_event.wait()
     logger.info("movarr stopped.")
@@ -252,6 +273,26 @@ def _task_post_processing(config: Config, qbt: QBittorrentClient, db: Database) 
 # Helpers
 
 
+def _job_callable(
+    scheduler: BackgroundScheduler,
+    task_fn: Callable[..., None],
+    job_id: str,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+) -> Callable[[], None]:
+    """Return the job body shared by interval and cron registration."""
+
+    def _job() -> None:
+        task_fn(config, qbt, db)
+        try:
+            _log_next_run(scheduler, job_id)
+        except Exception:
+            logger.exception("Failed to log next {} run time.", job_id)
+
+    return _job
+
+
 def _add_job_if_enabled(
     scheduler: BackgroundScheduler,
     task_fn: Callable[..., None],
@@ -268,18 +309,46 @@ def _add_job_if_enabled(
         logger.info("Scheduled {} is disabled — skipping.", job_id)
         return
 
-    def _job() -> None:
-        task_fn(config, qbt, db)
-        try:
-            _log_next_run(scheduler, job_id)
-        except Exception:
-            logger.exception("Failed to log next {} run time.", job_id)
-
     extra: dict = {"name": name} if name is not None else {}
     scheduler.add_job(
-        _job,
+        _job_callable(scheduler, task_fn, job_id, config, qbt, db),
         trigger="interval",
         minutes=schedule_cfg.schedule_time_mins,
+        id=job_id,
+        max_instances=1,
+        coalesce=True,
+        **_next_run_kwargs(schedule_cfg.run_on_start),
+        **extra,
+    )
+
+
+def _add_cron_job_if_enabled(
+    scheduler: BackgroundScheduler,
+    task_fn: Callable[..., None],
+    job_id: str,
+    schedule_cfg: PostProcessingScheduleConfig,
+    timezone_name: str,
+    config: Config,
+    qbt: QBittorrentClient,
+    db: Database,
+    *,
+    name: str | None = None,
+) -> None:
+    """Register *task_fn* on the cron schedule unless *schedule_cfg.enabled* is False.
+
+    The timezone and trigger are resolved only for an enabled task: a disabled task is skipped
+    before anything can raise. Config validation is the primary guard (it rejects bad expressions
+    and timezones unconditionally), so the enabled path is fail-fast by design.
+    """
+    if not schedule_cfg.enabled:
+        logger.info("Scheduled {} is disabled — skipping.", job_id)
+        return
+
+    trigger = build_trigger(schedule_cfg.cron, resolve_timezone(timezone_name))
+    extra: dict = {"name": name} if name is not None else {}
+    scheduler.add_job(
+        _job_callable(scheduler, task_fn, job_id, config, qbt, db),
+        trigger=trigger,
         id=job_id,
         max_instances=1,
         coalesce=True,

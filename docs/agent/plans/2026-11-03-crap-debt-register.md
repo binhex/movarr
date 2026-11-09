@@ -96,3 +96,53 @@ uv run --with pytest-crap pytest --cov --crap --crap-threshold=9
 
 Any function that re-enters at **CC >= 10** should be refactored again; the rows above are the
 accepted set.
+
+## Addendum 2026-11-09: post-processing cron change
+
+Re-measured during the tech-debt step of the post-processing cron schedule change
+(`docs/agent/plans/2026-11-09-post-processing-cron-schedule.md`), using the documented command:
+
+```bash
+uv run --with pytest-crap pytest --cov --crap --crap-threshold=9
+```
+
+`pytest-crap` is not a declared dev dependency of this project, so it is provisioned for the run with
+`uv run --with pytest-crap` rather than added to `pyproject.toml`.
+
+**Result:** 41 functions at CRAP >= 9, and radon reports no function above CC 9
+(`uv run --with radon radon cc -n C src/movarr/*.py` returns nothing).
+
+The approved policy above applies unchanged: refactor only CC >= 10, record the rest as named debt.
+Nothing meets the CC >= 10 trigger, so no function is refactored under that clause. Per-file counts:
+
+| File | Functions >= 9 | Max CRAP |
+| --- | --- | --- |
+| `post_processor.py` | 11 | 26.60 |
+| `search.py` | 8 | 21.29 |
+| `filters.py` | 7 | 11.88 |
+| `config.py` | 5 | 17.00 |
+| `qbittorrent.py` | 2 | 11.13 |
+| `notifications.py` | 2 | 11.13 |
+| `imdb_search.py` | 2 | 9.65 |
+| `parsing.py` | 1 | 17.20 |
+| `file_utils.py` | 1 | 10.76 |
+| `queue_manager.py` | 1 | 9.24 |
+| `jackett.py` | 1 | 9.16 |
+| `cron_schedule.py` | 0 | 6.66 |
+| `scheduler.py` | 0 | 7.91 |
+
+The new code introduced by this change contributes **no** flagged function: `cron_schedule.py` is at
+0 and `scheduler.py` at 0, and `config.py` stayed at 5 before and after the change (all five are
+pre-existing, recorded above in the 2026-11-03 table).
+
+Two complexity reductions were made in this change rather than recorded as new debt:
+
+- `_expand_weekdays` (was CRAP 9.65, CC 9) - step/range/span logic extracted into
+  `_weekday_step`, `_weekday_bounds` and `_weekday_span`; `cron_schedule.py` maximum is now 6.66.
+- `_interval_to_cron` (was CRAP 13.15, CC 6) - the interval mapping moved into `_minutes_to_cron`,
+  leaving one type guard and one branch; the pydantic cron validator body was likewise moved into
+  `_normalise_cron_value`.
+
+Note on the tool's own tables: `render_function_table` shows only the top 20 rows
+(`--crap-top-n` defaults to 20, and that flag is outside the two the tech-debt skill permits), so the
+per-file "#>=thr" column is the authoritative count of functions at or above the threshold.

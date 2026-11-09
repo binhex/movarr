@@ -31,8 +31,8 @@ Automated movie downloader based on IMDb criteria filtering.
   (ntfy, Discord, Telegram, email, and more).  Notifications use Markdown formatting;
   ``?format=markdown`` is automatically appended to ntfy URLs for proper Markdown
   rendering.
-- **Three independent schedulers** — acquisition, queue management, and post-processing each run on their own
-  configurable interval.
+- **Three independent schedulers** — acquisition and queue management run on their own configurable intervals;
+  post-processing runs on a crontab expression so it can be confined to out-of-hours windows.
 - **Automatic scheduler mode** — runs in continuous scheduling mode when any scheduler task is enabled in the
   config; with every scheduler disabled it logs that nothing is scheduled and exits.
 - **Automatic config migration** — upgrades the YAML config schema automatically on startup, backing up the
@@ -94,7 +94,7 @@ All options are optional overrides. When an option is omitted, the value from `m
 | `--db-path <dir>` | Override the database directory from config. The file `movarr.db` is created inside. | *(from config)* |
 | `--pid-path <dir>` | Override the PID-file directory from config. The file `movarr.pid` is created inside. | *(from config)* |
 | `--library-path <path[,path...]>` | Comma-separated list of library root paths, overrides `general.library_path_list` in config. Example: `/media/movies,/media/4k`. | *(from config)* |
-| `--once` | Run each enabled scheduler task once, then exit (foreground mode). | `false` |
+| `--once` | Run each enabled scheduler task once, then exit (foreground mode). Post-processing runs regardless of its cron window. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
 
@@ -142,13 +142,37 @@ automatically on first run. The file is divided into the sections below.
 
 ### `schedule`
 
-Each of the three background tasks has its own schedule block with the same keys:
+`acquisition` and `queue_management` share one schedule shape:
 
 | Key | Description | Default |
 | --- | ----------- | ------- |
 | `enabled` | Enable or disable this task. | `true` |
-| `schedule_time_mins` | Interval in minutes between runs. | `30` (acquisition), `5` (queue_management / post_processing) |
+| `schedule_time_mins` | Interval in minutes between runs. | `30` (acquisition), `5` (queue_management) |
 | `run_on_start` | Run this task immediately when movarr starts, before the first interval elapses. | `true` |
+
+`post_processing` is scheduled by crontab instead:
+
+| Key | Description | Default |
+| --- | ----------- | ------- |
+| `enabled` | Enable or disable this task. | `true` |
+| `run_on_start` | Run this task immediately when movarr starts, even outside the cron windows. Set to `false` for strict out-of-hours operation. | `true` |
+| `cron` | A 5-field crontab expression, or a list of them whose windows are unioned. | `"*/5 * * * *"` |
+
+`schedule.timezone` sets the IANA timezone the expressions are evaluated in (default: the container's
+timezone, which is often UTC). The default also needs a resolvable local zone, so a container with no timezone
+database must install `tzdata` — otherwise startup is rejected, both for the default and for a valid name such as
+`Australia/Sydney`. Example — copy only overnight on weekdays, and only
+before 06:00 at weekends:
+
+```yaml
+schedule:
+  timezone: "Australia/Sydney"
+  post_processing:
+    enabled: true
+    cron:
+      - "* 0-7,23 * * 1-5"   # Mon-Fri 00:00-07:59 and 23:00-23:59
+      - "* 0-5    * * 0,6"   # Sat/Sun 00:00-05:59
+```
 
 Tasks: `acquisition`, `queue_management`, `post_processing`.
 
@@ -381,15 +405,42 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 
 ## Scheduler
 
-movarr runs three schedulers concurrently on a **fixed interval** (APScheduler). The next fire time is computed
-from the previous *scheduled* time, so drift does not accumulate; `max_instances=1` prevents overlap, and a run
-that overruns its interval is followed immediately by one coalesced run rather than a skipped one.
+movarr runs three schedulers concurrently on one APScheduler instance. Acquisition and queue management use a
+**fixed interval**; the next fire time is computed from the previous *scheduled* time, so drift does not
+accumulate. Post-processing uses a **crontab expression**, evaluated in `schedule.timezone`.
 
-| Task | Default interval | Config key |
-| ---- | ---------------- | ---------- |
-| Acquisition | 30 min | `schedule.acquisition` |
-| Queue management | 5 min | `schedule.queue_management` |
-| Post-processing | 5 min | `schedule.post_processing` |
+All three jobs run with `max_instances=1`, so a run in flight is never overlapped, and `coalesce=True`, so a run
+that overruns its slot is followed by one coalesced run rather than a burst of catch-ups.
+
+| Task | Schedule | Config key |
+| ---- | -------- | ---------- |
+| Acquisition | every 30 min | `schedule.acquisition` |
+| Queue management | every 5 min | `schedule.queue_management` |
+| Post-processing | `*/5 * * * *` | `schedule.post_processing` |
+
+Post-processing is the task that saturates disk IO, so it is the one worth pinning to quiet hours. Two details
+matter when writing its expression:
+
+- **Hours are inclusive, minutes are not.** Hour `0-5` runs from 00:00 to 05:59; the window ends when the hour
+  field stops matching. The minute field sets the cadence inside the window (`*/5` = every five minutes).
+- **Weekday numbers follow crontab, not APScheduler.** `0` and `7` are Sunday, `1` is Monday, `5` is Friday,
+  and a range such as `0-7` means every day. Day names (`mon`..`sun`) are accepted in any case (`MON-FRI`
+  works) and are the safest choice. An expression that restricts *both* day-of-month and day-of-week is
+  rejected, because crontab would OR the two fields while the scheduler ANDs them.
+
+Upgrading from config version 2.24.0 converts the old `schedule_time_mins` into a `cron` cadence. Up to one week
+the cadence never runs more often than the interval did, measured on the wall clock so a daylight-saving shift can
+compress one gap by an hour (90 minutes becomes every two hours); longer intervals use
+daily, weekly or monthly cadences up to 28 days, and anything longer uses a yearly cadence (so a 30-day interval
+becomes yearly rather than risking a more frequent February run). Calendar cadences can drift by a few days because
+months and years vary in length. A warning is logged whenever the cadence has to round up, whenever the old interval exceeded a year, and
+whenever the old value is not a whole number of minutes (that falls back to the yearly cadence). A non-positive
+interval is rejected, and a `cron` value already present in the file is kept as written unless this version cannot
+build a trigger from it, in which case it is replaced by the converted interval and a warning is logged.
+
+A restart with `run_on_start: true` runs post-processing immediately, even outside the window. Set
+`run_on_start: false` if restarts must also respect it. `--once` always runs post-processing and logs that the
+window was bypassed.
 
 Any task can be disabled independently by setting `enabled: false` in its schedule block.
 

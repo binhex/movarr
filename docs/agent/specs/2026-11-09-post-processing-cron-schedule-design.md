@@ -129,14 +129,24 @@ work starts.
 
 | Existing `schedule.post_processing.schedule_time_mins` | Migrated `cron` |
 | --- | --- |
-| 1 to 59 | `*/N * * * *` |
-| whole hours, 60 to 1380 (e.g. 60, 120, 1380) | `0 */K * * *` where `K = N / 60` |
-| anything else (e.g. 90) | `*/5 * * * *` plus a WARNING quoting the discarded value |
+| 1 to 60 | the smallest divisor of 60 that is at least N: `*/5`, `*/10` for 7, `0 * * * *` for 60 |
+| 61 to 1440 | the smallest divisor of 1440 that is at least N: `0 */2 * * *` for 90, `0 0 * * *` for 1380 |
+| 1441 to 10080 | `0 0 * * 0` (weekly) |
+| 10081 to 40320 (28 days) | `0 0 1 * *` (monthly; 28 days is the shortest month) |
+| beyond 40320 | `0 0 1 1 *` (yearly) |
+| missing, non-numeric, or not a whole number of minutes | `0 0 1 1 *` plus a WARNING naming the yearly cadence |
+| zero or negative | rejected with a `ValueError` (the old field required `gt=0`) |
 
 The migration removes `schedule.post_processing.schedule_time_mins`, preserves `enabled` and `run_on_start`, and
 bumps `general.config_version`. The existing machinery writes `config.yml.bak.2.24.0` before the rewrite, and the
 merged rewrite drops the removed key from the file. Re-running the migration on an already-migrated config is a
 no-op because the version guard skips it.
+
+Every band rounds *up* to the next cadence a 5-field crontab repeats evenly, so the migrated schedule never runs
+more often than the interval did (calendar cadences above a week can drift by days, and are warned about). A
+`cron` value already in the file is kept unless this version cannot build a trigger from it; an unusable value is
+replaced by the converted interval, or by the yearly cadence when there is no interval to convert, and a warning
+is logged.
 
 ## Scheduler wiring
 

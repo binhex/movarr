@@ -416,44 +416,44 @@ class TestPostProcessingCronConfig:
 
     def test_string_cron_is_normalised_to_list(self) -> None:
         """A single expression is stored as a one-element list."""
-        config = Config(schedule={"post_processing": {"cron": "*/5 0-5 * * *"}})
+        config = Config.model_validate({"schedule": {"post_processing": {"cron": "*/5 0-5 * * *"}}})
         assert config.schedule.post_processing.cron == ["*/5 0-5 * * *"]
 
     def test_list_cron_is_accepted(self) -> None:
         """Several expressions are accepted and preserved in order."""
         expressions = ["* 0-7,23 * * 1-5", "* 0-5 * * 0,6"]
-        config = Config(schedule={"post_processing": {"cron": expressions}})
+        config = Config.model_validate({"schedule": {"post_processing": {"cron": expressions}}})
         assert config.schedule.post_processing.cron == expressions
 
     def test_invalid_expression_names_the_entry(self) -> None:
         """An invalid expression reports the key path and index."""
         with pytest.raises(ValidationError, match=r"cron\[0\]"):
-            Config(schedule={"post_processing": {"cron": ["@daily"]}})
+            Config.model_validate({"schedule": {"post_processing": {"cron": ["@daily"]}}})
 
     def test_never_firing_expression_is_rejected(self) -> None:
         """An impossible date is rejected at config load."""
         with pytest.raises(ValidationError, match="never fires"):
-            Config(schedule={"post_processing": {"cron": ["0 0 30 2 *"]}})
+            Config.model_validate({"schedule": {"post_processing": {"cron": ["0 0 30 2 *"]}}})
 
     def test_day_of_month_with_day_of_week_is_rejected(self) -> None:
         """Restricted day-of-month plus day-of-week is ambiguous and rejected."""
         with pytest.raises(ValidationError, match="restricts both day-of-month and day-of-week"):
-            Config(schedule={"post_processing": {"cron": ["0 0 1 * 1"]}})
+            Config.model_validate({"schedule": {"post_processing": {"cron": ["0 0 1 * 1"]}}})
 
     def test_non_string_entry_is_rejected(self) -> None:
         """List entries must be strings."""
         with pytest.raises(ValidationError, match=r"cron\[1\] must be a string"):
-            Config(schedule={"post_processing": {"cron": ["* * * * *", 5]}})
+            Config.model_validate({"schedule": {"post_processing": {"cron": ["* * * * *", 5]}}})
 
     def test_empty_list_is_rejected(self) -> None:
         """An empty list would schedule nothing and is rejected."""
         with pytest.raises(ValidationError, match="at least one expression"):
-            Config(schedule={"post_processing": {"cron": []}})
+            Config.model_validate({"schedule": {"post_processing": {"cron": []}}})
 
     def test_invalid_timezone_is_rejected(self) -> None:
         """An unknown zone name is rejected and names the key."""
         with pytest.raises(ValidationError, match="schedule.timezone"):
-            Config(schedule={"timezone": "Mars/Olympus"})
+            Config.model_validate({"schedule": {"timezone": "Mars/Olympus"}})
 
     def test_post_processing_has_no_interval_key(self) -> None:
         """schedule_time_mins no longer exists on the post-processing block."""
@@ -1245,14 +1245,18 @@ Expected: all four clean
 - [ ] **Step 3: Sanity-check the migration by hand**
 
 ```bash
-printf "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 5\n" > /tmp/movarr-cron-check.yml
-uv run movarr --config-path /tmp/movarr-cron-check.yml --test
-cat /tmp/movarr-cron-check.yml
-rm -f /tmp/movarr-cron-check.yml
+rm -rf /tmp/movarr-cron-check && mkdir -p /tmp/movarr-cron-check
+printf "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 5\n" > /tmp/movarr-cron-check/movarr.yml
+uv run movarr --config-path /tmp/movarr-cron-check --test
+cat /tmp/movarr-cron-check/movarr.yml
+ls /tmp/movarr-cron-check
+rm -rf /tmp/movarr-cron-check
 ```
 
+`--config-path` takes a **directory** containing `movarr.yml`; passing a file path is rejected by the CLI.
+
 Expected: config validates; the file now contains `cron: '*/5 * * * *'` under `schedule.post_processing`, no
-`schedule_time_mins` there, and `config_version: 2.25.0`
+`schedule_time_mins` there, `config_version: 2.25.0`, and a `movarr.yml.bak.2.24.0` backup sits beside it.
 
 - [ ] **Step 4: Confirm the tree is clean**
 
@@ -1275,3 +1279,7 @@ Expected: clean tree, six commits (one per task) on top of `940751f`
   `_DEFAULT_POST_PROCESSING_CRON`, `_migrate_v224_to_v225`, `_interval_to_cron`.
 - Deliberate deviation from the spec's test command: `pyproject.toml` carries `--cov-fail-under=95`; Task 7 adds
   `--cov-fail-under=100` explicitly, which is stricter and matches the spec's intent.
+- Test-construction note (found during implementation): the config tests build invalid configs with
+  `Config.model_validate({"schedule": {...}})`, not `Config(schedule={...})`. The latter is a mypy `arg-type`
+  error under the project's strict pydantic plugin, because `schedule` is typed `ScheduleConfig`; `model_validate`
+  takes `Any` and still exercises the same validators.
