@@ -146,3 +146,46 @@ Two complexity reductions were made in this change rather than recorded as new d
 Note on the tool's own tables: `render_function_table` shows only the top 20 rows
 (`--crap-top-n` defaults to 20, and that flag is outside the two the tech-debt skill permits), so the
 per-file "#>=thr" column is the authoritative count of functions at or above the threshold.
+
+## Addendum 2026-11-10: `schedule_time_units` cleanup
+
+Re-measured during the tech-debt step of the obsolete-key migration
+(`docs/agent/plans/2026-11-10-remove-schedule-time-units.md`), using the documented command with the
+plugin provisioned (it is still not a declared dev dependency; `pytest-crap` 0.3.0):
+
+```bash
+uv run --with pytest-crap pytest --cov --crap --crap-threshold=9
+```
+
+**One function crossed the CC >= 10 refactor trigger** and was fixed rather than recorded:
+`_cron_problem` (CC 11, CRAP 15.06). It was introduced by the post-processing cron feature's review rounds,
+after the 2026-11-09 addendum, and is now split into `_as_cron_entries` (CC 6), `_first_cron_error` (CC 4)
+and `_cron_problem` (CC 3). radon reports no function above CC 9 anywhere in `src/movarr`
+(`uv run --with radon radon cc -j src/movarr/*.py`, filtering on complexity).
+
+**Remaining debt:** 46 functions at CRAP >= 9, every one with CC <= 9, so the standing policy records them
+rather than refactoring. The count rose from 41 because the cron feature's review rounds added helper
+functions (for example `_minutes_to_cron` CC 8 / CRAP 11.64, `_coerce_minutes` CC 9, and two
+`cron_schedule.py` entries at CRAP 9.80 that are both CC 8), plus one entry from a docstring correction:
+the Step 5a audit found `_migrate_v224_to_v225`'s description of its own keep/replace branches was wrong and
+fixed it, and the two extra docstring lines lowered that function's physical-line coverage enough to push its
+CRAP just above 9 (CC 7, unchanged). Shortening the text to stay under the bar would have been gaming the
+metric, so it is recorded here instead.
+
+| File | Functions >= 9 | Max CRAP |
+| --- | --- | --- |
+| `post_processor.py` | 11 | 26.60 |
+| `search.py` | 8 | 21.29 |
+| `config.py` | 8 | 17.00 |
+| `filters.py` | 7 | 11.88 |
+| `qbittorrent.py` | 2 | 11.13 |
+| `notifications.py` | 2 | 11.13 |
+| `cron_schedule.py` | 2 | 9.80 |
+| `imdb_search.py` | 2 | 9.65 |
+| `parsing.py` | 1 | 17.20 |
+| `file_utils.py` | 1 | 10.76 |
+| `queue_manager.py` | 1 | 9.24 |
+| `jackett.py` | 1 | 9.16 |
+
+The change's own code sits below the threshold: `_migrate_v225_to_v226` is CC 6 over 18 physical lines at
+100% statement coverage, and `_as_cron_entries` / `_first_cron_error` are CC 6 / CC 4.

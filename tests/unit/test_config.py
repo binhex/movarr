@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,6 +28,7 @@ from movarr.config import (
     _migrate_v216_to_v217,
     _migrate_v217_to_v218,
     _migrate_v218_to_v219,
+    _migrate_v225_to_v226,
     _strip_path_basename,
     load_config,
 )
@@ -37,6 +38,20 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from pytest_mock import MockerFixture
+
+
+def _write_config(tmp_path: Path, body: str) -> Path:
+    """Write *body* to a config file under *tmp_path* and return its path."""
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(body)
+    return config_path
+
+
+def _config_on_disk(config_path: Path) -> dict[str, Any]:
+    """Return the YAML mapping written at *config_path*."""
+    loaded = yaml.safe_load(config_path.read_text())
+    return loaded if isinstance(loaded, dict) else {}
+
 
 # GeneralConfig defaults
 
@@ -174,7 +189,7 @@ class TestConfigMigration:
         """A v1.0.0 config with notification.email is migrated through all versions."""
         cfg_file = self._v1_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.notification.apprise_urls == []
 
     def test_v1_migration_removes_email_from_disk(self, tmp_path: Path) -> None:
@@ -199,14 +214,14 @@ class TestConfigMigration:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("notification:\n  email:\n    enabled: false\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
 
     def test_v2_config_migrated_to_v21(self, tmp_path: Path) -> None:
         """A v2.0.0 config is migrated to v2.3.0, adding database expiry fields."""
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.0.0'\nnotification:\n  apprise_urls: []\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.database.stalled_expiry_days == 7
 
     def test_v21_config_migrated_to_v22(self, tmp_path: Path) -> None:
@@ -217,7 +232,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.database.failed_expiry_days == 7
 
     def test_v22_config_migrated_to_v23(self, tmp_path: Path) -> None:
@@ -228,7 +243,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.database.passed_expiry_days == 30
 
     def test_v23_config_migrated_to_v24(self, tmp_path: Path) -> None:
@@ -239,7 +254,7 @@ class TestConfigMigration:
             "database:\n  stalled_expiry_days: 7\n  failed_expiry_days: 7\n  passed_expiry_days: 30\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.schedule.acquisition.run_on_start is True
         assert cfg.schedule.queue_management.run_on_start is True
         assert cfg.schedule.post_processing.run_on_start is True
@@ -286,7 +301,7 @@ class TestConfigMigration:
             "  poster_embed_width: 900\n"
         )
         cfg = load_config(cfg_file)
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         on_disk = yaml.safe_load(cfg_file.read_text())
         assert "poster_embed_enabled" not in on_disk.get("notification", {})
         assert "poster_embed_width" not in on_disk.get("notification", {})
@@ -296,7 +311,7 @@ class TestConfigMigration:
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text("general:\n  config_version: '2.21.0'\n")
         cfg = load_config(cfg_file)
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.queue_management.supersede_enabled is False
 
     def test_v222_to_v223_adds_circuit_open_minutes(self, tmp_path: Path) -> None:
@@ -304,7 +319,7 @@ class TestConfigMigration:
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text("general:\n  config_version: '2.22.0'\n")
         cfg = load_config(cfg_file)
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.index_proxy.circuit_open_minutes == 30
 
 
@@ -480,7 +495,7 @@ class TestMigrationV24toV25:
         """A v2.4.0 config is migrated to v2.5.0, adding Prowlarr fields."""
         cfg_file = self._v24_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.index_proxy.prowlarr.host == "localhost"
         assert cfg.index_proxy.prowlarr.port == 9696
         assert cfg.index_site.prowlarr_indexer == "all"
@@ -519,7 +534,7 @@ class TestMigrationV24toV25:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.5.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         backup = tmp_path / "config.yml.bak.2.5.0"
         assert backup.exists()
 
@@ -539,7 +554,7 @@ class TestMigrationV25toV26:
         """A v2.5.0 config with ffprobe_path is migrated to v2.6.0 and the field is removed."""
         cfg_file = self._v25_config(tmp_path)
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         raw = yaml.safe_load(cfg_file.read_text())
         assert "ffprobe_path" not in raw.get("general", {})
 
@@ -554,7 +569,7 @@ class TestMigrationV25toV26:
             "  good_imdb_title_type_list: [movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.filters.allow_country_list == ["us"]
         assert cfg.filters.allow_language_list == ["en"]
         assert cfg.filters.allow_imdb_title_type_list == ["movie"]
@@ -572,7 +587,7 @@ class TestMigrationV25toV26:
             "  bad_movie_title_list: [Bad Movie]\n"
         )
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.filters.reject_index_title_list == ["xvid"]
         assert cfg.filters.reject_genre_list == ["horror"]
         assert cfg.filters.reject_movie_title_list == ["Bad Movie"]
@@ -584,7 +599,7 @@ class TestMigrationV25toV26:
         cfg_file = tmp_path / "config.yml"
         cfg_file.write_text("general:\n  config_version: '2.8.0'\n")
         cfg = load_config(str(cfg_file))
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.notification.index_proxy_alert_hours == 0
         backup = tmp_path / "config.yml.bak.2.8.0"
         assert backup.exists()
@@ -996,12 +1011,12 @@ class TestMigrationV216ToV217:
         )
         config = load_config(p)
         # Runtime version bumped
-        assert config.general.config_version == "2.25.0"
+        assert config.general.config_version == "2.26.0"
         # hook_timeout_mins added
         assert config.post_process.hooks.hook_timeout_mins == 5.0
         # Migration persisted to disk
         on_disk = yaml.safe_load(p.read_text())
-        assert on_disk["general"]["config_version"] == "2.25.0"
+        assert on_disk["general"]["config_version"] == "2.26.0"
         assert on_disk["post_process"]["hooks"].get("hook_timeout_mins") == 5.0
 
 
@@ -1097,7 +1112,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_already_current_with_none_values_strips_and_writes(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """When config is at latest version and has None values, _strip_and_write is called."""
-        from typing import Any
 
         from movarr.config import _CONFIG_VERSION, _run_migrations
 
@@ -1113,7 +1127,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_already_current_no_none_values_returns_without_strip(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """When config is at latest version with no None values, _strip_and_write is NOT called."""
-        from typing import Any
 
         from movarr.config import _CONFIG_VERSION, _run_migrations
 
@@ -1128,7 +1141,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_has_none_values_returns_false_for_clean_dict(self) -> None:
         """_has_none_values returns False when no None values at any depth."""
-        from typing import Any
 
         from movarr.config import _has_none_values
 
@@ -1137,7 +1149,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_has_none_values_returns_true_for_direct_none(self) -> None:
         """_has_none_values returns True when a top-level value is None."""
-        from typing import Any
 
         from movarr.config import _has_none_values
 
@@ -1146,7 +1157,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_has_none_values_returns_true_for_nested_dict_none(self) -> None:
         """_has_none_values returns True when a nested dict value is None."""
-        from typing import Any
 
         from movarr.config import _has_none_values
 
@@ -1155,7 +1165,6 @@ class TestRunMigrationsAlreadyCurrentWithNulls:
 
     def test_has_none_values_returns_true_for_list_with_dict_none(self) -> None:
         """_has_none_values returns True when a list contains a dict with None."""
-        from typing import Any
 
         from movarr.config import _has_none_values
 
@@ -1190,7 +1199,7 @@ class TestLoadConfigDirectoryPath:
         config = load_config(str(config_dir))
         assert isinstance(config, Config)
         assert (config_dir / "movarr.yml").exists()
-        assert config.general.config_version == "2.25.0"
+        assert config.general.config_version == "2.26.0"
         assert config.general.log_path == "logs"
         assert config.general.db_path == "db"
         assert config.general.pid_path == "pids"
@@ -1293,7 +1302,6 @@ class TestDeepMergeDirect:
     """Direct unit tests for _deep_merge covering edge-case branches."""
 
     def test_empty_override_returns_base_unchanged(self) -> None:
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1302,7 +1310,6 @@ class TestDeepMergeDirect:
         assert result == {"a": 1, "b": {"c": 2}}
 
     def test_none_value_in_override_is_skipped(self) -> None:
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1311,7 +1318,6 @@ class TestDeepMergeDirect:
         assert result == {"a": 1, "b": 2, "c": 3}
 
     def test_none_in_nested_dict_is_skipped(self) -> None:
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1320,7 +1326,6 @@ class TestDeepMergeDirect:
         assert result == {"outer": {"inner": "keep", "new_key": "added"}}
 
     def test_non_dict_override_replaces_value(self) -> None:
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1329,7 +1334,6 @@ class TestDeepMergeDirect:
         assert result == {"key": "replaced"}
 
     def test_deeply_nested_merge(self) -> None:
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1340,7 +1344,6 @@ class TestDeepMergeDirect:
 
     def test_base_has_non_dict_value_override_has_dict(self) -> None:
         """When base has a non-dict for a key but override provides a dict, base is replaced."""
-        from typing import Any
 
         from movarr.config import _deep_merge
 
@@ -1359,7 +1362,7 @@ class TestGeneralNull:
         p.write_text("general:\n")
         config = load_config(p)
         assert isinstance(config, Config)
-        assert config.general.config_version == "2.25.0"
+        assert config.general.config_version == "2.26.0"
 
 
 class TestMigrationV216ToV217Isolated:
@@ -1787,7 +1790,7 @@ class TestNullSectionsDuringMigration:
 
         cfg = load_config(cfg_file)
 
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
 
     def test_scalar_section_is_replaced(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "movarr.yml"
@@ -1795,7 +1798,7 @@ class TestNullSectionsDuringMigration:
 
         cfg = load_config(cfg_file)
 
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
         assert cfg.queue_management.stalled_delete_torrent_data is True
 
 
@@ -1835,7 +1838,7 @@ class TestVersionNormalisation:
 
         cfg = load_config(cfg_file)
 
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
 
 
 class TestPaginationAndQueueThresholdValidation:
@@ -1887,7 +1890,7 @@ class TestRemainingNullSectionMigrations:
 
         cfg = load_config(cfg_file)
 
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
 
     def test_scalar_schedule_task(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "movarr.yml"
@@ -1895,7 +1898,7 @@ class TestRemainingNullSectionMigrations:
 
         cfg = load_config(cfg_file)
 
-        assert cfg.general.config_version == "2.25.0"
+        assert cfg.general.config_version == "2.26.0"
 
 
 class TestHookTimeoutValidation:
@@ -2082,11 +2085,6 @@ class TestMigratedCadenceProperty:
 class TestV224Migration:
     """Migration 2.24.0 -> 2.25.0 converts the post-processing interval to cron."""
 
-    def _write(self, tmp_path: Path, body: str) -> Path:
-        config_path = tmp_path / "config.yml"
-        config_path.write_text(body)
-        return config_path
-
     @pytest.mark.parametrize(
         ("minutes", "expected"),
         [
@@ -2110,7 +2108,7 @@ class TestV224Migration:
         self, tmp_path: Path, minutes: int, expected: str
     ) -> None:
         """Expressible intervals map to a cadence no more frequent than the interval."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\n"
             "schedule:\n  post_processing:\n"
@@ -2125,7 +2123,7 @@ class TestV224Migration:
 
     def test_inexact_interval_warns_with_both_cadences(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """A rounded-up interval warns and never runs more often than configured."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 90\n",
         )
@@ -2141,7 +2139,7 @@ class TestV224Migration:
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:
         """Beyond a year no slower cadence exists, so the yearly one warns honestly."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 1051200\n",
         )
@@ -2159,7 +2157,7 @@ class TestV224Migration:
         self, tmp_path: Path, raw: str, expected: str
     ) -> None:
         """Shapes pydantic used to accept must not be downgraded to a slower cadence."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {raw}\n",
         )
@@ -2172,7 +2170,7 @@ class TestV224Migration:
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:
         """A value that is not a number cannot be interpreted, so the yearly cadence is used."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: five\n",
         )
@@ -2186,7 +2184,7 @@ class TestV224Migration:
     @pytest.mark.parametrize("minutes", [0, -5])
     def test_non_positive_interval_is_rejected(self, tmp_path: Path, minutes: int) -> None:
         """The old field required gt=0, so the migration keeps rejecting those values."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {minutes}\n",
         )
@@ -2199,7 +2197,7 @@ class TestV224Migration:
         self, tmp_path: Path, mocker: MockerFixture, raw: str
     ) -> None:
         """Booleans and collections cannot be read as a minute count."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {raw}\n",
         )
@@ -2211,7 +2209,7 @@ class TestV224Migration:
 
     def test_unusable_cron_value_is_replaced_with_a_warning(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """A non-expression cron value is not silently dropped."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n"
             "    cron: 5\n    schedule_time_mins: 30\n",
@@ -2230,6 +2228,7 @@ class TestV224Migration:
             '    cron: "*/5"\n',
             '    cron: ["*/5 * * * *", ""]\n',
             "    cron: [5]\n",
+            "    cron: []\n",
             "    cron: '0 24 * * *'\n",
             "    cron: '0 0 30 2 *'\n",
             '    cron: ["0 0 30 2 *", "*/5 * * * *"]\n',
@@ -2239,7 +2238,7 @@ class TestV224Migration:
         self, tmp_path: Path, mocker: MockerFixture, cron_yaml: str
     ) -> None:
         """An expression this version cannot parse is replaced instead of aborting the upgrade."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n"
             + cron_yaml
@@ -2258,7 +2257,7 @@ class TestV224Migration:
         """Without tzdata the check degrades to parsing, which keeps a usable expression."""
         from zoneinfo import ZoneInfoNotFoundError
 
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n"
             "    cron: '0 2 * * *'\n    schedule_time_mins: 5\n",
@@ -2277,7 +2276,7 @@ class TestV224Migration:
         """Parsing alone still rejects a bad expression when no tz database is available."""
         from zoneinfo import ZoneInfoNotFoundError
 
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n"
             "    cron: 'not a cron'\n    schedule_time_mins: 15\n",
@@ -2293,7 +2292,7 @@ class TestV224Migration:
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:
         """Rejecting a pre-staged expression must not widen the schedule to every five minutes."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    cron: '0 2 30 2 *'\n",
         )
@@ -2305,7 +2304,7 @@ class TestV224Migration:
 
     def test_absent_interval_and_cron_keep_the_schema_default(self, tmp_path: Path) -> None:
         """A minimal 2.24.0 config ran every five minutes and must keep doing so."""
-        config_path = self._write(tmp_path, "general:\n  config_version: '2.24.0'\nschedule: {}\n")
+        config_path = _write_config(tmp_path, "general:\n  config_version: '2.24.0'\nschedule: {}\n")
 
         config = load_config(config_path)
 
@@ -2314,7 +2313,7 @@ class TestV224Migration:
     @pytest.mark.parametrize("minutes", [-5.5, -0.5])
     def test_negative_fractional_interval_is_rejected(self, tmp_path: Path, minutes: float) -> None:
         """The old field required gt=0, which also rejected non-integral negatives."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {minutes}\n",
         )
@@ -2324,7 +2323,7 @@ class TestV224Migration:
 
     def test_null_cron_with_an_interval_is_converted(self, tmp_path: Path) -> None:
         """A null cron placeholder is treated as absent, so the interval still migrates."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n"
             "    cron:\n    schedule_time_mins: 30\n",
@@ -2336,7 +2335,7 @@ class TestV224Migration:
 
     def test_existing_cron_expression_is_preserved(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """A hand-written cron in a pre-2.25.0 config is kept, not overwritten."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\n"
             "schedule:\n  post_processing:\n"
@@ -2352,7 +2351,7 @@ class TestV224Migration:
 
     def test_cron_without_a_legacy_interval_is_left_alone(self, tmp_path: Path) -> None:
         """A cron-only block migrates without inventing an interval."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    cron: '30 1 * * 1'\n",
         )
@@ -2363,7 +2362,7 @@ class TestV224Migration:
 
     def test_interval_key_is_removed_from_disk(self, tmp_path: Path) -> None:
         """The obsolete key is not left behind in the rewritten file."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 5\n",
         )
@@ -2376,7 +2375,7 @@ class TestV224Migration:
 
     def test_enabled_and_run_on_start_are_preserved(self, tmp_path: Path) -> None:
         """Enabled flags survive the migration untouched."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\n"
             "schedule:\n  post_processing:\n"
@@ -2392,15 +2391,15 @@ class TestV224Migration:
 
     def test_version_is_bumped(self, tmp_path: Path) -> None:
         """The rewritten file records the new schema version."""
-        config_path = self._write(tmp_path, "general:\n  config_version: '2.24.0'\n")
+        config_path = _write_config(tmp_path, "general:\n  config_version: '2.24.0'\n")
 
         load_config(config_path)
 
-        assert yaml.safe_load(config_path.read_text())["general"]["config_version"] == "2.25.0"
+        assert yaml.safe_load(config_path.read_text())["general"]["config_version"] == "2.26.0"
 
     def test_backup_of_the_old_file_is_created(self, tmp_path: Path) -> None:
         """The pre-migration file is backed up before rewriting."""
-        config_path = self._write(tmp_path, "general:\n  config_version: '2.24.0'\n")
+        config_path = _write_config(tmp_path, "general:\n  config_version: '2.24.0'\n")
 
         load_config(config_path)
 
@@ -2408,7 +2407,7 @@ class TestV224Migration:
 
     def test_migration_is_idempotent(self, tmp_path: Path) -> None:
         """Re-loading a migrated file leaves the cron expression unchanged."""
-        config_path = self._write(
+        config_path = _write_config(
             tmp_path,
             "general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: 7\n",
         )
@@ -2427,3 +2426,245 @@ class TestCronFeatureErrorBranches:
         """A scalar that is neither a string nor a list is rejected."""
         with pytest.raises(ValidationError, match="must be a 5-field crontab expression or a list of them"):
             Config.model_validate({"schedule": {"post_processing": {"cron": 5}}})
+
+
+class TestV225Migration:
+    """Migration 2.25.0 -> 2.26.0 removes the obsolete schedule_time_units key."""
+
+    def test_key_is_removed_from_all_three_blocks(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """Every task block loses the key, the INFO line names all three, and the version is bumped."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n"
+            "  acquisition:\n    schedule_time_mins: 30\n    schedule_time_units: minutes\n"
+            "  queue_management:\n    schedule_time_mins: 5\n    schedule_time_units: minutes\n"
+            "  post_processing:\n    cron: '*/5 0-5 * * *'\n    schedule_time_units: minutes\n",
+        )
+        mock_info = mocker.patch("movarr.config.logger.info")
+
+        load_config(config_path)
+
+        on_disk = _config_on_disk(config_path)["schedule"]
+        for block in ("acquisition", "queue_management", "post_processing"):
+            assert "schedule_time_units" not in on_disk[block], block
+        assert _config_on_disk(config_path)["general"]["config_version"] == "2.26.0"
+        messages = [str(call.args[0]).format(*call.args[1:]) for call in mock_info.call_args_list]
+        removed = [message for message in messages if "Removed obsolete schedule_time_units" in message]
+        assert len(removed) == 1
+        for block in ("acquisition", "queue_management", "post_processing"):
+            assert block in removed[0], block
+
+    def test_one_info_line_names_every_cleaned_block(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """The removal is announced once, naming each block."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n"
+            "  acquisition:\n    schedule_time_mins: 30\n    schedule_time_units: minutes\n"
+            "  queue_management:\n    schedule_time_mins: 5\n"
+            "  post_processing:\n    cron: '*/5 * * * *'\n    schedule_time_units: minutes\n",
+        )
+        mock_info = mocker.patch("movarr.config.logger.info")
+
+        load_config(config_path)
+
+        # The migration machinery logs its own INFO lines, so select ours before counting.
+        messages = [str(call.args[0]).format(*call.args[1:]) for call in mock_info.call_args_list]
+        removed = [message for message in messages if "Removed obsolete schedule_time_units" in message]
+        assert len(removed) == 1
+        assert "acquisition" in removed[0]
+        assert "post_processing" in removed[0]
+        # queue_management exists but never carried the key, so it must not be reported.
+        assert "queue_management" not in removed[0]
+
+    @pytest.mark.parametrize("rendered", ["hours", "null", "'null'", "''"])
+    def test_value_is_removed_whatever_it_says(self, tmp_path: Path, mocker: MockerFixture, rendered: str) -> None:
+        """Every parsed value shape is removed, and the block still counts as cleaned.
+
+        A null value leaves the file either way, because the rewrite drops nulls; the INFO line is
+        what proves the migration *detected* it as present, and the warning assertion guards the
+        on-disk result.
+        """
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n"
+            "  acquisition:\n"
+            f"    schedule_time_mins: 30\n    schedule_time_units: {rendered}\n",
+        )
+        mock_info = mocker.patch("movarr.config.logger.info")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        load_config(config_path)
+
+        assert "schedule_time_units" not in _config_on_disk(config_path)["schedule"]["acquisition"]
+        messages = [str(call.args[0]).format(*call.args[1:]) for call in mock_info.call_args_list]
+        assert any("Removed obsolete schedule_time_units from: acquisition" in message for message in messages)
+        assert not any("schedule_time_units" in str(call) for call in mock_warning.call_args_list)
+
+    def test_present_block_without_the_key_is_not_reported(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A block that exists but lacks the key must not be named as cleaned."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\nschedule:\n  acquisition:\n    schedule_time_mins: 15\n",
+        )
+        mock_info = mocker.patch("movarr.config.logger.info")
+
+        load_config(config_path)
+
+        messages = [str(call.args[0]) for call in mock_info.call_args_list]
+        assert not any("Removed obsolete schedule_time_units" in message for message in messages)
+        on_disk = _config_on_disk(config_path)
+        assert on_disk["general"]["config_version"] == "2.26.0"
+        assert on_disk["schedule"]["acquisition"]["schedule_time_mins"] == 15
+        assert "schedule_time_units" not in on_disk["schedule"]
+        for block in ("acquisition", "queue_management", "post_processing"):
+            assert "schedule_time_units" not in on_disk["schedule"][block]
+
+    def test_neighbouring_keys_and_sections_survive(self, tmp_path: Path) -> None:
+        """Only the one key is removed."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n"
+            "  acquisition:\n"
+            "    enabled: false\n    schedule_time_mins: 45\n    run_on_start: false\n"
+            "    schedule_time_units: minutes\n"
+            "  post_processing:\n    cron: '*/5 0-5 * * *'\n    schedule_time_units: minutes\n"
+            "filters:\n  minimum_rating: 7.5\n",
+        )
+
+        config = load_config(config_path)
+
+        assert config.schedule.acquisition.schedule_time_mins == 45
+        assert config.schedule.acquisition.enabled is False
+        assert config.schedule.acquisition.run_on_start is False
+        assert config.schedule.post_processing.cron == ["*/5 0-5 * * *"]
+        on_disk = _config_on_disk(config_path)
+        assert on_disk["filters"]["minimum_rating"] == 7.5
+
+    def test_only_the_three_task_blocks_are_swept(self) -> None:
+        """A same-named key in any other block survives, so the sweep cannot widen unnoticed."""
+        raw = {
+            "general": {"config_version": "2.25.0"},
+            "schedule": {
+                "timezone": "UTC",
+                "other_task": {"schedule_time_units": "minutes"},
+                "acquisition": {"schedule_time_mins": 30, "schedule_time_units": "minutes"},
+                "queue_management": None,
+            },
+        }
+
+        result = _migrate_v225_to_v226(raw)
+
+        assert "schedule_time_units" not in result["schedule"]["acquisition"]
+        assert result["schedule"]["other_task"]["schedule_time_units"] == "minutes"
+        assert result["schedule"]["timezone"] == "UTC"
+        # A null block stays null and an absent block is not invented by the migration itself.
+        assert result["schedule"]["queue_management"] is None
+        assert "post_processing" not in result["schedule"]
+        assert result["general"]["config_version"] == "2.26.0"
+
+    @pytest.mark.parametrize("schedule", [None, "nope", 5])
+    def test_non_mapping_schedule_is_left_untouched(self, mocker: MockerFixture, schedule: object) -> None:
+        """A missing or non-mapping schedule is never replaced with a mapping."""
+        raw: dict = {"general": {"config_version": "2.25.0"}}
+        if schedule is not None:
+            raw["schedule"] = schedule
+        mock_info = mocker.patch("movarr.config.logger.info")
+
+        result = _migrate_v225_to_v226(raw)
+
+        if schedule is None:
+            assert "schedule" not in result
+        else:
+            assert result["schedule"] == schedule
+        assert result["general"]["config_version"] == "2.26.0"
+        assert not any("Removed obsolete" in str(call) for call in mock_info.call_args_list)
+
+    def test_aliased_blocks_are_both_reported(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """YAML anchors can bind two block names to one mapping; both must be named."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n"
+            "  acquisition: &task\n    schedule_time_mins: 30\n    schedule_time_units: minutes\n"
+            "  queue_management: *task\n",
+        )
+        mock_info = mocker.patch("movarr.config.logger.info")
+
+        load_config(config_path)
+
+        assert "schedule_time_units" not in _config_on_disk(config_path)["schedule"]["acquisition"]
+        messages = [str(call.args[0]).format(*call.args[1:]) for call in mock_info.call_args_list]
+        removed = [message for message in messages if "Removed obsolete schedule_time_units" in message]
+        assert len(removed) == 1
+        assert "acquisition" in removed[0]
+        assert "queue_management" in removed[0]
+
+    def test_chained_upgrade_from_2_24_0_converts_and_cleans_in_one_pass(self, tmp_path: Path) -> None:
+        """A 2.24.0 file gets the cron conversion and the units cleanup in the same load."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.24.0'\n"
+            "schedule:\n"
+            "  post_processing:\n"
+            "    schedule_time_mins: 5\n"
+            "    schedule_time_units: minutes\n",
+        )
+
+        config = load_config(config_path)
+
+        assert config.schedule.post_processing.cron == ["*/5 * * * *"]
+        on_disk = _config_on_disk(config_path)
+        assert "schedule_time_units" not in on_disk["schedule"]["post_processing"]
+        assert on_disk["general"]["config_version"] == "2.26.0"
+
+    def test_backup_of_the_old_file_is_created(self, tmp_path: Path) -> None:
+        """The pre-migration file is backed up before rewriting."""
+        config_path = _write_config(tmp_path, "general:\n  config_version: '2.25.0'\n")
+
+        load_config(config_path)
+
+        assert (tmp_path / "config.yml.bak.2.25.0").exists()
+
+    def test_migration_is_idempotent(self, tmp_path: Path) -> None:
+        """A second load changes nothing beyond what the first one did."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n  acquisition:\n    schedule_time_mins: 30\n    schedule_time_units: minutes\n",
+        )
+
+        first = load_config(config_path)
+        first_text = config_path.read_text()
+        second = load_config(config_path)
+
+        assert first.schedule.acquisition.schedule_time_mins == second.schedule.acquisition.schedule_time_mins == 30
+        assert config_path.read_text() == first_text
+
+    def test_no_unknown_key_warning_after_migration(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """The key that produced the unknown-key warning is gone from disk."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\n"
+            "schedule:\n  post_processing:\n    cron: '*/5 * * * *'\n    schedule_time_units: minutes\n",
+        )
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        load_config(config_path)
+
+        assert not any("schedule_time_units" in str(call) for call in mock_warning.call_args_list)
+
+    def test_null_block_is_ignored(self, tmp_path: Path) -> None:
+        """A null block is left alone by the migration; the schema defaults fill it in."""
+        config_path = _write_config(
+            tmp_path,
+            "general:\n  config_version: '2.25.0'\nschedule:\n  acquisition:\n",
+        )
+
+        config = load_config(config_path)
+
+        assert config.schedule.acquisition.schedule_time_mins == 30
+        assert _config_on_disk(config_path)["general"]["config_version"] == "2.26.0"

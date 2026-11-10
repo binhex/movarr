@@ -19,10 +19,13 @@ if TYPE_CHECKING:
 
 __all__ = ["Config", "ProwlarrConfig", "load_config"]
 
-_CONFIG_VERSION = "2.25.0"
+_CONFIG_VERSION = "2.26.0"
 _DEFAULT_POST_PROCESSING_CRON = "*/5 * * * *"
 _INITIAL_CONFIG_VERSION = "1.0.0"
 
+# Schedule task blocks that the schema defines. Both the 2.25.0 -> 2.26.0 ``schedule_time_units``
+# sweep and the 2.3.0 -> 2.4.0 ``run_on_start`` sweep iterate this, so the two must stay in step.
+_SCHEDULE_TASK_BLOCKS = ("acquisition", "queue_management", "post_processing")
 # Filenames constructed from directory paths at runtime.  Consumers import these
 # rather than hardcoding the literal, so the name is defined in exactly one place.
 LOG_FILENAME = "movarr.log"
@@ -205,7 +208,7 @@ def _make_migration(
 def _migrate_v23_to_v24(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.3.0 → v2.4.0: add run_on_start: true to all schedule tasks."""
     schedule = _section(raw, "schedule")
-    for task in ("acquisition", "queue_management", "post_processing"):
+    for task in _SCHEDULE_TASK_BLOCKS:
         _section(schedule, task).setdefault("run_on_start", True)
     _section(raw, "general")["config_version"] = "2.4.0"
     return raw
@@ -526,6 +529,34 @@ def _interval_to_cron(minutes: object) -> str:
     return expression
 
 
+def _as_cron_entries(value: object) -> tuple[list[str] | None, str | None]:
+    """Return the cron entries held by *value*, or ``None`` and the reason it is unusable."""
+    entries = [value] if isinstance(value, str) else value
+    if not isinstance(entries, list) or not entries:
+        return None, "it must be a cron expression or a non-empty list of them"
+    if not all(isinstance(entry, str) for entry in entries):
+        return None, "every list entry must be a string"
+    return entries, None
+
+
+def _first_cron_error(entries: list[str], *, build: bool) -> str | None:
+    """Return the first expression error, building a trigger when *build* is true.
+
+    Only ``ValueError`` is converted. ``ZoneInfoNotFoundError`` propagates when *build* is true,
+    because building a trigger needs the zone database; that escape is what the degraded
+    parse-only path in :func:`_cron_problem` relies on.
+    """
+    for entry in entries:
+        try:
+            if build:
+                build_trigger([entry], ZoneInfo("UTC"))
+            else:
+                parse_expression(entry)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
 def _cron_problem(value: object) -> str | None:
     """Return why *value* cannot be used as a ``cron`` setting, or ``None`` when it is usable.
 
@@ -535,28 +566,17 @@ def _cron_problem(value: object) -> str | None:
     file has been rewritten. Checking against UTC is structural; on a host with no timezone
     database the check degrades to parsing alone (warned) because building a trigger needs a zone.
     """
-    entries = [value] if isinstance(value, str) else value
-    if not isinstance(entries, list) or not entries:
-        return "it must be a cron expression or a non-empty list of them"
-    if not all(isinstance(entry, str) for entry in entries):
-        return "every list entry must be a string"
+    entries, problem = _as_cron_entries(value)
+    if entries is None:
+        return problem
     try:
-        for entry in entries:
-            build_trigger([entry], ZoneInfo("UTC"))
+        return _first_cron_error(entries, build=True)
     except ZoneInfoNotFoundError:
         logger.warning(
             "The timezone database is missing, so 'cron' values can only be checked structurally; "
             "expressions that can never fire will not be detected."
         )
-        for entry in entries:
-            try:
-                parse_expression(entry)
-            except ValueError as exc:
-                return str(exc)
-        return None
-    except ValueError as exc:
-        return str(exc)
-    return None
+        return _first_cron_error(entries, build=False)
 
 
 def _is_usable_cron(value: object) -> bool:
@@ -567,8 +587,12 @@ def _is_usable_cron(value: object) -> bool:
 def _migrate_v224_to_v225(raw: dict[str, Any]) -> dict[str, Any]:
     """Migrate v2.24.0 -> v2.25.0: the post-processing interval becomes a cron expression.
 
-    The interval is converted only when the block has no ``cron`` yet, so a hand-written
-    expression that predates the upgrade is kept rather than overwritten.
+    The interval is converted when the block has no usable ``cron`` yet, so a hand-written
+    expression that predates the upgrade is kept rather than overwritten; a ``cron`` value that
+    cannot be used is replaced, by the converted interval when a usable interval is set and by the
+    slowest cadence otherwise. A non-positive legacy interval aborts the load whenever it is
+    actually converted, while an uninterpretable one falls back to the slowest cadence with a
+    warning; when a usable ``cron`` is present the interval is merely discarded.
     """
     post_processing = _section(_section(raw, "schedule"), "post_processing")
     existing = post_processing.pop("schedule_time_mins", None)
@@ -580,18 +604,45 @@ def _migrate_v224_to_v225(raw: dict[str, Any]) -> dict[str, Any]:
                 existing,
             )
     elif existing_cron is not None:
+        # Convert first: a non-positive interval raises here, before anything is announced.
+        replacement = _interval_to_cron(existing) if existing is not None else _MAX_CADENCE_CRON
         logger.warning(
-            "Post-processing config has an unusable 'cron' value {!r} ({}) ; replacing it with {}.",
+            "Post-processing config has an unusable 'cron' value {!r} ({}); replacing it with {!r}.",
             existing_cron,
             _cron_problem(existing_cron),
-            _MAX_CADENCE_CRON if existing is None else "the converted interval",
+            replacement,
         )
-        post_processing["cron"] = [_interval_to_cron(existing) if existing is not None else _MAX_CADENCE_CRON]
+        post_processing["cron"] = [replacement]
     elif existing is not None:
         post_processing["cron"] = [_interval_to_cron(existing)]
     # With neither key present the schema default ("*/5 * * * *") applies, which is the cadence
     # the old model defaulted to, so nothing is written here.
     _section(raw, "general")["config_version"] = "2.25.0"
+    return raw
+
+
+def _migrate_v225_to_v226(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2.25.0 -> v2.26.0: drop the obsolete ``schedule_time_units`` key.
+
+    The key came from siphonator and was never read by movarr, so its only effect was an
+    unknown-key warning. Values are removed unconditionally, blocks that are absent or are not
+    mappings are left alone (never materialised), and one INFO line names the cleaned blocks.
+    """
+    schedule = raw.get("schedule")
+    cleaned: list[str] = []
+    if isinstance(schedule, dict):
+        # Collect first, then mutate: a YAML anchor can bind two block names to one mapping, and
+        # popping while iterating would leave the second name unreported.
+        cleaned = [
+            name
+            for name in _SCHEDULE_TASK_BLOCKS
+            if isinstance(schedule.get(name), dict) and "schedule_time_units" in schedule[name]
+        ]
+        for name in cleaned:
+            schedule[name].pop("schedule_time_units", None)
+    if cleaned:
+        logger.info("Removed obsolete schedule_time_units from: {}.", ", ".join(cleaned))
+    _section(raw, "general")["config_version"] = "2.26.0"
     return raw
 
 
@@ -647,6 +698,7 @@ MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "2.22.0": _migrate_v222_to_v223,
     "2.23.0": _migrate_v223_to_v224,
     "2.24.0": _migrate_v224_to_v225,
+    "2.25.0": _migrate_v225_to_v226,
 }
 
 _VALID_LOG_LEVELS = frozenset({"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})

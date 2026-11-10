@@ -308,18 +308,19 @@ The version bump breaks every assertion that expects the current schema version:
 ```bash
 sed -i 's/"2\.25\.0"/"2.26.0"/g' tests/unit/test_config.py
 grep -n '"2\.25\.0"' tests/unit/test_config.py
-grep -n '"2\.24\.0"' tests/unit/test_config.py | head
+grep -c '2\.24\.0' tests/unit/test_config.py
 ```
 
-Expected: the first `grep` prints nothing; the second still shows the `TestV224Migration` assertions and the
-`config.yml.bak.2.24.0` backup path, which must stay as they are (they describe that migration's own input and
-backup, not the current version).
+Expected: the first `grep` prints nothing. The second prints `26`: every `2.24.0` occurrence is a single-quoted YAML
+input (`'2.24.0'`), a comment/docstring, or the double-quoted backup path `"config.yml.bak.2.24.0"` — never a
+double quote immediately before `2`, which is why the sweep above cannot touch them. Those describe that migration's
+own input and backup, not the current version, so they must stay.
 
 - [ ] **Step 7: Run the whole config suite**
 
 Run: `uv run pytest tests/unit/test_config.py -q --no-cov`
 
-Expected: all pass (the suite is ~250 tests; the previous count was 241 plus the 12 new ones).
+Expected: all pass — 285 tests (273 in this file before the change, plus the 12 new cases).
 
 - [ ] **Step 8: Commit**
 

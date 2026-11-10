@@ -437,6 +437,9 @@ months and years vary in length. A warning is logged whenever the cadence has to
 whenever the old value is not a whole number of minutes (that falls back to the yearly cadence). A non-positive
 interval is rejected, and a `cron` value already present in the file is kept as written unless this version cannot
 build a trigger from it, in which case it is replaced by the converted interval and a warning is logged.
+Upgrading also deletes the obsolete `schedule_time_units` key from `acquisition`, `queue_management` and
+`post_processing`: it came from siphonator and was never read by movarr, so the only thing it produced was an
+unknown-key warning.
 
 A restart with `run_on_start: true` runs post-processing immediately, even outside the window. Set
 `run_on_start: false` if restarts must also respect it. `--once` always runs post-processing and logs that the
