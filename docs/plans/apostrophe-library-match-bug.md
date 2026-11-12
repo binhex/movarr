@@ -88,7 +88,7 @@ From `movarr.log`:
 
 But the library already contained:
 ```
-/mnt/disk14/Movies/UHD/Vicky/Bridget Jones's Diary (2001)/Bridget.Jones.Diary.2001.2160p.BluRay.REMUX.HEVC.DTS-HD.MA.TrueHD.7.1.Atmos-FGT.mkv.mkv
+/mnt/disk14/Movies/UHD/<profile>/Bridget Jones's Diary (2001)/<Release>.mkv.mkv
 ```
 
 ## Fix Implemented (TDD)

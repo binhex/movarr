@@ -207,19 +207,19 @@ post_processing.run()
 ```yaml
 post_process:
   copy_library_rules:
-    - name: "Paul"
+    - name: "adult"
       genres: ["Sci-Fi", "Action"]
       max_certification:        # null = no cert check
-      hd_path: "/media/Movies/HD/Paul"
-      uhd_path: "/media/Movies/UHD/Paul"
-    - name: "Zack"
+      hd_path: "/media/Movies/HD/adult"
+      uhd_path: "/media/Movies/UHD/adult"
+    - name: "kids"
       genres: ["Animation", "Family"]
       max_certification: "12A"   # BBFC ceiling
-      hd_path: "/media/Movies/HD/Zack"
-      uhd_path: "/media/Movies/UHD/Zack"
+      hd_path: "/media/Movies/HD/kids"
+      uhd_path: "/media/Movies/UHD/kids"
   default_copy_library:
-    hd_path: "/media/Movies/HD/Paul"
-    uhd_path: "/media/Movies/UHD/Paul"
+    hd_path: "/media/Movies/HD/adult"
+    uhd_path: "/media/Movies/UHD/adult"
 ```
 
 - **Scoring:** Each rule scores = count of overlapping genres. Highest unique score wins.

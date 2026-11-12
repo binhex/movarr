@@ -5,18 +5,18 @@
 
 ## Bug Summary
 
-Movarr downloaded a 1080p copy of "Léon: The Professional (1994)" despite an existing 2160p REMUX at `/media/Movies/UHD/Paul/Leon The Professional (1994)/`. Two independent issues caused the library dedup check to miss the existing UHD file.
+Movarr downloaded a 1080p copy of "Léon: The Professional (1994)" despite an existing 2160p REMUX at `/media/Movies/UHD/<profile>/<Title> (<Year>)/`. Two independent issues caused the library dedup check to miss the existing UHD file.
 
 ## Evidence from Logs
 
 ```
 Line 43309: OMDb: 'Leon: The Professional (1994)' does not match 'Leon' (1994).
 Line 43322: Index title '...Leon.1994...1080p...' passes library check — library file
-            'Léon.1994.1080p.Bluray.x264.mkv' at 1080p found (lib score: 70, index score: 80).
+            '<Original-Title>.1994.1080p.Bluray.x264.mkv' at 1080p found (lib score: 70, index score: 80).
 Line 43326: Notification sent: movarr: Léon (1994) — IMDb 8.5 — Queued
 ```
 
-The library check found a **lower quality 1080p** file (`Léon.1994.1080p.Bluray.x264.mkv`) that happened to match, but missed the **higher quality 2160p REMUX** at `Leon.The.Professional.1994.2160p.BluRay.REMUX...mkv`.
+The library check found a **lower quality 1080p** file (`<Original-Title>.1994.1080p.Bluray.x264.mkv`) that happened to match, but missed the **higher quality 2160p REMUX** at `<Full-Title>.1994.2160p.BluRay.REMUX...mkv`.
 
 ## Root Cause 1: Accented Characters Survive Normalization
 
@@ -42,7 +42,7 @@ _check_library_canonical (filters.py:586)
   → imdb_title = "Léon"
   → canonical_compare = normalise_for_compare("Léon")  → "léon"
   → _walk_library_files("léon", "1994", ...)
-    → _match_library_file("Leon.The.Professional.1994...mkv", "léon", "1994")
+    → _match_library_file("<Full-Title>.1994...mkv", "léon", "1994")
       → san = sanitise(...) → "Leon The Professional 1994..."
       → lib_title = extract_movie_title(san) → "Leon The Professional"
       → norm = normalise_for_compare("Leon The Professional") → "leontheprofessional"
@@ -74,7 +74,7 @@ There is no alternate-title lookup or fuzzy matching.
 
 ## Why the 1080p File WAS Found
 
-The 1080p library file `Léon.1994.1080p.Bluray.x264.mkv` happened to match because:
+The 1080p library file `<Original-Title>.1994.1080p.Bluray.x264.mkv` happened to match because:
 - Its filename contains the same accented `é` as the IMDb title
 - Its movie title portion is just `Léon` (same as the IMDb original title)
 - `"léon" == "léon"` → match ✓

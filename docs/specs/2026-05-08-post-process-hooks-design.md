@@ -60,7 +60,7 @@ is enabled — copying and deletion are independent features.
 ### Placeholders
 
 `{dir}` is substituted with the resolved absolute path of the destination directory
-(e.g. ``/media/movies/HD/Paul/The Matrix (1999)``).
+(e.g. ``/media/movies/HD/<profile>/The Matrix (1999)``).
 
 `{leaf}` is substituted with the last path component of that directory
 (e.g. ``The Matrix (1999)``).
