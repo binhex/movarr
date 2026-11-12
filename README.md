@@ -454,6 +454,126 @@ window was bypassed.
 
 Any task can be disabled independently by setting `enabled: false` in its schedule block.
 
+## Troubleshooting
+
+### Immutable (read-only) media with no_ransom
+
+Three facts explain almost every failure in this area:
+
+1. **The flag lives on the array disk, not on the share.** `/media` (Unraid's `/mnt/user`) is a shfs/FUSE union
+   mount and does not implement the ioctl `chattr` and `lsattr` use, so both fail there with
+   `Operation not supported while reading flags` no matter which capabilities the container has. `/mnt/disk*`
+   does support them, which is why `no_ransom.sh` walks those paths.
+2. **Clear the flag before the write, not after the failure.** movarr runs hooks around each stage, so the unlock
+   belongs in `pre_copy` (and `pre_delete`, before superseded files are removed) and the re-lock in `post_copy`
+   (or `post_delete`). movarr's own `chattr -i` fallback cannot help through a user share.
+3. **A name on two disks cannot be replaced.** The union resolves a name to the lowest numbered disk, so movarr
+   keeps seeing the old copy while the replacement lands on the other disk. Clear duplicates before retrying.
+
+#### Container prerequisites
+
+| Requirement | Why it is needed | Symptom when missing |
+| --- | --- | --- |
+| `--cap-add LINUX_IMMUTABLE` (or `--privileged`) | the `chattr` ioctl needs the capability | `chattr -i failed (rc=1): ... Operation not permitted` |
+| `/mnt` mounted into the container as `/mnt` | unlock commands must use the array disk paths | `chattr: Operation not supported while reading flags` |
+| `sudo` installed, passwordless for the movarr user (`PUID`/`PGID`) | movarr runs unprivileged, the flag needs root | `sudo: command not found`, or `chattr ... Operation not permitted` |
+| The lock script present inside the container | hooks execute inside the container, not on the host | the hook exits `127` |
+| Hooks configured (see below) | movarr cannot unlock a shfs destination by itself | `[Errno 1] Operation not permitted` when replacing |
+
+Confirm the first two with `docker inspect <container> --format '{{json .HostConfig.CapAdd}} {{json .Mounts}}'`.
+
+#### Recommended hooks
+
+`{leaf}` is the movie folder name, so a run only touches the folder being processed; the command executes inside
+the container.
+
+```yaml
+post_process:
+  hooks:
+    pre_copy: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock no --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+    post_copy: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock yes --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+    pre_delete: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock no --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+    post_delete: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock yes --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+    hook_timeout_mins: 15
+```
+
+Two ordering rules are easy to get wrong:
+
+- `post_copy` runs **before** the superseded-file pass. With `delete_lower_quality: true`, re-locking there makes
+  the deletion fail permanently (one `ERROR`, no retry - the title is already marked `Completed`). Unlock in
+  `pre_delete` and re-lock in `post_delete` instead.
+- `post_copy` only fires when a copy succeeded, so an aborted copy leaves that folder writable until the next
+  successful run or the next lock pass. Keep `hook_timeout_mins` above `0` so a hung hook cannot block
+  post-processing forever.
+
+#### Reading the log
+
+| Log line | Meaning | Fix |
+| --- | --- | --- |
+| `chattr: Operation not supported while reading flags on /media/...` | a `chattr` call reached the union mount | address `/mnt/disk*` in the hook (example above) |
+| `chattr -i failed (rc=1): ... Operation not permitted` | `chattr` ran without root or the capability | use `sudo`, add `--cap-add LINUX_IMMUTABLE` |
+| `Could not replace '...': [Errno 1] Operation not permitted` | the destination is still immutable | unlock the folder in `pre_copy` |
+| `Staged copy '...' disappeared while swapping in '...': [Errno 2] No such file or directory` | the rename relocated the staged copy to another array disk | same fix; then check for a duplicate |
+| `Replacement of '...' did not take effect: the path resolves to different content` | a same-named copy on another disk shadows the new file | remove the stale duplicate (below) |
+| `Destination '...' checksum mismatch (src=..., dst=...); replacing.` | the library file differs from the download, so a replace starts (normal) | none - unless it repeats every run, then check for a duplicate |
+| `Could not remove stale staging file '...'` | a leftover `.part` from an interrupted run is itself locked | unlock it; unlocked leftovers are reclaimed after two hours |
+| `Permission denied deleting '...'` and `Failed to auto-delete superseded library file` | the folder was re-locked before the deletion pass | unlock in `pre_delete`, re-lock in `post_delete`, not `post_copy` |
+| `pre_copy hook failed (exit 127)` | the command is missing in the container, or `sudo` is unavailable | mount the script, install `sudo`, restart the container |
+| Post-processing stops producing output | `hook_timeout_mins: 0` and a hook is hanging | set a timeout, fix the hook |
+
+#### Diagnostic commands
+
+Run these in the container console; they only read state. Substitute your own routing folder for `<profile>` and
+the real folder name for `<Title> (<Year>)`.
+
+```bash
+# Is the file actually locked?  The user-share path cannot answer this.
+lsattr /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'/*.mkv
+
+# Expected to fail: chattr/lsattr cannot work through the union mount.
+lsattr /media/Movies/UHD/<profile>/'<Title> (<Year>)'/*.mkv
+
+# Which disks hold this title, and is the same file on more than one?
+ls -d /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'
+stat -c '%n %s %z' /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'/*.mkv
+
+# Leftovers from interrupted runs (the rename or the unlock failed mid-swap).
+find /mnt/disk*/Movies -name '.*.movarr-*.part'
+
+# Is sudo usable without a password prompt?
+sudo -n true && echo "sudo ok"
+```
+
+#### Recovering a title that keeps retrying
+
+1. Find every copy: `ls -d /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'`.
+2. If one file name appears on several disks, compare `stat -c '%n %s %z'` for each and keep the newest or
+   largest (a copy left by a failed replace is usually the newer one).
+3. Delete the stale copies on the disk that holds them: `chattr -i '<path>' && rm -f '<path>'`.
+4. Delete leftover `.part` files the same way (unlock first, or the delete only logs a permission error).
+5. Re-lock the copy you kept: `chattr +i '<path>'`.
+6. Let post-processing run again. A healthy run logs `Destination '...' already matches source ...; skipping
+   copy` and then `Marked tag '...' as completed` - no copy, no failure.
+
+#### How movarr replaces an existing file
+
+Knowing the steps makes the messages above easier to place:
+
+1. Copy the download to `.<name>.movarr-<8 hex>.part` beside the destination (dot-prefixed so players ignore it).
+2. Re-read the download and the staged copy, and compare their SHA-256 digests.
+3. Rename the staged file over the destination in one atomic step.
+4. If a destination already existed, re-read it and compare the digest again - this is what catches a cross-disk
+   rename that left the old file visible.
+5. Reclaim leftover staging files from interrupted runs once they are more than two hours old.
+
 ## Development
 
 ```bash
@@ -510,59 +630,12 @@ management pipelines also log a warning and skip their cycles when qBittorrent i
 Set `database.passed_expiry_days: 0`. This prevents movarr from ever re-queuing a title that was previously
 sent to qBittorrent, even if qBittorrent is reset externally.
 
-**Q: Post-processing fails with `Operation not permitted` or `No such file or directory` — why?**
+**Q: Post-processing fails with `Operation not permitted` — where do I start?**
 
-The destination file is still locked (`chattr +i`, set for example by no_ransom), and nothing unlocked it before
-movarr tried to swap the new copy in. movarr's own `chattr -i` fallback runs against the library path, which on
-Unraid is the `/mnt/user` union mount; that mount (shfs/FUSE) does not implement the file-flag ioctl, so chattr
-fails there with `Operation not supported while reading flags` no matter which capabilities the container has.
-The swap then fails with `Operation not permitted`; when the staged file has already been moved across array
-disks the retry logs `Staged copy ... disappeared while swapping in ...` (quoting the underlying
-`No such file or directory`), and a swap that silently lands elsewhere is caught as
-`Replacement ... did not take effect: the path resolves to different content`.
-
-Wire the unlock into the copy path with the `pre_copy` hook, and add a `post_copy` re-lock so the media is not
-left writable. Both commands must target the array disks (`/mnt/disk*`), which no_ransom already does:
-
-```yaml
-post_process:
-  hooks:
-    pre_copy: >-
-      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
-      --lock no --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
-    post_copy: >-
-      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
-      --lock yes --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
-```
-
-`{leaf}` scopes the run to the movie folder being processed, so the hook does not rescan every share.
-
-The hook command runs inside the container, so the no_ransom script must be reachable there and `sudo` must be
-installed and configured for the movarr user - see the container prerequisites in the no_ransom FAQ below.
-`post_copy` is skipped when the copy fails or when only non-video files were copied, so an aborted copy leaves
-that movie folder writable until the next successful run or the next scheduled lock pass.
-
-If `post_process.delete_lower_quality` is enabled, do not re-lock in `post_copy`: that hook runs before the
-superseded-file pass, and a locked file there permanently defeats the deletion - one ERROR in the log, no retry
-(the title is already marked completed, so the pass never runs again for it). Unlock in `pre_delete` and re-lock in
-`post_delete` instead; the deletion FAQ below covers the container prerequisites `pre_delete` needs.
-
-A movie whose file exists on more than one array disk is a separate problem: the union mount resolves the name
-to the lowest disk, so movarr keeps seeing the old copy and cannot replace it. Remove the stale duplicate
-(`ls -d /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'`) before retrying, otherwise every run re-copies the whole
-file.
-
-**Q: I am using no_ransom script to secure my media, is it possible to use the 'pre_delete' hook to unlock existing media before deletion?**
-
-Yes - however there are three additional changes you will need to make to the movarr container for this to work with the no_ransom script:
-
-- Grant chattr additional permissions inside the container
-This is done by adding in the following to the extra parameters field for the container: `--cap-add LINUX_IMMUTABLE`.
-
-- Pass through the 'diskX' shares to the container, this is required for no_ransom as chattr cannot traverse FUSE shares (/mnt/user/...)
-This is done by creating an additional path and setting the container path and host path to `/mnt`.
-
-- chattr MUST be run as root, so in order for no_ransom to operate you either need to switch to root account or use sudo.
+See [Troubleshooting](#troubleshooting). The short version: unlock the movie folder through its array disk path
+(`/mnt/disk*`) in the `pre_copy` hook and re-lock in `post_delete`; make sure the container has
+`--cap-add LINUX_IMMUTABLE`, `/mnt` mounted as `/mnt`, and passwordless `sudo`. If the title keeps retrying, a
+same-named copy on a second disk is shadowing the replacement - the section shows how to find and clear it.
 
 ___
 If you appreciate my work, then please consider buying me a beer  :D
