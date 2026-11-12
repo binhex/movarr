@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import subprocess
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger as _logger
+
+from movarr import file_utils
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pytest_mock import MockerFixture
 
 from movarr.file_utils import (
@@ -14,6 +25,22 @@ from movarr.file_utils import (
     make_directory,
     walk_library,
 )
+
+
+@contextlib.contextmanager
+def _captured_logs() -> Iterator[list[Any]]:
+    """Collect loguru records emitted inside the with-block."""
+    records: list[Any] = []
+    sink_id = _logger.add(lambda message: records.append(message.record), level=0)
+    try:
+        yield records
+    finally:
+        _logger.remove(sink_id)
+
+
+def _messages(records: list[Any], level: str) -> list[str]:
+    """Return the messages of *records* whose level name is *level*."""
+    return [record["message"] for record in records if record["level"].name == level]
 
 
 class TestWalkLibrary:
@@ -203,7 +230,7 @@ class TestCopyWithVerify:
 
         assert copy_with_verify(src, dst) is False
         assert dst.read_bytes() == b"different data"
-        assert not (tmp_path / "dst.mkv.part").exists()
+        assert not list(tmp_path.glob(".dst.mkv.*.part"))
 
     def test_failed_copy_leaves_previous_destination_intact(self, tmp_path: Path, mocker: MockerFixture) -> None:
         """A copy failure must not remove the file it was going to replace."""
@@ -211,7 +238,7 @@ class TestCopyWithVerify:
         dst = tmp_path / "dst.mkv"
         src.write_bytes(b"source data")
         dst.write_bytes(b"different data")
-        mocker.patch("movarr.file_utils._perform_copy", return_value=False)
+        mocker.patch("movarr.file_utils._perform_copy", return_value=None)
 
         assert copy_with_verify(src, dst) is False
         assert dst.read_bytes() == b"different data"
@@ -222,15 +249,404 @@ class TestCopyWithVerify:
         dst = tmp_path / "dst.mkv"
         src.write_bytes(b"source data")
         dst.write_bytes(b"different data")
-        replace = mocker.patch(
-            "movarr.file_utils.os.replace",
-            side_effect=[PermissionError("immutable"), None],
-        )
+        real_replace = os.replace
+        calls = {"count": 0}
+
+        def _replace_first_call_fails(from_path: str, to_path: str) -> None:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise PermissionError("immutable")
+            real_replace(from_path, to_path)
+
+        replace = mocker.patch("movarr.file_utils.os.replace", side_effect=_replace_first_call_fails)
         clear = mocker.patch("movarr.file_utils._try_clear_immutable")
 
         assert copy_with_verify(src, dst) is True
         clear.assert_called_once()
         assert replace.call_count == 2
+
+    def test_returns_false_when_swap_does_not_change_destination(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A rename that reports success without swapping the file must fail the copy.
+
+        On Unraid user shares (shfs) a rename can land on a different disk while
+        the share keeps resolving a same-named duplicate, so the destination still
+        holds the old content after the swap "succeeds".
+        """
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace")
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        assert dst.read_bytes() == b"different data"
+        assert any("did not take effect" in message for message in _messages(records, "ERROR"))
+
+    def test_returns_false_when_swap_leaves_destination_missing(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A swap that loses the destination must report it as missing, not as a mismatch."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+
+        def _replace_loses_destination(from_path: str, to_path: str) -> None:
+            os.unlink(to_path)
+
+        mocker.patch("movarr.file_utils.os.replace", side_effect=_replace_loses_destination)
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        assert any("is missing after the swap" in message for message in _messages(records, "ERROR"))
+
+    def test_replaces_same_size_destination_with_different_content(self, tmp_path: Path) -> None:
+        """Content, not size, decides whether the destination is up to date."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"broken data")
+        assert len(src.read_bytes()) == len(dst.read_bytes())
+
+        assert copy_with_verify(src, dst) is True
+
+        assert dst.read_bytes() == b"source data"
+
+    def test_returns_false_when_same_size_destination_is_not_swapped(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """A silent no-op swap of a same-sized destination is still detected."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"broken data")
+        mocker.patch("movarr.file_utils.os.replace")
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        assert any("did not take effect" in message for message in _messages(records, "ERROR"))
+
+    def test_logs_disk_path_hint_when_file_flags_are_unsupported(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """chattr failing on a FUSE/shfs mount must produce an actionable warning."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: Operation not supported while reading flags on /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        warnings = _messages(records, "WARNING")
+        assert any("disk path" in message for message in warnings)
+        assert any("pre_copy" in message for message in warnings)
+
+    def test_logs_ioctl_hint_for_other_flag_ioctl_errors(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """ENOTTY (cifs-style) also names the disk-path remedy instead of staying at DEBUG."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: Inappropriate ioctl for device while reading flags on /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            copy_with_verify(src, dst)
+
+        assert any("disk path" in message for message in _messages(records, "WARNING"))
+
+    def test_logs_disk_path_hint_for_invalid_flag_requests(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """EINVAL from the flag ioctl gets the same disk-path remedy as ENOTSUP."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: Invalid argument while setting flags on /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            copy_with_verify(src, dst)
+
+        assert any("disk path" in message for message in _messages(records, "WARNING"))
+
+    def test_logs_warning_when_flag_cannot_be_cleared_on_read_only_mount(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """A read-only mount gets its own warning instead of a DEBUG line."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: Read-only file system while setting flags on /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            copy_with_verify(src, dst)
+
+        assert any("read-only" in message for message in _messages(records, "WARNING"))
+
+    def test_logs_capability_hint_when_chattr_is_not_permitted(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """EPERM from chattr points at CAP_LINUX_IMMUTABLE."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: Operation not permitted while setting flags on /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            copy_with_verify(src, dst)
+
+        assert any("LINUX_IMMUTABLE" in message for message in _messages(records, "WARNING"))
+
+    def test_keeps_chattr_failures_without_a_known_remedy_at_debug_level(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """An unrecognised chattr failure must not raise a misleading warning."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("movarr.file_utils.os.replace", side_effect=PermissionError("immutable"))
+        mocker.patch(
+            "movarr.file_utils.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["chattr", "-i", str(dst)],
+                returncode=1,
+                stdout=b"",
+                stderr=b"chattr: No such file or directory while trying to open /media/x.mkv",
+            ),
+        )
+
+        with _captured_logs() as records:
+            copy_with_verify(src, dst)
+
+        assert not [message for message in _messages(records, "WARNING") if "immutable flag" in message]
+
+    def test_reports_vanished_staging_file_when_retry_swap_fails(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A retry that hits ENOENT must explain that the staged copy was moved away."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch(
+            "movarr.file_utils.os.replace",
+            side_effect=[PermissionError("immutable"), FileNotFoundError("gone")],
+        )
+        mocker.patch("movarr.file_utils._try_clear_immutable")
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        assert dst.read_bytes() == b"different data"
+        assert any("disappeared while swapping in" in message for message in _messages(records, "ERROR"))
+        assert any("gone" in message for message in _messages(records, "ERROR"))
+
+    def test_removes_stale_staging_file_from_interrupted_run(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """Leftovers of an earlier interrupted run for the same destination are removed."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        stale = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        stale.write_bytes(b"leftover")
+        # Push the clock past the minimum age so the leftover counts as abandoned.
+        mocker.patch("movarr.file_utils.time.time", return_value=time.time() + 2 * 24 * 60 * 60)
+
+        assert copy_with_verify(src, dst) is True
+
+        assert not stale.exists()
+
+    def test_keeps_recent_staging_file_of_a_running_copy(self, tmp_path: Path) -> None:
+        """A staging file young enough to belong to a live copy must be preserved."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        in_flight = tmp_path / ".dst.mkv.movarr-feedface.part"
+        in_flight.write_bytes(b"still copying")
+
+        assert copy_with_verify(src, dst) is True
+
+        assert in_flight.exists()
+
+    def test_leaves_unrelated_part_files_alone(self, tmp_path: Path) -> None:
+        """Files that merely look similar must never be deleted."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        keep = [
+            tmp_path / "dst.mkv.part",
+            tmp_path / ".dst.mkv.20230101.part",
+            tmp_path / ".dst.mkv.movarr-notauuid.part",
+            tmp_path / ".other.mkv.movarr-deadbeef.part",
+            tmp_path / ".dst.mkv.movarr-DEADBEEF.part",
+            tmp_path / ".dst.mkv.movarr-deadbeef12.part",
+        ]
+        for path in keep:
+            path.write_bytes(b"keep me")
+
+        assert copy_with_verify(src, dst) is True
+
+        assert all(path.exists() for path in keep)
+
+    def test_skips_post_swap_verification_for_a_new_destination(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A brand-new destination cannot be shadowed, so the payload is not re-read."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        confirm = mocker.patch("movarr.file_utils._confirm_swap")
+
+        assert copy_with_verify(src, dst) is True
+
+        confirm.assert_not_called()
+        assert dst.read_bytes() == b"source data"
+
+    def test_returns_false_when_destination_cannot_be_read_after_swap(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """A post-swap read error must be a clean failure, not an exception."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        original = file_utils._sha256
+
+        def _sha_after_swap_fails(path: Path, label: str | None = None) -> str:
+            if label and "after the swap" in label:
+                raise PermissionError("io error")
+            return original(Path(path), label)
+
+        mocker.patch("movarr.file_utils._sha256", side_effect=_sha_after_swap_fails)
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is False
+        assert any("Could not verify" in message for message in _messages(records, "ERROR"))
+
+    def test_copies_when_staging_scan_fails(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """An unreadable destination directory must not abort the copy."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        mocker.patch("pathlib.Path.iterdir", side_effect=OSError("scan failed"))
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is True
+        assert any("Could not scan" in message for message in _messages(records, "DEBUG"))
+
+        assert dst.read_bytes() == b"source data"
+
+    def test_logs_warning_when_stale_staging_file_cannot_be_removed(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """An undeletable leftover must be reported, not silently ignored."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        stale = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        stale.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.time.time", return_value=time.time() + 3 * 60 * 60)
+        mocker.patch("pathlib.Path.unlink", side_effect=PermissionError("immutable"))
+
+        with _captured_logs() as records:
+            result = copy_with_verify(src, dst)
+
+        assert result is True
+        assert any("Could not remove stale staging file" in message for message in _messages(records, "WARNING"))
+
+    def test_staging_name_is_recognised_by_the_cleanup_matcher(self, tmp_path: Path) -> None:
+        """The creator and the matcher must not drift apart."""
+        dst = tmp_path / "dst.mkv"
+
+        created = tmp_path / file_utils._staging_name(dst)
+
+        assert file_utils._is_stale_staging(created, dst)
+        assert not file_utils._is_stale_staging(tmp_path / f".{dst.name}.20230101.part", dst)
+
+    def test_copies_over_a_dangling_symlink_destination(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A dangling symlink destination is treated as pre-existing and confirmed."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.symlink_to(tmp_path / "missing-target.mkv")
+        confirm = mocker.patch("movarr.file_utils._confirm_swap", wraps=file_utils._confirm_swap)
+
+        assert copy_with_verify(src, dst) is True
+
+        assert confirm.call_count == 1
+        assert dst.read_bytes() == b"source data"
+
+    def test_keeps_staging_file_with_unknown_change_time(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A change time of 0 means unknown, so the leftover is left alone."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        dst.write_bytes(b"different data")
+        candidate = mocker.MagicMock()
+        candidate.name = ".dst.mkv.movarr-feedface.part"
+        candidate.stat.return_value = SimpleNamespace(st_ctime=0)
+        mocker.patch("pathlib.Path.iterdir", return_value=[candidate])
+
+        with _captured_logs() as records:
+            assert copy_with_verify(src, dst) is True
+
+        assert any("unknown change time" in message for message in _messages(records, "DEBUG"))
+        candidate.unlink.assert_not_called()
 
     def test_mismatched_destination_is_replaced_atomically(self, tmp_path: Path) -> None:
         """The swapped-in file holds the verified source content."""
@@ -241,7 +657,7 @@ class TestCopyWithVerify:
 
         assert copy_with_verify(src, dst) is True
         assert dst.read_bytes() == b"source data"
-        assert not (tmp_path / "dst.mkv.part").exists()
+        assert not list(tmp_path.glob(".dst.mkv.*.part"))
 
     def test_returns_false_on_permission_error_during_copy(self, tmp_path: Path, mocker: MockerFixture) -> None:
         src = tmp_path / "src.mkv"
@@ -471,7 +887,7 @@ class TestDeleteFileDirectory:
 
 
 class TestImmutableFlagRetry:
-    """chattr failures are logged at debug and never raise."""
+    """chattr failures never raise: recognised causes warn, the rest stay at debug."""
 
     def test_chattr_oserror_is_swallowed(self, mocker: MockerFixture) -> None:
         from movarr.file_utils import _try_clear_immutable
@@ -486,4 +902,7 @@ class TestImmutableFlagRetry:
         result = mocker.MagicMock(returncode=1, stderr=b"nope")
         mocker.patch("movarr.file_utils.subprocess.run", return_value=result)
 
-        _try_clear_immutable(Path("/tmp/x"))  # must not raise
+        with _captured_logs() as records:
+            _try_clear_immutable(Path("/tmp/x"))  # must not raise
+
+        assert any("chattr -i failed (rc=1)" in message for message in _messages(records, "DEBUG"))
