@@ -338,6 +338,12 @@ those two settings never runs.
 
 Hooks must not rename or move the target files. Use only in-place operations (e.g. `chattr -i`, `trimarr`).
 
+When the destination file already exists with different content, movarr stages a verified copy beside it and
+swaps it in. A destination that is locked (`chattr +i`) cannot be swapped through a FUSE/union mount such as
+Unraid's `/mnt/user`, and a name that already resolves to a duplicate on another array disk cannot be replaced
+either. Use `pre_copy` to unlock before the copy. `chattr` cannot operate through the user-share mount, so an
+unlock command must address the array disk paths (`/mnt/disk*`) instead.
+
 ### `database`
 
 | Key | Description | Default |
@@ -399,9 +405,10 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 2. Scans the download directory, skipping files and folders that match the exclude rules.
 3. Resolves the destination: the `copy_library_rules` entry with the highest
    genre-overlap score wins; a tie or no match falls back to `default_copy_library`.
-4. Copies qualifying files to the destination; removes source files if `remove_completed` is enabled.
-5. Deletes superseded library files when `delete_lower_quality` is enabled.
-6. Marks the history record as `Completed`.
+4. Copies qualifying files to the destination.
+5. Marks the history record as `Completed`.
+6. Deletes superseded library files when `delete_lower_quality` is enabled.
+7. Removes the torrent (and its data) when `remove_completed` is enabled.
 
 ## Scheduler
 
@@ -502,6 +509,48 @@ management pipelines also log a warning and skip their cycles when qBittorrent i
 
 Set `database.passed_expiry_days: 0`. This prevents movarr from ever re-queuing a title that was previously
 sent to qBittorrent, even if qBittorrent is reset externally.
+
+**Q: Post-processing fails with `Operation not permitted` or `No such file or directory` — why?**
+
+The destination file is still locked (`chattr +i`, set for example by no_ransom), and nothing unlocked it before
+movarr tried to swap the new copy in. movarr's own `chattr -i` fallback runs against the library path, which on
+Unraid is the `/mnt/user` union mount; that mount (shfs/FUSE) does not implement the file-flag ioctl, so chattr
+fails there with `Operation not supported while reading flags` no matter which capabilities the container has.
+The swap then fails with `Operation not permitted`; when the staged file has already been moved across array
+disks the retry logs `Staged copy ... disappeared while swapping in ...` (quoting the underlying
+`No such file or directory`), and a swap that silently lands elsewhere is caught as
+`Replacement ... did not take effect: the path resolves to different content`.
+
+Wire the unlock into the copy path with the `pre_copy` hook, and add a `post_copy` re-lock so the media is not
+left writable. Both commands must target the array disks (`/mnt/disk*`), which no_ransom already does:
+
+```yaml
+post_process:
+  hooks:
+    pre_copy: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock no --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+    post_copy: >-
+      sudo /usr/local/bin/system/scripts/unraid/system/no_ransom/no_ransom.sh
+      --lock yes --lock-type files --media-shares Movies --no-secure-chattr --include-folders {leaf}
+```
+
+`{leaf}` scopes the run to the movie folder being processed, so the hook does not rescan every share.
+
+The hook command runs inside the container, so the no_ransom script must be reachable there and `sudo` must be
+installed and configured for the movarr user - see the container prerequisites in the no_ransom FAQ below.
+`post_copy` is skipped when the copy fails or when only non-video files were copied, so an aborted copy leaves
+that movie folder writable until the next successful run or the next scheduled lock pass.
+
+If `post_process.delete_lower_quality` is enabled, do not re-lock in `post_copy`: that hook runs before the
+superseded-file pass, and a locked file there permanently defeats the deletion - one ERROR in the log, no retry
+(the title is already marked completed, so the pass never runs again for it). Unlock in `pre_delete` and re-lock in
+`post_delete` instead; the deletion FAQ below covers the container prerequisites `pre_delete` needs.
+
+A movie whose file exists on more than one array disk is a separate problem: the union mount resolves the name
+to the lowest disk, so movarr keeps seeing the old copy and cannot replace it. Remove the stale duplicate
+(`ls -d /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'`) before retrying, otherwise every run re-copies the whole
+file.
 
 **Q: I am using no_ransom script to secure my media, is it possible to use the 'pre_delete' hook to unlock existing media before deletion?**
 
