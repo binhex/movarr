@@ -658,7 +658,7 @@ wheels = [
 
 [[package]]
 name = "movarr"
-version = "1.5.1"
+version = "1.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "apprise" },
