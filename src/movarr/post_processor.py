@@ -15,13 +15,17 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import ipaddress
 import json
 import os
 import pathlib
 import re
 import shlex
 import signal
+import socket
 import subprocess
+import urllib.error
+import urllib.parse
 import urllib.request
 from http.client import HTTPException as HttpClientException
 from typing import TYPE_CHECKING
@@ -31,9 +35,18 @@ from loguru import logger
 from movarr import torrent_client_health
 from movarr.file_utils import copy_with_verify, delete_file, make_directory
 from movarr.filters import edition_token_set, supersession_quality_score
-from movarr.parsing import extract_movie_title, extract_resolution, extract_year, normalise_for_compare, sanitise
+from movarr.parsing import (
+    extract_movie_title,
+    extract_resolution,
+    extract_year,
+    normalise_for_compare,
+    sanitise,
+    strip_control_chars,
+)
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from movarr.config import Config, CopyLibraryRuleConfig, DefaultCopyLibraryConfig
     from movarr.database import Database, HistoryRecord
     from movarr.qbittorrent import QBittorrentClient
@@ -62,6 +75,9 @@ _EXTRAS_RE = re.compile(
 )
 _BRACKET_RE = re.compile(r"[\[{]([^\]\}]+)[\]\}]")
 _LEADING_ARTICLES = frozenset({"a", "an", "the"})
+
+# Hosts that resolve to the local machine without looking like an IP literal.
+_LOCAL_HOST_SUFFIXES = (".localhost", ".localdomain", ".local", ".lan", ".home.arpa")
 
 
 def _hook_timeout_secs(config: Config) -> float | None:
@@ -189,7 +205,7 @@ def _run_hook(command: str, dir_path: str, label: str, timeout_secs: float | Non
 
 def _safe_path_component(value: str) -> str:
     """Strip characters that are unsafe in a filesystem path component."""
-    return _RE_PATH_UNSAFE.sub("", value).strip()
+    return strip_control_chars(_RE_PATH_UNSAFE.sub("", value)).strip()
 
 
 def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
@@ -246,7 +262,8 @@ def _copy_files(
     Returns ``(all_ok, copied_fnames)``.  Aborts and returns ``False`` on first failure.
     """
     dst_fnames = [
-        canonical_fname if os.path.basename(src) == largest_fname else os.path.basename(src) for src in src_files
+        strip_control_chars(canonical_fname if os.path.basename(src) == largest_fname else os.path.basename(src))
+        for src in src_files
     ]
     collisions = sorted({name for name in dst_fnames if dst_fnames.count(name) > 1})
     if collisions:
@@ -260,7 +277,7 @@ def _copy_files(
     for src_path, dst_fname in zip(src_files, dst_fnames, strict=True):
         dst_path = os.path.join(dst_dir, dst_fname)
         if not copy_with_verify(src_path, dst_path):
-            logger.error("Copy/verify failed for '{}'; aborting this torrent.", src_path)
+            logger.error("Copy/verify failed for '{}'; aborting this torrent.", strip_control_chars(str(src_path)))
             return False, copied_fnames
         copied_fnames.add(dst_fname)
     return True, copied_fnames
@@ -296,6 +313,12 @@ def _run_post_copy_hook(config: Config, resolved_dst_dir: str) -> None:
         logger.warning("post_copy hook raised an exception for '{}': {}; continuing.", resolved_dst_dir, exc)
 
 
+def _destination_in_library(resolved_dst: pathlib.Path, library_path_list: list[str] | None) -> bool:
+    """Return True when *resolved_dst* is a configured library root or inside one."""
+    roots = [pathlib.Path(p).resolve() for p in (library_path_list or [])]
+    return any(resolved_dst == root or resolved_dst.is_relative_to(root) for root in roots)
+
+
 def _maybe_delete_superseded(
     config: Config,
     dst_dir: str,
@@ -318,14 +341,13 @@ def _maybe_delete_superseded(
     """
     if not config.post_process.delete_lower_quality or canonical_fname not in copied_fnames:
         return
-    library_roots = [pathlib.Path(p).resolve() for p in (config.general.library_path_list or [])]
-    resolved_dst = pathlib.Path(dst_dir).resolve()
-    if not any(resolved_dst == root or resolved_dst.is_relative_to(root) for root in library_roots):
+    library_roots_ok = _destination_in_library(pathlib.Path(dst_dir).resolve(), config.general.library_path_list)
+    if not library_roots_ok:
         # The acquisition-time comparison only walked the configured library
         # roots, so a destination outside them was never proven better.
         logger.debug(
             "Skipping superseded-file deletion: '{}' is outside general.library_path_list.",
-            resolved_dst,
+            pathlib.Path(dst_dir).resolve(),
         )
         return
     # An empty library_path_list is covered by the root check above: with no
@@ -394,17 +416,115 @@ def _user_agent() -> str:
         return "movarr"
 
 
+def _non_public_address_reason(host: str) -> str | None:
+    """Return a reason when *host* is, or is spelled like, a non-public address."""
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # The resolver also accepts legacy IPv4 spellings that ipaddress rejects
+        # (decimal 2130706433, hex 0x7f.0.0.1, octal, and short 127.1 forms).
+        try:
+            address = ipaddress.ip_address(socket.inet_aton(host))
+        except OSError:
+            return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        # Judge the embedded IPv4 address, so [::ffff:127.0.0.1] is not treated as
+        # global on interpreters whose is_global does not delegate (3.12.0-3.12.3).
+        address = address.ipv4_mapped
+    if not address.is_global:
+        return f"non-public address '{host}'"
+    return None
+
+
+def _poster_host(authority: str) -> str:
+    """Return the host http.client would connect to for a decoded *authority* (netloc).
+
+    ``urlsplit().hostname`` splits the *raw* netloc, so an encoded colon is not seen
+    as a port separator there, while urllib decodes the whole netloc before
+    ``http.client`` splits host from port.  Mirroring that split keeps the guard
+    aligned with the connection that is actually made.
+    """
+    hostport = authority.rpartition("@")[2]
+    if hostport.startswith("["):
+        return hostport[1:].partition("]")[0]
+    host, separator, _port = hostport.rpartition(":")
+    # Only a real separator splits the port: ":8086" has an empty host, which
+    # http.client accepts and resolves to the wildcard/loopback address.
+    return host if separator else hostport
+
+
+def _poster_url_problem(url: str) -> str | None:
+    """Return the reason *url* must not be fetched, or None when it is acceptable.
+
+    The poster URL arrives from the metadata provider and is persisted in the
+    database, so it is treated as untrusted: only ``http``/``https`` URLs are
+    fetched, and both the initial URL and every redirect target must name a host
+    that is neither a local name nor a non-public address literal.  The authority
+    is percent-decoded and split host-from-port before the host is judged, matching
+    what urllib actually connects to.
+
+    Plain DNS names are deliberately not resolved, so a public name that points at
+    an internal address is not detected; only literal addresses (including the
+    legacy decimal/hex/octal/short spellings) and the names ``localhost``,
+    ``*.localhost``, ``*.localdomain``, ``*.local``, ``*.lan`` and ``*.home.arpa``
+    are refused.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "not a parseable URL"
+    if parts.scheme not in {"http", "https"}:
+        return f"unsupported scheme '{parts.scheme}'"
+    authority = urllib.parse.unquote(parts.netloc or "")
+    host = _poster_host(authority).strip().rstrip(".").lower()
+    if not host:
+        return "missing host"
+    if host == "localhost" or host.endswith(_LOCAL_HOST_SUFFIXES):
+        return "local host name"
+    return _non_public_address_reason(host)
+
+
+class _PosterRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse a redirect whose target fails the poster URL guard.
+
+    ``urlopen`` follows 3xx responses by default, so a public poster URL could
+    otherwise redirect movarr to an internal address after the initial URL has
+    been validated.
+    """
+
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Any:
+        """Return the redirect request, or refuse it when the target is unsafe."""
+        problem = _poster_url_problem(newurl)
+        if problem is not None:
+            raise urllib.error.HTTPError(newurl, code, f"refused redirect: {problem}", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download_poster_art(resolved_url: str, dst_path: str) -> None:
     """Download poster image from *resolved_url* to *dst_path*.
 
     Logs and returns silently on any failure — does NOT abort post-processing.
     """
+    problem = _poster_url_problem(resolved_url)
+    if problem is not None:
+        logger.warning("Refusing to download poster from '{}': {}.", resolved_url, problem)
+        return
     try:
         req = urllib.request.Request(
             resolved_url,
             headers={"User-Agent": _user_agent()},
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        opener = urllib.request.build_opener(_PosterRedirectHandler)
+        with opener.open(req, timeout=30) as response:
             content_type = (response.headers.get("Content-Type") or "").strip().lower()
             if not content_type or not content_type.startswith("image/"):
                 logger.warning("Poster URL returned non-image content '{}'; skipping.", content_type)
@@ -453,6 +573,15 @@ def _torrent_tag_and_hash(torrent: dict) -> tuple[str, str]:
     return torrent.get("torrent_tag") or "", torrent.get("torrent_hash") or ""
 
 
+def _destination_inside_save_path(dst_dir: str, save_path: str) -> bool:
+    """Return True when the copy destination is, or sits inside, the torrent's save path."""
+    if not save_path:
+        return False
+    resolved_save = pathlib.Path(save_path).resolve()
+    resolved_dst = pathlib.Path(dst_dir).resolve()
+    return resolved_dst == resolved_save or resolved_dst.is_relative_to(resolved_save)
+
+
 def _build_copy_target(
     torrent: dict,
     db_record: HistoryRecord,
@@ -476,21 +605,14 @@ def _build_copy_target(
         return None
     dst_dir = _build_dst_dir(db_record, dst_base)
     save_path = str(torrent.get("torrent_save_path") or "")
-    if save_path:
-        resolved_save = pathlib.Path(save_path).resolve()
-        resolved_dst = pathlib.Path(dst_dir).resolve()
-        if resolved_dst == resolved_save or resolved_dst.is_relative_to(resolved_save):
-            logger.error(
-                "Destination '{}' is inside the torrent save path '{}'; refusing to copy"
-                + (
-                    " (remove_completed would delete the library copy)."
-                    if config.post_process.remove_completed
-                    else "."
-                ),
-                resolved_dst,
-                resolved_save,
-            )
-            return None
+    if _destination_inside_save_path(dst_dir, save_path):
+        logger.error(
+            "Destination '{}' is inside the torrent save path '{}'; refusing to copy"
+            + (" (remove_completed would delete the library copy)." if config.post_process.remove_completed else "."),
+            pathlib.Path(dst_dir).resolve(),
+            pathlib.Path(save_path).resolve(),
+        )
+        return None
     if not make_directory(dst_dir):
         logger.error("Cannot create destination directory '{}'; skipping.", dst_dir)
         return None
@@ -572,7 +694,9 @@ def _copy_phase(
 
     # Determine canonical filename for the largest file (rename to parent-dir style).
     largest_fname, largest_rel_path = _largest_file(torrent)
-    canonical_fname = _canonical_filename(largest_fname, largest_rel_path)
+    # _copy_files writes a sanitised destination name, and the supersession guard
+    # compares against that set, so the canonical name must be sanitised here too.
+    canonical_fname = strip_control_chars(_canonical_filename(largest_fname, largest_rel_path))
 
     all_ok, copied_fnames = _copy_files(src_files, dst_dir, largest_fname, canonical_fname)
     if not all_ok:
@@ -667,13 +791,18 @@ def _file_excluded_by_rules(
 ) -> bool:
     """Return True if this file matches any exclusion rule and should be skipped."""
     if any(rx.search(rel_path) for rx in exclude_file_regexes):
-        logger.debug("Excluding file '{}' (file regex match).", rel_path)
+        logger.debug("Excluding file '{}' (file regex match).", strip_control_chars(str(rel_path)))
         return True
     if any(rx.search(folder_part) for rx in exclude_folder_regexes):
-        logger.debug("Excluding folder '{}' (folder regex match).", folder_part)
+        logger.debug("Excluding folder '{}' (folder regex match).", strip_control_chars(str(folder_part)))
         return True
     if exclude_min_kb and file_size_kb < exclude_min_kb:
-        logger.debug("Excluding '{}' ({}KB < {}KB min).", rel_path, file_size_kb, exclude_min_kb)
+        logger.debug(
+            "Excluding '{}' ({}KB < {}KB min).",
+            strip_control_chars(str(rel_path)),
+            file_size_kb,
+            exclude_min_kb,
+        )
         return True
     return False
 
@@ -701,10 +830,10 @@ def _should_include_file(
     # Guard against crafted torrent paths that escape the save directory.
     escapes = _path_escapes_save_root(abs_path, save_root)
     if escapes is None:
-        logger.warning("Skipping '{}': could not resolve path.", rel_path)
+        logger.warning("Skipping '{}': could not resolve path.", strip_control_chars(str(rel_path)))
         return None
     if escapes:
-        logger.warning("Skipping '{}': path escapes save directory.", rel_path)
+        logger.warning("Skipping '{}': path escapes save directory.", strip_control_chars(str(rel_path)))
         return None
 
     file_size = file_dict.get("file_size") or 0
@@ -1004,6 +1133,14 @@ def _check_delete_preconditions(
     return video_files, resolved_dst
 
 
+def _title_variants(title: str) -> list[str]:
+    """Return *title* plus its article-stripped form when the article is leading."""
+    head, _, tail = title.partition(" ")
+    if tail and head.lower() in _LEADING_ARTICLES:
+        return [title, tail]
+    return [title]
+
+
 def _title_remainder(lib_san: str, dir_san: str) -> str | None:
     """Return the part of *lib_san* that follows the movie's own title.
 
@@ -1019,10 +1156,7 @@ def _title_remainder(lib_san: str, dir_san: str) -> str | None:
     title = extract_movie_title(dir_san) or ""
     if not title:
         return None
-    variants = [title]
-    head, _, tail = title.partition(" ")
-    if tail and head.lower() in _LEADING_ARTICLES:
-        variants.append(tail)
+    variants = _title_variants(title)
     lowered = lib_san.lower()
     for variant in variants:
         if not lowered.startswith(variant.lower()):
@@ -1293,10 +1427,10 @@ def _delete_superseded_loop(
             continue
         lib_path = str(resolved_dst / fname)
         if delete_file(lib_path):
-            logger.info("Auto-deleted superseded library file '{}'.", lib_path)
+            logger.info("Auto-deleted superseded library file '{}'.", strip_control_chars(lib_path))
             deleted += 1
         else:
-            logger.error("Failed to auto-delete superseded library file '{}'.", lib_path)
+            logger.error("Failed to auto-delete superseded library file '{}'.", strip_control_chars(lib_path))
     return deleted
 
 

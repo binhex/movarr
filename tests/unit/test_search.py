@@ -15,7 +15,14 @@ from loguru import logger as _loguru_logger
 
 from movarr.config import Config, SearchCriteriaConfig
 from movarr.database import Database
-from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSession, _supersede, run_search
+from movarr.search import (
+    _enrich_index_metadata,
+    _process_criteria,
+    _process_result_body,
+    _SearchSession,
+    _supersede,
+    run_search,
+)
 
 # Helpers
 
@@ -23,6 +30,39 @@ from movarr.search import _enrich_index_metadata, _process_criteria, _SearchSess
 def _base_result(index_title: str = "The Matrix 1999 1080p BluRay") -> ResultDict:
     """Minimal result dict as returned by jackett.search."""
     return {"index_title": index_title}
+
+
+# _process_result_body
+
+
+class TestProcessResultBodyLogging:
+    """The indexer-supplied title is logged verbatim, never as colour markup."""
+
+    def test_index_title_logged_without_colour_markup(self, mocker: MockerFixture) -> None:
+        """A title containing loguru markup must not add colour markup to the log line."""
+        rendered: list[str] = []
+        handler_id = _loguru_logger.add(
+            lambda message: rendered.append(str(message)),
+            level="INFO",
+            format="{message}",
+            colorize=True,
+        )
+        try:
+            mocker.patch("movarr.search._run_pre_filter_gates", return_value=None)
+            mocker.patch("movarr.search._run_filters_and_enrich", return_value=False)
+            _process_result_body(
+                {"index_title": "Evil </blue><red>Tint.2019.1080p"},
+                mocker.MagicMock(),
+                {},
+                frozenset(),
+                "jackett",
+            )
+        finally:
+            _loguru_logger.remove(handler_id)
+
+        processing = [line for line in rendered if "Processing index title" in line]
+        assert processing, "the processing log line must still be emitted"
+        assert all("\x1b[" not in line for line in processing)
 
 
 # _enrich_index_metadata

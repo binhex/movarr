@@ -572,6 +572,13 @@ git commit -m "feat: add schedule timezone and post-processing cron config"
 - Modify: `src/movarr/config.py:19` (`_CONFIG_VERSION`), `:388-400` (add the new migration), `:425-451` (`MIGRATIONS`)
 - Test: `tests/unit/test_config.py`
 
+> **Superseded (2026-11-19):** the interval→cron expectations in this task predate the shipped
+> `_minutes_to_cron`. The contract is
+> `docs/agent/specs/2026-11-09-post-processing-cron-schedule-design.md` § Migration: round up to a
+> divisor of 60, or to a **whole-hour** divisor of 1440, then weekly/monthly/yearly above a day — so
+> 60 → `0 * * * *`, 1380 → `0 0 * * *`, 90 → `0 */2 * * *`, 7 → `*/10`. The shipped behaviour, not the
+> snippets below, is authoritative.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `tests/unit/test_config.py`:

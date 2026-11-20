@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -433,11 +434,38 @@ class TestCreateDefaultConfigExists:
         assert config_path.read_text() == original
 
 
+class TestCreateDefaultConfigValidationFailure:
+    """A failing default payload must not leave a partially written config file."""
+
+    def test_no_file_left_when_default_payload_raises(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The payload is built before the file is opened, so a failure leaves nothing behind."""
+        from movarr.config import create_default_config
+
+        config_path = tmp_path / "movarr.yml"
+        # Exercise the real composition: Config() validates the default cron
+        # through build_trigger, so this is the failure a tz-less host raises.
+        mocker.patch(
+            "movarr.config.build_trigger",
+            side_effect=ValueError("timezone database (tzdata) is not installed; set 'schedule.timezone'"),
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            create_default_config(config_path)
+
+        assert not config_path.exists()
+        message = str(excinfo.value)
+        # The only workable remedy is a resolvable local zone; the dead-end
+        # "set schedule.timezone" advice must not be repeated to the operator.
+        assert "tzdata" in message
+        assert "local timezone" in message
+        assert "schedule.timezone" not in message
+
+
 # ScheduleTaskConfig.run_on_start
 
 
 class TestScheduleTaskConfigRunOnStart:
-    """ScheduleTaskConfig must expose a run_on_start boolean defaulting to False."""
+    """ScheduleTaskConfig must expose a run_on_start boolean defaulting to True."""
 
     def test_run_on_start_defaults_to_true(self) -> None:
         """run_on_start must default to True so tasks fire immediately on first start."""
@@ -1780,6 +1808,58 @@ class TestMigrationReplacesNonDictValue:
         assert isinstance(migrated["post_process"], dict)
         assert migrated["general"]["config_version"] == "2.14.0"
 
+    def test_replacement_warning_names_the_key(self, mocker: MockerFixture) -> None:
+        """The warning must interpolate the key, not print a literal '%r'."""
+        from movarr.config import _migrate_v213_to_v214
+
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+        raw: dict = {"general": {"config_version": "2.13.0"}, "post_process": "not-a-dict"}
+
+        _migrate_v213_to_v214(raw)
+
+        messages = [call.args[0].format(*call.args[1:]) for call in mock_warning.call_args_list]
+        assert any("'post_process'" in message for message in messages)
+
+
+class TestNonMappingSectionWarnings:
+    """A scalar where a mapping section belongs must be reported, not silently reset."""
+
+    def test_scalar_general_section_warns(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A malformed 'general' section would otherwise discard every path setting."""
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general: nope\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        load_config(cfg_file)
+
+        messages = [call.args[0].format(*call.args[1:]) for call in mock_warning.call_args_list]
+        assert any("'general'" in message for message in messages)
+
+    def test_scalar_post_process_section_warns(self, mocker: MockerFixture) -> None:
+        """A malformed 'post_process' section must be named in the log."""
+        from movarr.config import _ensure_hooks_dict
+
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        _ensure_hooks_dict({"general": {"config_version": "2.16.0"}, "post_process": "nope"})
+
+        messages = [call.args[0].format(*call.args[1:]) for call in mock_warning.call_args_list]
+        assert any("'post_process'" in message for message in messages)
+
+    def test_secret_bearing_section_value_is_not_logged(self, mocker: MockerFixture) -> None:
+        """A scalar section can carry a credential, so only its type is logged."""
+        from movarr.config import _ensure_hooks_dict
+
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        _ensure_hooks_dict(
+            {"general": {"config_version": "2.16.0"}, "post_process": "https://user:hunter2@example.test"}
+        )
+
+        messages = [call.args[0].format(*call.args[1:]) for call in mock_warning.call_args_list]
+        assert any("'post_process'" in message for message in messages)
+        assert not any("hunter2" in message for message in messages)
+
 
 class TestNullSectionsDuringMigration:
     """A null YAML section must not crash a hand-written migration."""
@@ -1792,14 +1872,135 @@ class TestNullSectionsDuringMigration:
 
         assert cfg.general.config_version == "2.26.0"
 
-    def test_scalar_section_is_replaced(self, tmp_path: Path) -> None:
+    def test_scalar_section_is_replaced(self, mocker: MockerFixture, tmp_path: Path) -> None:
         cfg_file = tmp_path / "movarr.yml"
         cfg_file.write_text("general:\n  config_version: '2.11.0'\nqueue_management: nope\n")
+        mock_warning = mocker.patch("movarr.config.logger.warning")
 
         cfg = load_config(cfg_file)
 
         assert cfg.general.config_version == "2.26.0"
         assert cfg.queue_management.stalled_delete_torrent_data is True
+        messages = [call.args[0].format(*call.args[1:]) for call in mock_warning.call_args_list]
+        assert any("'queue_management'" in message for message in messages)
+
+
+class TestAtomicNullStripRewrite:
+    """The null-strip rewrite must never truncate the operator's config."""
+
+    def test_failed_write_leaves_the_file_unchanged(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A dump failure must leave the original bytes and no temporary file."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        original = "general:\n  config_version: '2.26.0'\n"
+        cfg_file.write_text(original)
+        mocker.patch("movarr.config._strip_and_dump", side_effect=OSError("disk full"))
+
+        with pytest.raises(OSError, match="disk full"):
+            _strip_and_write({"general": {"config_version": "2.26.0", "db_path": None}}, cfg_file)
+
+        assert cfg_file.read_text() == original
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+    def test_successful_write_strips_nulls_without_leftovers(self, tmp_path: Path) -> None:
+        """The replacement carries the stripped content, the mode, and no temporary file."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        cfg_file.chmod(0o600)
+
+        _strip_and_write({"general": {"db_path": None, "config_version": "2.26.0"}}, cfg_file)
+
+        assert "db_path" not in cfg_file.read_text()
+        # The config holds credentials, so a hardened mode must survive the swap.
+        assert cfg_file.stat().st_mode & 0o777 == 0o600
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+    def test_symlinked_config_is_written_through(self, tmp_path: Path) -> None:
+        """A symlinked config stays a symlink and its target receives the content."""
+        from movarr.config import _strip_and_write
+
+        real = tmp_path / "real.yml"
+        real.write_text("general:\n  db_path:\n")
+        link = tmp_path / "movarr.yml"
+        link.symlink_to(real)
+
+        _strip_and_write({"general": {"db_path": None}}, link)
+
+        assert link.is_symlink()
+        assert "db_path" not in real.read_text()
+
+    def test_temporary_file_is_private_while_being_written(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The config holds credentials, so the staged copy must be 0600 from creation."""
+        from movarr import config as config_module
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        cfg_file.chmod(0o644)
+        seen: dict[str, int] = {}
+        real_dump = config_module._strip_and_dump
+
+        def _spy(raw: dict, fh: Any) -> None:
+            seen["mode"] = os.stat(fh.name).st_mode & 0o777
+            real_dump(raw, fh)
+
+        mocker.patch("movarr.config._strip_and_dump", side_effect=_spy)
+
+        config_module._strip_and_write({"general": {"db_path": None}}, cfg_file)
+
+        assert seen["mode"] == 0o600
+
+    def test_staging_failure_falls_back_to_an_in_place_write(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A directory that cannot hold a temporary file must not block the rewrite."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        mocker.patch("movarr.config.tempfile.NamedTemporaryFile", side_effect=OSError("read-only"))
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        _strip_and_write({"general": {"db_path": None, "config_version": "2.26.0"}}, cfg_file)
+
+        assert "db_path" not in cfg_file.read_text()
+        assert any("writing it in place" in str(call) for call in mock_warning.call_args_list)
+
+    def test_replace_failure_falls_back_to_an_in_place_write(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A bind-mounted config cannot be renamed; the rewrite must still land."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        mocker.patch("movarr.config.os.replace", side_effect=OSError("device busy"))
+        mock_warning = mocker.patch("movarr.config.logger.warning")
+
+        _strip_and_write({"general": {"db_path": None, "config_version": "2.26.0"}}, cfg_file)
+
+        assert "db_path" not in cfg_file.read_text()
+        assert any("atomically" in str(call) for call in mock_warning.call_args_list)
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+class TestSearchCriteriaNumericBounds:
+    """Negative size/bitrate thresholds are rejected instead of silently misbehaving."""
+
+    @pytest.mark.parametrize("field", ["minimum_size_mb", "maximum_size_mb", "minimum_bitrate_mb"])
+    def test_negative_threshold_is_rejected(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        from movarr.config import SearchCriteriaConfig
+
+        with pytest.raises(ValidationError):
+            SearchCriteriaConfig.model_validate({"criteria": "c", field: -5})
+
+    @pytest.mark.parametrize("field", ["minimum_size_mb", "maximum_size_mb", "minimum_bitrate_mb"])
+    def test_zero_still_disables_the_gate(self, field: str) -> None:
+        from movarr.config import SearchCriteriaConfig
+
+        cfg = SearchCriteriaConfig.model_validate({"criteria": "c", field: 0})
+
+        assert getattr(cfg, field) == 0
 
 
 class TestNestedUnknownKeys:
@@ -2181,9 +2382,9 @@ class TestV224Migration:
         assert config.schedule.post_processing.cron == ["0 0 1 1 *"]
         assert mock_warning.called
 
-    @pytest.mark.parametrize("minutes", [0, -5])
-    def test_non_positive_interval_is_rejected(self, tmp_path: Path, minutes: int) -> None:
-        """The old field required gt=0, so the migration keeps rejecting those values."""
+    @pytest.mark.parametrize("minutes", [0, -5, -5.5, -0.5, "'-5'", "'-5.5'"])
+    def test_non_positive_interval_is_rejected(self, tmp_path: Path, minutes: float | str) -> None:
+        """The old field required gt=0: numbers and quoted numeric strings stay rejected."""
         config_path = _write_config(
             tmp_path,
             f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {minutes}\n",
@@ -2309,17 +2510,6 @@ class TestV224Migration:
         config = load_config(config_path)
 
         assert config.schedule.post_processing.cron == ["*/5 * * * *"]
-
-    @pytest.mark.parametrize("minutes", [-5.5, -0.5])
-    def test_negative_fractional_interval_is_rejected(self, tmp_path: Path, minutes: float) -> None:
-        """The old field required gt=0, which also rejected non-integral negatives."""
-        config_path = _write_config(
-            tmp_path,
-            f"general:\n  config_version: '2.24.0'\nschedule:\n  post_processing:\n    schedule_time_mins: {minutes}\n",
-        )
-
-        with pytest.raises(ValueError, match="must be greater than 0"):
-            load_config(config_path)
 
     def test_null_cron_with_an_interval_is_converted(self, tmp_path: Path) -> None:
         """A null cron placeholder is treated as absent, so the interval still migrates."""
@@ -2668,3 +2858,58 @@ class TestV225Migration:
 
         assert config.schedule.acquisition.schedule_time_mins == 30
         assert _config_on_disk(config_path)["general"]["config_version"] == "2.26.0"
+
+
+class TestCreateDefaultConfigAtomicity:
+    """A failed first-run write must not leave a truncated config behind."""
+
+    def test_staged_file_is_flushed_to_disk_before_the_rename(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A power loss after the rename must not expose a partial config."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        mock_fsync = mocker.patch("movarr.config.os.fsync")
+
+        _strip_and_write({"general": {"db_path": None}}, cfg_file)
+
+        mock_fsync.assert_called_once()
+
+    def test_dump_failure_leaves_no_file(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.config import create_default_config
+
+        config_path = tmp_path / "movarr.yml"
+        mocker.patch("movarr.config._strip_and_dump", side_effect=OSError("disk full"))
+
+        with pytest.raises(OSError, match="disk full"):
+            create_default_config(config_path)
+
+        assert not config_path.exists()
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+class TestAtomicRewriteOwnership:
+    """A root-run rewrite must not hand a PUID-owned config back as root-owned."""
+
+    def test_ownership_is_copied_before_the_swap(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        mock_chown = mocker.patch("movarr.config.os.chown")
+
+        _strip_and_write({"general": {"db_path": None}}, cfg_file)
+
+        mock_chown.assert_called_once()
+
+    def test_chown_failure_is_tolerated(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """An unprivileged process cannot chown; the rewrite must still land."""
+        from movarr.config import _strip_and_write
+
+        cfg_file = tmp_path / "movarr.yml"
+        cfg_file.write_text("general:\n  db_path:\n")
+        mocker.patch("movarr.config.os.chown", side_effect=PermissionError("not root"))
+
+        _strip_and_write({"general": {"db_path": None, "config_version": "2.26.0"}}, cfg_file)
+
+        assert "db_path" not in cfg_file.read_text()

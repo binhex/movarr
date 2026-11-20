@@ -18,6 +18,8 @@ __all__ = [
     "dedup_quality_score",
     "quality_score",
     "normalise_imdb_id",
+    "strip_control_chars",
+    "CONTROL_CHAR_TRANSLATION",
     "is_extras_filename",
 ]
 
@@ -99,6 +101,22 @@ _NUMERAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 
 # Internal helpers
+
+
+# Control characters that must never reach a log sink, the database or a notification.
+CONTROL_CHAR_TRANSLATION = str.maketrans(
+    {**{chr(code): " " for code in range(0x20)}, chr(0x7F): " ", **{chr(code): " " for code in range(0x80, 0xA0)}}
+)
+
+
+def strip_control_chars(text: str) -> str:
+    """Return *text* with control characters replaced by spaces.
+
+    Indexer feeds are untrusted: a newline forges a log line and an escape
+    sequence can drive the operator's terminal, so a release title must carry
+    neither into logs, the database or notifications.
+    """
+    return str(text).translate(CONTROL_CHAR_TRANSLATION)
 
 
 def _replace_words_with_ints(text: str) -> str:

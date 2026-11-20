@@ -109,6 +109,10 @@ uv run --with pytest-crap pytest --cov --crap --crap-threshold=9
 `pytest-crap` is not a declared dev dependency of this project, so it is provisioned for the run with
 `uv run --with pytest-crap` rather than added to `pyproject.toml`.
 
+> **Superseded (2026-11-20):** `pytest-crap` is now a declared dev dependency
+> (`[dependency-groups] dev` + `[tool.uv.sources]` git pin), so the runs below use
+> `uv run pytest --cov --crap --crap-threshold=9` without `--with`.
+
 **Result:** 41 functions at CRAP >= 9, and radon reports no function above CC 9
 (`uv run --with radon radon cc -n C src/movarr/*.py` returns nothing).
 
@@ -151,7 +155,7 @@ per-file "#>=thr" column is the authoritative count of functions at or above the
 
 Re-measured during the tech-debt step of the obsolete-key migration
 (`docs/agent/plans/2026-11-10-remove-schedule-time-units.md`), using the documented command with the
-plugin provisioned (it is still not a declared dev dependency; `pytest-crap` 0.3.0):
+plugin provisioned (declared since 2026-11-20; the run recorded here used `pytest-crap` 0.3.0 provisioned with `--with`):
 
 ```bash
 uv run --with pytest-crap pytest --cov --crap --crap-threshold=9

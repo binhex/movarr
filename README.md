@@ -50,8 +50,9 @@ Automated movie downloader based on IMDb criteria filtering.
 - [qBittorrent](https://www.qbittorrent.org/) with Web UI enabled
 
 Jackett and Prowlarr are contacted over plain HTTP only, and the qBittorrent WebUI certificate is not
-verified. Run them on a trusted network (or behind a local reverse proxy) — TLS termination in front of
-these services is not supported by movarr itself.
+verified unless `torrent_client.qbittorrent.verify_webui_certificate` is enabled. Run them on a trusted
+network (or behind a local reverse proxy) — TLS termination in front of these services is not supported
+by movarr itself.
 
 ## Quick start
 
@@ -97,6 +98,11 @@ All options are optional overrides. When an option is omitted, the value from `m
 | `--once` | Run each enabled scheduler task once, then exit (foreground mode). Post-processing runs regardless of its cron window. | `false` |
 | `--test` | Validate configuration and exit without running any tasks. | `false` |
 | `--version` | Print the version and exit. | — |
+
+A directory path that does not exist yet and whose last component contains a dot (for example
+`--log-path /var/log/movarr-1.3`) is treated as a **file** path, because the directory does not
+exist to be detected. Create the directory first, or avoid a dot in its name. The same rule applies
+to `general.log_path`, `general.db_path` and `general.pid_path`.
 
 ### qBittorrent
 
@@ -309,6 +315,11 @@ Each entry in `search`:
 | `filename` | Filename for the poster image saved into the movie folder (always stored as `.jpg`). Empty disables poster saving. | `""` (disabled) |
 | `download_width` | Requested image width in pixels, applied to Amazon poster URLs. `0` downloads the original size. | `0` |
 
+Poster images are fetched from the URL the metadata provider reports. Only plain `http`/`https`
+URLs are fetched, and a URL whose host is `localhost`, `*.localhost`, `*.localdomain`,
+`*.local`, `*.lan`, `*.home.arpa` or a non-public address literal is skipped with a warning
+(the same check is applied to every redirect hop).
+
 Each entry in `copy_library_rules`:
 
 | Key | Description |
@@ -362,28 +373,41 @@ movarr runs three independent pipelines on configurable schedules.
 flowchart TD
     A([Start]) --> B[Query Jackett/Prowlarr for each search criteria]
     B --> C[For each result]
-    C --> D{Bad keyword\nin title?}
+    C --> D{Ignored indexer?}
     D -- Yes --> SKIP1([⛔ Skip])
-    D -- No --> E{Size within\nlimits?}
-    E -- No --> SKIP2([⛔ Skip])
-    E -- Yes --> F{Already in\ndatabase?}
-    F -- Yes --> SKIP3([⛔ Skip])
-    F -- No --> G{Already\nin library?}
-    G -- Yes --> SKIP4([⛔ Skip])
-    G -- No --> H[Resolve IMDb ID]
+    D -- No --> E{Already in\ndatabase?}
+    E -- Yes --> SKIP2([⛔ Skip])
+    E -- No --> F{Index metadata\npresent?}
+    F -- No --> SKIP3([⛔ Skip])
+    F -- Yes --> G{Rejected group, criteria,\nsize, keyword, TV type,\nrejected title or\nlibrary match?}
+    G -- Yes --> FAIL1([❌ Fail])
+    G -- No --> H[Resolve IMDb ID and\nfetch IMDb metadata]
     H --> I{Title type\nallowed?}
-    I -- No --> FAIL1([❌ Fail])
-    I -- Yes --> J{Bad genre?}
-    J -- Yes --> FAIL2([❌ Fail])
-    J -- No --> K{Pass rating, votes,\nyear, runtime,\nlanguage, country?}
-    K -- No --> FAIL3([❌ Fail])
-    K -- Yes --> L{Override list\nmatch?}
-    L -- Yes --> PASS2([Remove rating/votes gate,\nthen continue])
-    L -- No --> M{All standard\nfilters pass?}
-    M -- No --> FAIL4([❌ Fail])
-    M -- Yes --> PASS([✅ Add to qBittorrent])
-    PASS2 --> M
+    I -- No --> FAIL2([❌ Fail])
+    I -- Yes --> J{Rejected genre or\ngenre-exclusive?}
+    J -- Yes --> FAIL3([❌ Fail])
+    J -- No --> K{Meets minimum\nbitrate?}
+    K -- No --> FAIL4([❌ Fail])
+    K -- Yes --> L{Year, runtime,\nlanguage, country\nall pass?}
+    L -- No --> FAIL5([❌ Fail])
+    L -- Yes --> M{Override list\nmatch?}
+    M -- Yes --> LIB
+    M -- No --> N{Rating and\nvotes pass?}
+    N -- No --> FAIL6([❌ Fail])
+    N -- Yes --> LIB{"Already in library\n(canonical title)?"}
+    LIB -- Yes --> FAIL7([❌ Fail])
+    LIB -- No --> PASS([✅ Add to qBittorrent])
 ```
+
+An override-list match skips the rating and votes gates; every other gate in the
+chain still applies to it. The first four checks (ignored indexer, database
+duplicate, missing index metadata, then the index-level filters) also run on
+results that never reach the IMDb stage. Immediately after the metadata fetch, a
+result whose indexer-supplied IMDb ID resolves to a different film is failed, so a
+mis-tagged feed cannot queue a torrent under another film's metadata. A result that
+passes every gate can still end as `Failed` when in-queue supersession
+(`queue_management.supersede_enabled`) finds a better same-IMDb torrent already in the
+queue; it is then not added.
 
 ### Queue management pipeline
 
@@ -399,7 +423,8 @@ Runs on its own interval and inspects all movarr-managed torrents in qBittorrent
 
 ### Post-processing pipeline
 
-Runs on its own interval and inspects all movarr-managed torrents in qBittorrent:
+Runs on its `cron` schedule (`schedule.post_processing`) and inspects all movarr-managed torrents in
+qBittorrent:
 
 1. Detects torrents with a completed status.
 2. Scans the download directory, skipping files and folders that match the exclude rules.

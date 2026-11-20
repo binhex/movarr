@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -40,9 +43,21 @@ def _section(parent: dict[str, Any], key: str) -> dict[str, Any]:
     ``raw.setdefault(key, {})`` returns the existing value untouched, so a YAML
     section written as ``filters:`` (null) or ``filters: nope`` would make every
     hand-written migration raise ``AttributeError``/``TypeError`` at startup.
+
+    A null section is the documented way to say "use the defaults" and is replaced
+    silently; any other non-mapping value is a config typo that discards the
+    operator's settings, so it is replaced with a warning naming the key.
     """
     value = parent.get(key)
     if not isinstance(value, dict):
+        if value is not None:
+            # Never log the value itself: a section written as a scalar can carry a
+            # credential-bearing URL, and config values are not redacted elsewhere.
+            logger.warning(
+                "Replacing non-mapping '{}' section ({}) with an empty one; its settings revert to defaults.",
+                key,
+                type(value).__name__,
+            )
         value = {}
         parent[key] = value
     return value
@@ -189,7 +204,7 @@ def _make_migration(
             for k in keypath[:-1]:
                 if not isinstance(node.get(k), dict):
                     if k in node:
-                        logger.warning("Replacing non-dict value at config key %r during migration.", k)
+                        logger.warning("Replacing non-dict value at config key {!r} during migration.", k)
                     node[k] = {}
                 node = node[k]
             node.setdefault(keypath[-1], copy.deepcopy(default))
@@ -284,8 +299,6 @@ def _migrate_v215_to_v216(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _ensure_hooks_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Ensure raw["post_process"]["hooks"] is a mutable dict; return it."""
-    if not isinstance(raw.get("post_process"), dict):
-        raw["post_process"] = {}
     return _section(_section(raw, "post_process"), "hooks")
 
 
@@ -433,19 +446,24 @@ def _coerce_minutes(minutes: object) -> int | None:
         return None
     if isinstance(minutes, int):
         return minutes
-    if isinstance(minutes, float) and minutes.is_integer():
-        return int(minutes)
+    if isinstance(minutes, float):
+        return int(minutes) if minutes.is_integer() else None
     if isinstance(minutes, str):
-        try:
-            return int(minutes)
-        except ValueError:
-            pass
-        try:
-            as_float = float(minutes)
-        except ValueError:
-            return None
-        return int(as_float) if as_float.is_integer() else None
+        return _coerce_numeric_string(minutes)
     return None
+
+
+def _coerce_numeric_string(value: str) -> int | None:
+    """Return *value* as an int when it spells an integral number, else ``None``."""
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        as_float = float(value)
+    except ValueError:
+        return None
+    return int(as_float) if as_float.is_integer() else None
 
 
 def _minutes_to_cron(minutes: int) -> tuple[str, bool]:
@@ -960,9 +978,9 @@ class SearchCriteriaConfig(BaseModel):
 
     criteria: str
     category: str = "2000,5000"
-    minimum_size_mb: int = 3000
-    maximum_size_mb: int = 20000
-    minimum_bitrate_mb: int = 50
+    minimum_size_mb: int = Field(default=3000, ge=0)
+    maximum_size_mb: int = Field(default=20000, ge=0)
+    minimum_bitrate_mb: int = Field(default=50, ge=0)
 
 
 class IndexSiteConfig(BaseModel):
@@ -1178,9 +1196,58 @@ def _strip_and_dump(raw: dict[str, Any], fh: IO[str]) -> None:
 
 
 def _strip_and_write(raw: dict[str, Any], config_path: Path) -> None:
-    """Open *config_path* for writing and dump *raw* with None keys stripped."""
-    with config_path.open("w", encoding="utf-8") as fh:
-        _strip_and_dump(raw, fh)
+    """Rewrite *config_path* with None keys stripped, atomically where possible.
+
+    The rewrite goes through a private temporary file that replaces the original
+    only once it is complete, so a crash mid-write cannot truncate the operator's
+    config.  The temporary file is created ``0600`` (the config holds credentials)
+    and carries the original's mode over before the swap, and a symlinked config
+    is written through its target so the link survives.
+
+    A bind-mounted config file, or a directory the process cannot write to,
+    defeats the rename; that case falls back to the in-place rewrite this
+    replaced, with a warning, so the start still succeeds.
+    """
+    target = config_path.resolve()
+    try:
+        tmp_file = tempfile.NamedTemporaryFile(  # noqa: SIM115 - closed explicitly below
+            "w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+    except OSError as exc:
+        logger.warning("Could not stage a rewrite of '{}' ({}); writing it in place.", target, exc)
+        with target.open("w", encoding="utf-8") as fh:
+            _strip_and_dump(raw, fh)
+        return
+    tmp_path = Path(tmp_file.name)
+    with tmp_file as fh:
+        try:
+            _strip_and_dump(raw, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+    try:
+        with contextlib.suppress(OSError):
+            shutil.copymode(target, tmp_path)
+        with contextlib.suppress(OSError):
+            # copymode leaves the staged file owned by this process; a root-run
+            # rewrite must not hand a PUID-owned config back as root-owned.
+            _st = target.stat()
+            os.chown(tmp_path, _st.st_uid, _st.st_gid)
+        try:
+            os.replace(tmp_path, target)
+        except OSError as exc:
+            logger.warning("Could not replace '{}' atomically ({}); writing it in place.", target, exc)
+            with target.open("w", encoding="utf-8") as fh:
+                _strip_and_dump(raw, fh)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _normalise_version(value: object) -> str:
@@ -1229,8 +1296,7 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
     Returns:
         The migrated raw dict (may be unchanged if already up to date).
     """
-    if not isinstance(raw.get("general"), dict):
-        raw["general"] = {}
+    _section(raw, "general")
     current = _prepare_config_version(raw)
     if current not in MIGRATIONS:
         _warn_unknown_version(current)
@@ -1263,8 +1329,7 @@ def _run_migrations(raw: dict[str, Any], config_path: Path) -> dict[str, Any]:
             break
 
     merged = _deep_merge(_default_config_dict(), raw)
-    with config_path.open("w", encoding="utf-8") as fh:
-        _strip_and_dump(merged, fh)
+    _strip_and_write(merged, config_path)
 
     return raw
 
@@ -1371,8 +1436,22 @@ def _warn_unknown_version(current: str) -> None:
 
 
 def _default_config_dict() -> dict[str, Any]:
-    """Return the default config as a plain dict suitable for YAML serialisation."""
-    return Config().model_dump()
+    """Return the default config as a plain dict suitable for YAML serialisation.
+
+    Raises:
+        ValueError: When the host has no resolvable local timezone, so the default
+            cron schedule cannot be validated.  A hand-written
+            ``schedule.timezone`` cannot help: these defaults are validated before
+            the operator's file is merged into them.
+    """
+    try:
+        return Config().model_dump()
+    except ValueError as exc:
+        raise ValueError(
+            "Cannot determine the local timezone on this host, so the default schedule cannot be "
+            "validated. Install the timezone database (tzdata) or set TZ to a zone that exists, "
+            "then start movarr again."
+        ) from exc
 
 
 def create_default_config(config_path: str | Path) -> None:
@@ -1387,8 +1466,13 @@ def create_default_config(config_path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return
-    with path.open("w", encoding="utf-8") as fh:
-        yaml.dump(_default_config_dict(), fh, default_flow_style=False, sort_keys=False)
+    # Build the payload before opening the file: validation runs inside
+    # _default_config_dict(), and a failure there must not leave a zero-byte
+    # config that the next start would treat as an existing (empty) file.
+    payload = _default_config_dict()
+    # Stage through the atomic helper: a crash mid-write must not leave a truncated
+    # file that every later start treats as an existing config.
+    _strip_and_write(payload, path)
 
 
 def load_config(config_path: str | Path) -> Config:

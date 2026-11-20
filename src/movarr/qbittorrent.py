@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from movarr.config import Config
     from movarr.models import ResultDict
 
-from movarr.parsing import normalise_imdb_id
+from movarr.parsing import normalise_imdb_id, strip_control_chars
 
 __all__ = ["QBittorrentClient", "QBittorrentError", "extract_movarr_tag", "parse_imdb_id_from_tags"]
 
@@ -228,7 +228,11 @@ class QBittorrentClient:
     def list_by_category(self) -> dict[str, Any]:
         """Return a ``{hash: torrent_info}`` dict for all category torrents."""
         torrents = self._client.torrents_info(category=self._category)
-        torrent_map: dict[str, Any] = {str(t["hash"]): t for t in torrents}
+        # The name is uploader-controlled metadata that reaches logs, result details
+        # and the history DB, so it is sanitised once, at this boundary.
+        torrent_map: dict[str, Any] = {
+            str(t["hash"]): {**t, "name": strip_control_chars(str(t.get("name", "")))} for t in torrents
+        }
         _logger.debug("Found {} torrent(s) in category '{}'.", len(torrent_map), self._category)
         return torrent_map
 
@@ -241,7 +245,7 @@ class QBittorrentClient:
     def _build_torrent_entry(torrent: Any, files: Any, props: Any) -> dict[str, Any]:
         """Build a torrent info dict from qBittorrent API objects."""
         return {
-            "torrent_name": torrent.name,
+            "torrent_name": strip_control_chars(str(torrent.name)),
             "torrent_hash": torrent.hash,
             "torrent_tag": extract_movarr_tag(torrent.tags),
             "torrent_save_path": props.save_path,
@@ -373,6 +377,8 @@ class QBittorrentClient:
             state: Human-readable state string for log messages.
             name: Optional human-readable torrent title for log messages.
         """
+        # The title comes from the torrent metadata, so it is untrusted log text.
+        name = strip_control_chars(name) if name else ""
         try:
             self._client.torrents_delete(delete_files=delete_data, torrent_hashes=torrent_hash)
         except qbittorrentapi.APIError as exc:
@@ -412,5 +418,9 @@ class QBittorrentClient:
             if self.delete_torrent(torrent_hash, delete_data, state, name=info.get("name", "")):
                 deleted.add(torrent_hash)
             else:
-                _logger.warning("Could not delete '{}' ({}).", info["name"], torrent_hash)
+                _logger.warning(
+                    "Could not delete '{}' ({}).",
+                    strip_control_chars(str(info.get("name", ""))),
+                    torrent_hash,
+                )
         return deleted

@@ -78,8 +78,8 @@ class TestRunQueueManagement:
 
         qbt.list_by_category.assert_called_once()
 
-    def test_calls_delete_stuck_twice_when_both_monitors_enabled(self, mocker: MockerFixture) -> None:
-        """list_by_category is called once per enabled monitor (2 total)."""
+    def test_both_monitors_share_one_category_snapshot(self, mocker: MockerFixture) -> None:
+        """Both enabled monitors read the category once and share that snapshot."""
         cfg = _enabled_config()
         qbt = mocker.MagicMock(spec=QBittorrentClient)
         qbt.is_reachable.return_value = True

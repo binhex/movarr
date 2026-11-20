@@ -54,6 +54,7 @@ override-dependencies = ["trans>=2.1.0"]
 
 [tool.uv.sources]
 trans = { path = "vendor/trans" }
+pytest-crap = { git = "https://github.com/binhex/pytest-crap.git", rev = "v0.3.1" }
 
 [tool.ruff]
 line-length = 120
@@ -198,5 +199,6 @@ dev = [
     "types-pyyaml>=6.0.0",
     "pre-commit",
     "mypy",
-    "ruff"
+    "ruff",
+    "pytest-crap"
 ]

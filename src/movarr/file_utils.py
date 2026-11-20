@@ -13,6 +13,8 @@ from pathlib import Path
 
 from loguru import logger as _logger
 
+from movarr.parsing import strip_control_chars
+
 __all__ = [
     "walk_library",
     "copy_with_verify",
@@ -37,6 +39,11 @@ def walk_library(library_paths: list[str]) -> list[tuple[str, list[str], list[st
 _CHUNK_SIZE = 65_536  # 64 KiB — balance between I/O calls and memory usage
 
 
+def _display(path: object) -> str:
+    """Return *path* as log-safe text: torrent file names are untrusted."""
+    return strip_control_chars(str(path))
+
+
 def _sha256(file_path: Path, label: str | None = None) -> str:
     """Return the SHA-256 hex digest of *file_path*.
 
@@ -55,7 +62,7 @@ def _sha256(file_path: Path, label: str | None = None) -> str:
                 done += len(chunk)
                 pct = done * 100 // total
                 while next_pct <= pct and next_pct <= 75:
-                    _logger.info(label + " {}% complete.", file_path, next_pct)
+                    _logger.info(label + " {}% complete.", _display(file_path), next_pct)
                     next_pct += 25
     return h.hexdigest()
 
@@ -86,21 +93,21 @@ def delete_file(path: str | Path) -> bool:
     """
     target = Path(path)
     if target.is_dir():
-        _logger.error("Refusing to delete '{}': it is a directory, not a file.", target)
+        _logger.error("Refusing to delete '{}': it is a directory, not a file.", _display(target))
         return False
     if not target.is_file():
-        _logger.debug("File '{}' does not exist; treating as already deleted.", target)
+        _logger.debug("File '{}' does not exist; treating as already deleted.", _display(target))
         return True
     try:
         target.unlink()
-        _logger.info("Deleted file '{}'.", target)
+        _logger.info("Deleted file '{}'.", _display(target))
         return True
     except PermissionError as exc:
-        _logger.warning("Permission denied deleting '{}': {}.", target, exc)
+        _logger.warning("Permission denied deleting '{}': {}.", _display(target), _display(exc))
     except IsADirectoryError as exc:
-        _logger.warning("'{}' is a directory, not a file: {}.", target, exc)
+        _logger.warning("'{}' is a directory, not a file: {}.", _display(target), _display(exc))
     except OSError as exc:
-        _logger.warning("OS error deleting '{}': {}.", target, exc)
+        _logger.warning("OS error deleting '{}': {}.", _display(target), _display(exc))
     return False
 
 
@@ -115,27 +122,27 @@ def _verify_existing(src: Path, dst: Path) -> bool | None:
         None  - dst exists but differs, or became unreadable (replace it).
         False - the source file disappeared during verification.
     """
-    _logger.info("Verifying existing destination '{}' checksum.", dst)
+    _logger.info("Verifying existing destination '{}' checksum.", _display(dst))
     try:
         src_hash = _sha256(src)
     except OSError:
-        _logger.error("Source file disappeared during verification: '{}'", src)
+        _logger.error("Source file disappeared during verification: '{}'", _display(src))
         return False
     try:
         dst_hash = _sha256(dst, label="Verifying '{}' checksum:")
     except OSError:
-        _logger.warning("Destination '{}' became unreadable during verification; replacing.", dst)
+        _logger.warning("Destination '{}' became unreadable during verification; replacing.", _display(dst))
         return None
     if src_hash == dst_hash:
         _logger.info(
             "Destination '{}' already matches source (sha256={}); skipping copy.",
-            dst,
+            _display(dst),
             src_hash[:12],
         )
         return True
     _logger.warning(
         "Destination '{}' checksum mismatch (src={}, dst={}); replacing.",
-        dst,
+        _display(dst),
         src_hash[:12],
         dst_hash[:12],
     )
@@ -252,32 +259,37 @@ def _remove_stale_staging(dst: Path, min_age_secs: float = _STALE_STAGING_MIN_AG
     for candidate in candidates:
         if not _is_stale_staging(candidate, dst):
             continue
-        try:
-            changed = candidate.stat().st_ctime
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            _logger.debug("Could not inspect staging file '{}': {}.", candidate, exc)
-            continue
-        if changed <= 0:
-            _logger.debug("Keeping staging file '{}' with an unknown change time.", candidate)
-            continue
-        if changed > cutoff:
-            _logger.debug("Keeping recent staging file '{}'; it may belong to a running copy.", candidate)
-            continue
-        try:
-            candidate.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            _logger.warning(
-                "Could not remove stale staging file '{}': {}.  Unlock it through the configured pre_copy hook "
-                "(or chattr -i on the '/mnt/disk*' path) so the next run can reclaim it.",
-                candidate,
-                exc,
-            )
-        else:
-            _logger.info("Removed stale staging file '{}' left by an earlier run.", candidate)
+        _reclaim_staging_file(candidate, cutoff)
+
+
+def _reclaim_staging_file(candidate: Path, cutoff: float) -> None:
+    """Remove *candidate* when it is a stale staging file, otherwise keep it."""
+    try:
+        changed = candidate.stat().st_ctime
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        _logger.debug("Could not inspect staging file '{}': {}.", candidate, exc)
+        return
+    if changed <= 0:
+        _logger.debug("Keeping staging file '{}' with an unknown change time.", candidate)
+        return
+    if changed > cutoff:
+        _logger.debug("Keeping recent staging file '{}'; it may belong to a running copy.", candidate)
+        return
+    try:
+        candidate.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        _logger.warning(
+            "Could not remove stale staging file '{}': {}.  Unlock it through the configured pre_copy hook "
+            "(or chattr -i on the '/mnt/disk*' path) so the next run can reclaim it.",
+            candidate,
+            exc,
+        )
+    else:
+        _logger.info("Removed stale staging file '{}' left by an earlier run.", candidate)
 
 
 def _confirm_swap(dst: Path, digest: str) -> bool:
@@ -379,7 +391,7 @@ def _do_copy(src: Path, dst: Path) -> None:
     """
     total = src.stat().st_size
     next_pct = 25
-    _logger.info("Copying '{}' → '{}'.", src, dst)
+    _logger.info("Copying '{}' → '{}'.", _display(src), _display(dst))
     with src.open("rb") as fsrc, dst.open("wb") as fdst:
         done = 0
         for chunk in iter(lambda: fsrc.read(_CHUNK_SIZE), b""):
@@ -388,10 +400,10 @@ def _do_copy(src: Path, dst: Path) -> None:
             if total > 0:
                 pct = done * 100 // total
                 while next_pct <= pct and next_pct <= 75:
-                    _logger.info("Copying '{}' → '{}': {}% complete.", src, dst, next_pct)
+                    _logger.info("Copying '{}' → '{}': {}% complete.", _display(src), _display(dst), next_pct)
                     next_pct += 25
     shutil.copystat(str(src), str(dst))
-    _logger.info("Copied '{}' → '{}'.", src, dst)
+    _logger.info("Copied '{}' → '{}'.", _display(src), _display(dst))
 
 
 def _perform_copy(src: Path, dst: Path) -> str | None:
@@ -404,27 +416,27 @@ def _perform_copy(src: Path, dst: Path) -> str | None:
     try:
         _do_copy(src, dst)
     except FileNotFoundError as exc:
-        _logger.warning("Source '{}' not found during copy: {}.", src, exc)
+        _logger.warning("Source '{}' not found during copy: {}.", _display(src), _display(exc))
         return None
     except PermissionError as exc:
-        _logger.warning("Permission denied copying '{}' → '{}': {}.", src, dst, exc)
+        _logger.warning("Permission denied copying '{}' → '{}': {}.", _display(src), _display(dst), exc)
         return None
     except OSError as exc:
-        _logger.warning("OS error copying '{}' → '{}': {}.", src, dst, exc)
+        _logger.warning("OS error copying '{}' → '{}': {}.", _display(src), _display(dst), exc)
         return None
 
-    _logger.info("Verifying copy integrity for '{}'.", dst)
+    _logger.info("Verifying copy integrity for '{}'.", _display(dst))
     try:
         src_hash = _sha256(src)
     except OSError:
-        _logger.error("Source file disappeared during post-copy verification: '{}'", src)
+        _logger.error("Source file disappeared during post-copy verification: '{}'", _display(src))
         return None
     try:
         dst_hash = _sha256(dst, label="Verifying '{}' copy integrity:")
     except OSError as exc:
         # Contract is "digest or None", not "raise": a destination that became
         # unreadable after the copy is a failed copy.
-        _logger.warning("Could not verify copied file '{}': {}.", dst, exc)
+        _logger.warning("Could not verify copied file '{}': {}.", _display(dst), exc)
         return None
     if src_hash != dst_hash:
         _logger.warning(

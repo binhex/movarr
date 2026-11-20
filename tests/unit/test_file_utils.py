@@ -906,3 +906,47 @@ class TestImmutableFlagRetry:
             _try_clear_immutable(Path("/tmp/x"))  # must not raise
 
         assert any("chattr -i failed (rc=1)" in message for message in _messages(records, "DEBUG"))
+
+    def test_chattr_success_returns_without_a_warning(self, mocker: MockerFixture) -> None:
+        """A successful chattr must stay silent."""
+        from movarr.file_utils import _try_clear_immutable
+
+        result = mocker.MagicMock(returncode=0, stderr=b"")
+        mocker.patch("movarr.file_utils.subprocess.run", return_value=result)
+
+        with _captured_logs() as records:
+            _try_clear_immutable(Path("/tmp/x"))
+
+        assert not _messages(records, "WARNING")
+
+
+class TestReclaimStagingFile:
+    """_reclaim_staging_file removes only demonstrably abandoned staging files."""
+
+    def test_vanished_staging_file_is_ignored(self, mocker: MockerFixture) -> None:
+        """A file that disappears between the scan and the stat must not raise."""
+        candidate = mocker.MagicMock()
+        candidate.stat.side_effect = FileNotFoundError("gone")
+
+        file_utils._reclaim_staging_file(candidate, cutoff=0.0)
+
+        candidate.unlink.assert_not_called()
+
+    def test_unreadable_staging_file_is_kept_and_reported(self, mocker: MockerFixture) -> None:
+        """A stat failure keeps the leftover and explains why."""
+        candidate = mocker.MagicMock()
+        candidate.stat.side_effect = OSError("io error")
+
+        with _captured_logs() as records:
+            file_utils._reclaim_staging_file(candidate, cutoff=0.0)
+
+        candidate.unlink.assert_not_called()
+        assert any("Could not inspect staging file" in message for message in _messages(records, "DEBUG"))
+
+    def test_staging_file_vanishing_before_unlink_is_ignored(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A concurrent removal must not raise."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch("pathlib.Path.unlink", side_effect=FileNotFoundError("gone"))
+
+        file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)  # must not raise

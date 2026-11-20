@@ -10,7 +10,7 @@ from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
 from movarr.models import build_result_dict
-from movarr.parsing import normalise_imdb_id
+from movarr.parsing import normalise_imdb_id, strip_control_chars
 from movarr.utils import bytes_to_mb
 
 if TYPE_CHECKING:
@@ -176,7 +176,7 @@ class ProwlarrClient:
         """Extract a :class:`~movarr.models.ResultDict` from one Prowlarr JSON result."""
         if not self._is_usable_item(item):
             return None
-        index_title = str(item["title"])
+        index_title = strip_control_chars(str(item["title"]))
         size_bytes = item.get("size", 0) or 0
         result: ResultDict = build_result_dict(
             index_title=index_title,

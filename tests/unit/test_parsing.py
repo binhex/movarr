@@ -15,7 +15,26 @@ from movarr.parsing import (
     normalise_imdb_id,
     quality_score,
     sanitise,
+    strip_control_chars,
 )
+
+# strip_control_chars
+
+
+class TestStripControlChars:
+    """Indexer-supplied titles must not carry control characters into a log sink."""
+
+    def test_newlines_and_escapes_become_spaces(self) -> None:
+        assert strip_control_chars("Evil\n2026-01-01 | INFO | forged\x1b]0;pwn\x07") == (
+            "Evil 2026-01-01 | INFO | forged ]0;pwn "
+        )
+
+    def test_plain_titles_are_unchanged(self) -> None:
+        assert strip_control_chars("The Matrix 1999 1080p BluRay") == "The Matrix 1999 1080p BluRay"
+
+    def test_c1_controls_are_replaced(self) -> None:
+        assert strip_control_chars("A\x9bB") == "A B"
+
 
 # sanitise
 

@@ -191,6 +191,23 @@ class TestListCompleted:
         assert entry["torrent_save_path"] == "/downloads/movies"
         assert entry["torrent_file_list"] == [{"file_name": "movie.mkv", "file_size": 1_000_000}]
 
+    def test_control_characters_are_stripped_from_the_torrent_name(self, mocker: MockerFixture) -> None:
+        """Torrent metadata titles are untrusted log text and are sanitised on ingest."""
+        from movarr.qbittorrent import QBittorrentClient
+
+        torrent = mocker.MagicMock()
+        torrent.name = "Evil\nFORGED\x1b]0;pwn\x07"
+        torrent.hash = "abc123"
+        torrent.tags = "movarr-abc123"
+        props = mocker.MagicMock()
+        props.save_path = "/downloads/movies"
+
+        entry = QBittorrentClient._build_torrent_entry(torrent, [], props)
+
+        assert "\n" not in entry["torrent_name"]
+        assert "\x1b" not in entry["torrent_name"]
+        assert "Evil" in entry["torrent_name"]
+
     def test_skips_torrents_without_movarr_tag(self, mocker: MockerFixture) -> None:
         """Torrents whose tags contain no 'movarr-' prefix are excluded."""
         client, mock_api = _make_client(mocker)
@@ -395,6 +412,17 @@ class TestDeleteTorrent:
         # The name should appear as a positional argument to the log call
         log_args = mock_info.call_args.args
         assert "Movie.Title.2024" in log_args
+
+    def test_control_characters_are_stripped_from_the_logged_name(self, mocker: MockerFixture) -> None:
+        """A torrent title from the metadata service must not forge a log line."""
+        client, mock_api = _make_client(mocker)
+        mock_info = mocker.patch("movarr.qbittorrent._logger.info")
+
+        client.delete_torrent("hash1", delete_data=False, state="stalledDL", name="Evil\nFORGED\x1b]0;pwn\x07")
+
+        logged = " ".join(str(arg) for arg in mock_info.call_args.args)
+        assert "\n" not in logged
+        assert "\x1b" not in logged
 
 
 # delete_stalled
@@ -775,3 +803,33 @@ class TestWebuiTlsVerification:
         QBittorrentClient(Config())
 
         assert client_cls.call_args.kwargs["VERIFY_WEBUI_CERTIFICATE"] is False
+
+
+class TestTorrentNameSanitisation:
+    """Names from qBittorrent metadata are untrusted log/DB text."""
+
+    def test_list_by_category_strips_control_characters(self, mocker: MockerFixture) -> None:
+        """The snapshot boundary sanitises the name before anything consumes it."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_info.return_value = [
+            {"hash": "abc123", "name": "Evil\nFORGED\x1b]0;pwn\x07", "tags": "movarr-abc123"}
+        ]
+
+        snapshot = client.list_by_category()
+
+        name = snapshot["abc123"]["name"]
+        assert "\n" not in name
+        assert "\x1b" not in name
+        assert "Evil" in name
+
+    def test_delete_stalled_warning_is_sanitised(self, mocker: MockerFixture) -> None:
+        """A failed deletion must not echo a forged line from the torrent name."""
+        client, mock_api = _make_client(mocker)
+        mock_api.torrents_delete.side_effect = __import__("qbittorrentapi").APIError("boom")
+        mock_warning = mocker.patch("movarr.qbittorrent._logger.warning")
+
+        client.delete_stalled({"abc123": {"name": "Evil\nFORGED\x1b]0;pwn\x07"}}, "stalledDL", False)
+
+        logged = " ".join(str(arg) for arg in mock_warning.call_args.args)
+        assert "\n" not in logged
+        assert "\x1b" not in logged

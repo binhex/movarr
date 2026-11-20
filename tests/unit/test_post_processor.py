@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import urllib.error
+import urllib.request
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,6 +29,7 @@ from movarr.post_processor import (
     _largest_file,
     _parse_genres,
     _pick_path,
+    _PosterRedirectHandler,
     _process_one,
     _resolution_from_index_title,
     _resolve_destination,
@@ -33,6 +38,20 @@ from movarr.post_processor import (
     _save_poster_art,
     run_post_processing,
 )
+
+
+def _patch_poster_opener(
+    mocker: MockerFixture,
+    *,
+    response: Any = None,
+    side_effect: Any = None,
+) -> Any:
+    """Patch the poster request opener and return its ``open`` mock."""
+    opener = mocker.MagicMock()
+    opener.open.return_value = response
+    opener.open.side_effect = side_effect
+    mocker.patch("movarr.post_processor.urllib.request.build_opener", return_value=opener)
+    return opener.open
 
 
 class TestSupersessionQualityScore:
@@ -3145,6 +3164,102 @@ class TestDeleteSupersededFilesEndToEnd:
         assert post_witness.exists(), "post_delete hook must have run"
 
 
+class TestPosterUrlSafety:
+    """A provider-supplied poster URL must never reach an internal address."""
+
+    def test_unsafe_poster_urls_are_refused(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """Non-http(s) schemes, local names and non-public address literals are skipped."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        cfg.post_process.poster_art.download_width = 0
+        build_opener = mocker.patch("movarr.post_processor.urllib.request.build_opener")
+
+        for url in (
+            "file:///etc/passwd",
+            "http:///poster.jpg",
+            "http://[::1/poster.jpg",
+            "http://localhost:8080/poster.jpg",
+            "http://localhost.localdomain/poster.jpg",
+            "http://nas.local/poster.jpg",
+            "http://router.lan/poster.jpg",
+            "http://printer.home.arpa/poster.jpg",
+            "http://%6c%6f%63%61%6c%68%6f%73%74/poster.jpg",
+            "http://:8080/poster.jpg",
+            "http://user:pw@:8080/poster.jpg",
+            "http://127.0.0.1/poster.jpg",
+            "http://127.1/poster.jpg",
+            "http://2130706433/poster.jpg",
+            "http://%31%32%37.0.0.1:8080/poster.jpg",
+            "http://127%2e0%2e0%2e1/poster.jpg",
+            "http://127.0.0.1%3a8080/poster.jpg",
+            "http://localhost%3A8080/poster.jpg",
+            "http://169.254.169.254%3a80/latest/meta-data/",
+            "http://0177.0.0.1/poster.jpg",
+            "http://0x7f.0.0.1/poster.jpg",
+            "http://[::1]/poster.jpg",
+            "http://[::ffff:127.0.0.1]/poster.jpg",
+            "http://192.168.1.10/poster.jpg",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://2852039166/latest/meta-data/",
+        ):
+            record = mocker.MagicMock(spec=HistoryRecord)
+            record.imdb_poster_url = url
+            record.imdb_title = "Inception"
+            _save_poster_art(record, str(tmp_path), cfg)
+
+        build_opener.assert_not_called()
+        assert not (tmp_path / "poster.jpg").exists()
+
+    def test_public_address_literal_fetches_through_the_guarded_opener(
+        self, mocker: MockerFixture, tmp_path: Path
+    ) -> None:
+        """A global address literal is fetched, and only the validating opener is used."""
+        cfg = Config()
+        cfg.post_process.poster_art.filename = "poster.jpg"
+        cfg.post_process.poster_art.download_width = 0
+        record = mocker.MagicMock(spec=HistoryRecord)
+        record.imdb_poster_url = "http://8.8.8.8/poster.jpg"
+        record.imdb_title = "Inception"
+        build_opener = mocker.patch(
+            "movarr.post_processor.urllib.request.build_opener",
+            side_effect=OSError("unreachable"),
+        )
+
+        _save_poster_art(record, str(tmp_path), cfg)
+
+        build_opener.assert_called_once()
+        assert build_opener.call_args[0][0] is _PosterRedirectHandler
+
+    def test_redirect_to_internal_address_is_refused(self) -> None:
+        """A 3xx aiming at a non-public address raises instead of being followed."""
+        handler = _PosterRedirectHandler()
+
+        with pytest.raises(urllib.error.HTTPError):
+            handler.redirect_request(
+                urllib.request.Request("https://m.media-amazon.com/x.jpg"),
+                None,
+                302,
+                "Found",
+                {},
+                "http://169.254.169.254/latest/meta-data/",
+            )
+
+    def test_redirect_to_public_address_is_allowed(self) -> None:
+        """A redirect to another public host is still followed."""
+        handler = _PosterRedirectHandler()
+
+        redirected = handler.redirect_request(
+            urllib.request.Request("https://m.media-amazon.com/x.jpg"),
+            None,
+            302,
+            "Found",
+            {},
+            "https://ia.media-imdb.com/x.jpg",
+        )
+
+        assert redirected is not None
+
+
 class TestSavePosterArt:
     """Tests for _save_poster_art — poster download + save to disk."""
 
@@ -3162,9 +3277,9 @@ class TestSavePosterArt:
         cfg = Config()
         cfg.post_process.poster_art.filename = ""
         record = mocker.MagicMock(spec=HistoryRecord)
-        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen")
+        build_opener = mocker.patch("movarr.post_processor.urllib.request.build_opener")
         _save_poster_art(record, str(tmp_path), cfg)
-        urlopen.assert_not_called()
+        build_opener.assert_not_called()
 
     def test_skip_when_poster_url_none(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """Does nothing when poster URL is None."""
@@ -3172,9 +3287,9 @@ class TestSavePosterArt:
         cfg.post_process.poster_art.filename = "poster.jpg"
         record = mocker.MagicMock(spec=HistoryRecord)
         record.imdb_poster_url = None
-        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen")
+        build_opener = mocker.patch("movarr.post_processor.urllib.request.build_opener")
         _save_poster_art(record, str(tmp_path), cfg)
-        urlopen.assert_not_called()
+        build_opener.assert_not_called()
 
     def test_downloads_and_writes_file(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """Downloads poster and writes to correct path."""
@@ -3187,10 +3302,7 @@ class TestSavePosterArt:
         record.imdb_title = "Inception"
 
         mock_response = self._make_response({"Content-Type": "image/jpeg"})
-        mock_urlopen = mocker.patch(
-            "movarr.post_processor.urllib.request.urlopen",
-            return_value=mock_response,
-        )
+        mock_urlopen = _patch_poster_opener(mocker, response=mock_response)
         _save_poster_art(record, str(tmp_path), cfg)
 
         mock_urlopen.assert_called_once()
@@ -3208,7 +3320,7 @@ class TestSavePosterArt:
         record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
 
         mock_response = self._make_response({"Content-Type": "text/html"})
-        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
+        _patch_poster_opener(mocker, response=mock_response)
 
         _save_poster_art(record, str(tmp_path), cfg)
 
@@ -3220,7 +3332,7 @@ class TestSavePosterArt:
         cfg.post_process.poster_art.filename = "poster.jpg"
         record = mocker.MagicMock(spec=HistoryRecord)
         record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
-        mocker.patch("movarr.post_processor.urllib.request.urlopen", side_effect=OSError("timeout"))
+        _patch_poster_opener(mocker, side_effect=OSError("timeout"))
 
         # Should not raise
         _save_poster_art(record, str(tmp_path), cfg)
@@ -3233,7 +3345,7 @@ class TestSavePosterArt:
         record = mocker.MagicMock(spec=HistoryRecord)
         record.imdb_poster_url = "https://m.media-amazon.com/images/M/MV5B._V1_.jpg"
         mock_response = self._make_response({"Content-Type": "image/jpeg"})
-        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=mock_response)
+        _patch_poster_opener(mocker, response=mock_response)
 
         _save_poster_art(record, str(tmp_path), cfg)
 
@@ -3350,7 +3462,7 @@ class TestSavePosterArtHardening:
         """A ValueError (unknown URL scheme) must not escape."""
         cfg = Config()
         cfg.post_process.poster_art.filename = "poster.jpg"
-        mocker.patch("movarr.post_processor.urllib.request.urlopen", side_effect=ValueError("unknown url type"))
+        _patch_poster_opener(mocker, side_effect=ValueError("unknown url type"))
 
         _save_poster_art(self._record(mocker), str(tmp_path), cfg)
 
@@ -3366,7 +3478,7 @@ class TestSavePosterArtHardening:
         resp.headers = {"Content-Type": "image/jpeg"}
         resp.read.return_value = b"x" * (_MAX_POSTER_BYTES + 1)
         resp.__enter__.return_value = resp
-        mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=resp)
+        _patch_poster_opener(mocker, response=resp)
 
         _save_poster_art(self._record(mocker), str(tmp_path), cfg)
 
@@ -3422,7 +3534,7 @@ class TestUserAgent:
         resp.headers = {"Content-Type": "image/jpeg"}
         resp.read.return_value = b"x"
         resp.__enter__.return_value = resp
-        urlopen = mocker.patch("movarr.post_processor.urllib.request.urlopen", return_value=resp)
+        urlopen = _patch_poster_opener(mocker, response=resp)
 
         _save_poster_art(record, str(tmp_path), cfg)
 
@@ -3718,3 +3830,69 @@ class TestDeletionOutsideLibraryRoots:
         _maybe_delete_superseded(cfg, str(outside), str(tmp_path), "Movie 2000 1080p.mkv", {"Movie 2000 1080p.mkv"})
 
         assert (outside / "Movie 2000 720p.mkv").exists()
+
+
+class TestCopiedFileNamesAreSanitised:
+    """Torrent-supplied file names must not reach the library or the logs raw."""
+
+    def test_destination_names_strip_control_characters(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A per-file name with a newline/escape becomes a plain library filename."""
+        import os as _os
+
+        from movarr.post_processor import _copy_files
+
+        src = tmp_path / "Evil\nFORGED\x1b]0;pwn\x07.mkv"
+        src.write_bytes(b"payload")
+        captured: list[str] = []
+
+        def _fake_copy(_src: str, dst: str) -> bool:
+            captured.append(dst)
+            return True
+
+        mocker.patch("movarr.post_processor.copy_with_verify", side_effect=_fake_copy)
+
+        ok, names = _copy_files([str(src)], str(tmp_path), "other.mkv", "Canonical.mkv")
+
+        assert ok
+        assert all("\n" not in name and "\x1b" not in name for name in names)
+        assert all("\n" not in dst and "\x1b" not in dst for dst in captured)
+        assert captured and _os.path.basename(captured[0]).endswith(".mkv")
+
+
+class TestCanonicalNameSanitisation:
+    """The sanitised primary name must match the on-disk name the copy set records."""
+
+    def test_canonical_destination_is_sanitised_and_returned(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A control-character primary name must not silently disable supersession."""
+        from movarr.parsing import strip_control_chars
+        from movarr.post_processor import _copy_files
+
+        raw = "Movie 2020 1080p\x1b]0;pwn\x07.mkv"
+        src = tmp_path / raw
+        src.write_bytes(b"payload")
+        canonical = strip_control_chars(raw)
+        captured: list[str] = []
+
+        def _fake_copy(_src: str, dst: str) -> bool:
+            captured.append(dst)
+            return True
+
+        mocker.patch("movarr.post_processor.copy_with_verify", side_effect=_fake_copy)
+
+        ok, names = _copy_files([str(src)], str(tmp_path), raw, canonical)
+
+        assert ok
+        assert canonical in names, "the returned set must hold the on-disk (sanitised) name"
+        assert raw not in names
+        assert all("\x1b" not in dst for dst in captured)
+
+    def test_safe_path_component_strips_control_characters(self) -> None:
+        """A metadata title must not put control characters into the movie folder name."""
+        from movarr.post_processor import _safe_path_component
+
+        cleaned = _safe_path_component("Movie\nFORGED\x1b]0;pwn\x07")
+
+        assert "\n" not in cleaned
+        assert "\x1b" not in cleaned
+        assert "Movie" in cleaned
+        assert cleaned == cleaned.strip()

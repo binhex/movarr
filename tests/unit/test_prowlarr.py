@@ -76,6 +76,16 @@ class TestParseResult:
         client, _ = _make_client(mocker)
         assert client._parse_result({"indexer": "x"}) is None
 
+    def test_control_characters_are_stripped_from_the_title(self, mocker: MockerFixture) -> None:
+        """A feed title that carries newlines or escapes must not reach the logs raw."""
+        client, _ = _make_client(mocker)
+
+        result = client._parse_result(self._item(title="Evil\nFORGED\x1b]0;pwn\x07"))
+
+        assert result is not None
+        assert "\n" not in result["index_title"]
+        assert "\x1b" not in result["index_title"]
+
     def test_imdb_id_formatted_with_tt_prefix(self, mocker: MockerFixture) -> None:
         """Prowlarr imdbId integer 113627 → 'tt0113627'."""
         client, _ = _make_client(mocker)

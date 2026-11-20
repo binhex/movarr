@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import sys
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 from loguru import logger as _logger
 
 from movarr.logger import create_logger
+from movarr.parsing import CONTROL_CHAR_TRANSLATION
 
 if TYPE_CHECKING:
     from movarr.config import Config
@@ -17,6 +20,73 @@ try:
     _VERSION = version("movarr")
 except PackageNotFoundError:
     _VERSION = "unknown"
+
+# Characters loguru reads as format (braces) or colour (angle brackets) syntax, plus
+# every C0 control character (newlines forge log lines; ESC injects terminal control
+# sequences).  The tracker name comes from the indexer, so none of it may reach the
+# format string raw.
+_LOG_UNSAFE_CHARS = {
+    **CONTROL_CHAR_TRANSLATION,
+    ord("{"): "(",
+    ord("}"): ")",
+    ord("<"): "(",
+    ord(">"): ")",
+}
+
+
+def _start_load_capture() -> tuple[list[tuple[str, str]], int]:
+    """Replace the default sink with a recorder for config-load diagnostics.
+
+    Migration, unknown-key and timezone warnings are emitted while the config is
+    loaded, before the operator's log path and level are known.  Loguru's default
+    sink prints them to stderr immediately, but ``create_logger`` then removes
+    every sink, so they would never reach the configured file.  Recording them
+    here lets :func:`_finish_load_capture` replay them into the configured console
+    and file sinks.
+
+    Replayed lines go through the configured levels, so a level set above the
+    record's severity suppresses it -- exactly as it would for a line logged
+    after startup.
+
+    Returns:
+        The list that receives ``(level, message)`` pairs and its sink id.
+    """
+    captured: list[tuple[str, str]] = []
+
+    def _record(message: Any) -> None:
+        captured.append((message.record["level"].name, message.record["message"]))
+
+    _logger.remove()
+    return captured, _logger.add(_record, level="DEBUG")
+
+
+def _finish_load_capture(
+    captured: list[tuple[str, str]],
+    handler_id: int,
+    *,
+    to_default_sink: bool = False,
+) -> None:
+    """Drop the recorder and re-emit the captured lines through the active sinks.
+
+    Each line keeps its recorded severity, so the configured console and file
+    levels apply to it exactly as they would to a line logged after startup.
+
+    Args:
+        captured: Pairs recorded by :func:`_start_load_capture`.
+        handler_id: Id of the recorder sink, removed before replaying.
+        to_default_sink: Restore a plain stderr sink first.  Used when no
+            configured logger is available: a failed load, or a logger that
+            could not be created.
+    """
+    # create_logger() removes every sink, so the recorder may already be gone.
+    with contextlib.suppress(ValueError):
+        _logger.remove(handler_id)
+    if to_default_sink:
+        # No configured sink survived: replace whatever is left with plain stderr.
+        _logger.remove()
+        _logger.add(sink=sys.stderr, level="DEBUG")
+    for level, message in captured:
+        _logger.log(level, message)
 
 
 def _apply_general_overrides(config: Config, overrides: dict[str, object]) -> None:
@@ -244,7 +314,12 @@ def cli(
     """
     from movarr.config import load_config  # noqa: PLC0415
 
-    config = load_config(config_path)
+    captured, capture_id = _start_load_capture()
+    try:
+        config = load_config(config_path)
+    except Exception:
+        _finish_load_capture(captured, capture_id, to_default_sink=True)
+        raise
 
     _apply_cli_overrides(
         config,
@@ -266,9 +341,10 @@ def cli(
 
     def _log_format(record: dict) -> str:
         tracker = record["extra"].get("tracker", "")
-        # Braces are format syntax to loguru: an indexer-controlled tracker name
-        # must not be able to corrupt (or break) every log record.
-        safe_tracker = str(tracker).replace("{", "(").replace("}", ")")
+        # Braces are format syntax and angle brackets are colour syntax to
+        # loguru: an indexer-controlled tracker name must not be able to corrupt
+        # (or break) every log record.
+        safe_tracker = str(tracker).translate(_LOG_UNSAFE_CHARS)
         prefix = f"[{safe_tracker}] " if tracker else ""
         return (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
@@ -280,12 +356,19 @@ def cli(
     effective_log_level = log_level.upper() if log_level else config.general.log_level_console
     effective_log_path = log_path if log_path is not None else (config.general.log_path or None)
 
-    create_logger(
-        log_format=_log_format,
-        log_level=effective_log_level,
-        log_level_file=config.general.log_level_file.upper(),
-        log_path=effective_log_path,
-    )
+    create_logger_ok = False
+    try:
+        create_logger(
+            log_format=_log_format,
+            log_level=effective_log_level,
+            log_level_file=config.general.log_level_file.upper(),
+            log_path=effective_log_path,
+        )
+        create_logger_ok = True
+    finally:
+        # A logger that cannot be created (unopenable log path) must not swallow the
+        # diagnostics captured while the config was loaded.
+        _finish_load_capture(captured, capture_id, to_default_sink=not create_logger_ok)
     _logger.info("movarr v{}", _VERSION)
 
     if test:

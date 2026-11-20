@@ -140,6 +140,21 @@ class TestParseItem:
         assert result["magnet_url"] == "magnet:?xt=urn:btih:abc123"
         assert result["result"] == "Passed"
 
+    def test_control_characters_are_stripped_from_the_title(self, mocker: MockerFixture) -> None:
+        """A feed title that carries newlines or escapes must not reach the logs raw."""
+        client, _ = _make_client(mocker)
+        item: dict[str, Any] = {
+            "title": "Evil\n2026-01-01 | INFO | forged\x1b]0;pwn\x07",
+            "link": "http://example.com/dl.torrent",
+            "size": "8589934592",
+        }
+
+        result = client._parse_item(item)
+
+        assert result is not None
+        assert "\n" not in result["index_title"]
+        assert "\x1b" not in result["index_title"]
+
     def test_returns_none_for_missing_title(self, mocker: MockerFixture) -> None:
         """Returns None when item has no title."""
         client, _ = _make_client(mocker)

@@ -42,6 +42,7 @@ Verified facts this plan relies on (do not re-derive):
 ### Task 1: Write the failing migration tests
 
 **Files:**
+
 - Test: `tests/unit/test_config.py` (append a new class)
 
 - [ ] **Step 1: Append the new test class**
@@ -222,7 +223,15 @@ Do not change any production code in this task.
 
 ### Task 2: Implement the migration and bump the schema version
 
+> **Superseded (2026-11-19):** the `_MISSING` sentinel named in the File structure table and used by
+> the snippets below was not shipped. The migration
+> (`src/movarr/config.py::_migrate_v225_to_v226`) instead collects the block names in one pass and
+> mutates afterwards, so YAML-aliased blocks are both reported — pinned by
+> `tests/unit/test_config.py::test_aliased_blocks_are_both_reported`. Follow the shipped module, not
+> the snippets below.
+
 **Files:**
+
 - Modify: `src/movarr/config.py` (version constant near line 22; new migration after
   `_migrate_v224_to_v225`, around line 568-597; `MIGRATIONS` registry)
 - Test: `tests/unit/test_config.py` (the 25 existing `"2.25.0"` assertions)
@@ -334,6 +343,7 @@ git commit -m "feat: drop obsolete schedule_time_units in a config migration"
 ### Task 3: Document the cleanup in the README
 
 **Files:**
+
 - Modify: `README.md` (the migration paragraph at the end of the `### schedule` section)
 
 - [ ] **Step 1: Find the paragraph**

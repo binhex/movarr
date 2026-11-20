@@ -92,7 +92,7 @@ def _resolve_imdbpie_redirect(client: Any, imdb_id: str) -> str:
                 if match:
                     return match.group()
     except Exception as e:  # noqa: BLE001
-        _logger.debug("IMDb redirect lookup failed for %s: %s", imdb_id, e, exc_info=True)
+        _logger.debug("IMDb redirect lookup failed for {!r}: {}", imdb_id, e)
     return imdb_id
 
 

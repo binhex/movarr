@@ -397,10 +397,21 @@ def _check_reject_genre_exclusive(result: ResultDict, config: Config) -> ResultD
     )
 
 
+def _effective_bitrate_floor(result: ResultDict) -> int | None:
+    """Return the search tier's minimum bitrate, or None when the gate is disabled.
+
+    The value is attached to the result during Jackett/Prowlarr search; ``0``
+    disables the gate.
+    """
+    floor_mb = result.get("_filter_minimum_bitrate_mb")
+    if floor_mb is None or floor_mb == 0:
+        return None
+    return floor_mb
+
+
 def _check_bitrate(result: ResultDict) -> ResultDict:
-    # Use the index_site dict attached to the result during Jackett search.
-    min_bitrate_mb = result.get("_filter_minimum_bitrate_mb")
-    if min_bitrate_mb is None or min_bitrate_mb == 0:
+    floor_mb = _effective_bitrate_floor(result)
+    if floor_mb is None:
         return _pass(result, "No minimum bitrate defined.")
 
     raw_size = result.get("index_size")
@@ -421,9 +432,9 @@ def _check_bitrate(result: ResultDict) -> ResultDict:
         bitrate_mb = size_mb // runtime_int
     except (ValueError, TypeError):
         return _fail(result, f"Could not parse size '{raw_size}' or runtime '{runtime}' for bitrate check.")
-    if bitrate_mb >= int(min_bitrate_mb):
-        return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {min_bitrate_mb}.")
-    return _fail(result, f"Bitrate {bitrate_mb} MB/min < {min_bitrate_mb}.")
+    if bitrate_mb >= floor_mb:
+        return _pass(result, f"Bitrate {bitrate_mb} MB/min ≥ {floor_mb}.")
+    return _fail(result, f"Bitrate {bitrate_mb} MB/min < {floor_mb}.")
 
 
 def _check_year(result: ResultDict, config: Config) -> ResultDict:

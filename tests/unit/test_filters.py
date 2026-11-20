@@ -1778,15 +1778,18 @@ class TestUnparseableBitrateSize:
     """A non-numeric size fails the bitrate gate cleanly."""
 
     def test_bad_size_fails_bitrate_check(self) -> None:
+        """An unparseable size must fail the bitrate gate."""
         result: ResultDict = {
             "index_title": "Movie 2020 1080p",
             "index_size": "not-a-number",
             "imdb_running_time_in_minutes": 120,
+            "imdb_title_type": "movie",
+            "_filter_minimum_bitrate_mb": 50,
         }
         out = filter_by_imdb(result, Config())
 
-        # Either gate may reject it, but it must never raise.
-        assert out["result"] in {"Failed", "Passed"}
+        assert out["result"] == "Failed"
+        assert any("not-a-number" in detail for detail in out["result_details"])
 
     def test_non_numeric_size_fails_cleanly(self) -> None:
         result: ResultDict = {
@@ -1814,3 +1817,21 @@ class TestUnparseableBitrateSize:
         out = _check_bitrate(result)
 
         assert out["result"] == "Failed"
+
+
+class TestZeroSizeThresholdsDisableTheGate:
+    """A 0 size threshold keeps its documented "disable" meaning at the gate."""
+
+    def test_zero_maximum_size_passes_an_oversize_result(self) -> None:
+        result: ResultDict = {"index_title": "Movie 2020 1080p", "index_size": "99999999999"}
+
+        out = filter_by_index(result, {"maximum_size_mb": 0}, Config())
+
+        assert out["result"] == "Passed"
+
+    def test_zero_minimum_size_passes_a_tiny_result(self) -> None:
+        result: ResultDict = {"index_title": "Movie 2020 1080p", "index_size": "1000000"}
+
+        out = filter_by_index(result, {"minimum_size_mb": 0}, Config())
+
+        assert out["result"] == "Passed"

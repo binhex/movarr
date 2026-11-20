@@ -92,6 +92,150 @@ class TestCliHelp:
 # --test (config-validation / dry-run mode)
 
 
+class TestLoadDiagnosticsReplay:
+    """Warnings logged while the config loads must reach the configured sinks."""
+
+    def test_load_warning_reaches_configured_sink(self, mocker: MockerFixture) -> None:
+        """A warning emitted before create_logger is replayed into the new sink."""
+        from loguru import logger as loguru_logger
+
+        captured: list[str] = []
+
+        def _fake_load(_path: object) -> MagicMock:
+            loguru_logger.warning("Unknown config keys (will be ignored): schedule.acquisition.bogus")
+            return _make_config_mock()
+
+        def _fake_create_logger(**_kwargs: object) -> object:
+            loguru_logger.remove()
+            loguru_logger.add(
+                lambda message: captured.append(message.record["message"]),
+                level="DEBUG",
+                format="{message}",
+            )
+            return loguru_logger
+
+        mocker.patch("movarr.config.load_config", side_effect=_fake_load)
+        mocker.patch("movarr.cli.create_logger", side_effect=_fake_create_logger)
+        try:
+            result = CliRunner().invoke(cli, ["--test"])
+        finally:
+            loguru_logger.remove()
+
+        assert result.exit_code == 0, result.output
+        assert any("Unknown config keys" in message for message in captured)
+
+    def test_failed_load_still_replays_diagnostics(self, mocker: MockerFixture) -> None:
+        """A load failure re-emits the captured lines to stderr before propagating."""
+        from loguru import logger as loguru_logger
+
+        def _fake_load(_path: object) -> MagicMock:
+            loguru_logger.warning("Config migrated from v2.21.0 to v2.22.0")
+            raise ValueError("invalid config")
+
+        mocker.patch("movarr.config.load_config", side_effect=_fake_load)
+        try:
+            result = CliRunner().invoke(cli, ["--test"])
+        finally:
+            loguru_logger.remove()
+
+        assert isinstance(result.exception, ValueError)
+        emitted = result.output + getattr(result, "stderr", "")
+        assert "Config migrated from v2.21.0 to v2.22.0" in emitted
+
+    def test_unusable_log_path_still_emits_diagnostics(self, mocker: MockerFixture) -> None:
+        """A logger that cannot be created must not swallow the captured diagnostics."""
+        from loguru import logger as loguru_logger
+
+        def _fake_load(_path: object) -> MagicMock:
+            loguru_logger.warning("Config migrated from v2.24.0 to v2.25.0")
+            return _make_config_mock()
+
+        def _fake_create_logger(**_kwargs: object) -> object:
+            raise OSError("permission denied")
+
+        mocker.patch("movarr.config.load_config", side_effect=_fake_load)
+        mocker.patch("movarr.cli.create_logger", side_effect=_fake_create_logger)
+        try:
+            result = CliRunner().invoke(cli, ["--test"])
+        finally:
+            loguru_logger.remove()
+
+        assert isinstance(result.exception, OSError)
+        emitted = result.output + getattr(result, "stderr", "")
+        assert "Config migrated from v2.24.0 to v2.25.0" in emitted
+
+    def test_replayed_diagnostic_obeys_the_configured_level(self, mocker: MockerFixture) -> None:
+        """Replayed lines pass through the configured levels, as the docstring states."""
+        from loguru import logger as loguru_logger
+
+        delivered: list[str] = []
+
+        def _fake_load(_path: object) -> MagicMock:
+            loguru_logger.warning("Config migrated from v2.24.0 to v2.25.0")
+            return _make_config_mock()
+
+        def _fake_create_logger(**_kwargs: object) -> object:
+            loguru_logger.remove()
+            loguru_logger.add(
+                lambda message: delivered.append(message.record["message"]),
+                level="ERROR",
+                format="{message}",
+            )
+            return loguru_logger
+
+        mocker.patch("movarr.config.load_config", side_effect=_fake_load)
+        mocker.patch("movarr.cli.create_logger", side_effect=_fake_create_logger)
+        try:
+            result = CliRunner().invoke(cli, ["--test"])
+        finally:
+            loguru_logger.remove()
+
+        assert result.exit_code == 0, result.output
+        assert not any("Config migrated" in message for message in delivered)
+
+    def test_tracker_name_with_loguru_markup_does_not_drop_records(self, mocker: MockerFixture) -> None:
+        """An indexer-controlled tracker name must not break or forge log records."""
+        from loguru import logger as loguru_logger
+
+        rendered: list[str] = []
+        trackers = (
+            "Movies <1080p>",
+            "Movies {1080p}",
+            "Movies {",
+            "Movies >x<",
+            "Movies\nFORGED",
+            "Movies\x1b]0;pwn\x07",
+            "Movies\x9b31m",
+        )
+
+        def _fake_create_logger(log_format: Any, **_kwargs: object) -> object:
+            loguru_logger.remove()
+            loguru_logger.add(
+                lambda message: rendered.append(str(message)),
+                level="DEBUG",
+                format=log_format,
+                colorize=False,
+            )
+            return loguru_logger
+
+        mocker.patch("movarr.config.load_config", return_value=_make_config_mock())
+        mocker.patch("movarr.cli.create_logger", side_effect=_fake_create_logger)
+        try:
+            result = CliRunner().invoke(cli, ["--test"])
+            for tracker in trackers:
+                with loguru_logger.contextualize(tracker=tracker):
+                    loguru_logger.info("process result")
+        finally:
+            loguru_logger.remove()
+
+        assert result.exit_code == 0, result.output
+        lines = [line for line in rendered if "process result" in line]
+        assert len(lines) == len(trackers)
+        # One record per line, and no terminal control sequences from the tracker.
+        assert all(line.count("\n") == 1 for line in lines)
+        assert all("\x1b" not in line and "\x07" not in line for line in lines)
+
+
 class TestCliStartupVersionLog:
     """movarr logs its version as the first line after logger initialisation."""
 

@@ -39,6 +39,7 @@ from movarr.parsing import (
     extract_year,
     normalise_for_compare,
     sanitise,
+    strip_control_chars,
 )
 from movarr.qbittorrent import extract_movarr_tag
 
@@ -307,6 +308,7 @@ def _delete_superseded_matches(
         new_title,
     )
     for torrent_hash, torrent_name, tags_str in matches:
+        torrent_name = strip_control_chars(torrent_name)
         deleted = session.qbt.delete_torrent(torrent_hash, delete_data=True, state="superseded", name=torrent_name)
         if not deleted:
             logger.warning("Could not delete superseded torrent '{}'; leaving its record untouched.", torrent_name)
@@ -440,7 +442,7 @@ def _process_result_body(
     if outcome is not None:
         return outcome
 
-    logger.opt(colors=True).info("<blue>Processing index title '{}'</blue>", index_title)
+    logger.info("Processing index title '{}'", index_title)
     if not _run_filters_and_enrich(result, session, site_dict):
         return True
 
@@ -584,6 +586,13 @@ def _apply_cached_metadata(result: ResultDict, cached: dict) -> None:
     result.setdefault("result_details", [])
 
 
+def _resolve_imdb_id(result: ResultDict, session: _SearchSession) -> bool:
+    """Resolve an IMDb ID the index did not supply; return False when the result must stop."""
+    if not result.get("imdb_id"):
+        result.update(search_for_imdb_id(result, session.config))
+    return result.get("result") == "Passed" and bool(result.get("imdb_id"))
+
+
 def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
     """Resolve IMDb ID, fetch IMDb metadata, and run IMDb filters.
 
@@ -593,9 +602,7 @@ def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
         True when the result passes all enrichment steps; False otherwise.
     """
     # Resolve IMDb ID if not supplied by the index.
-    if not result.get("imdb_id"):
-        result.update(search_for_imdb_id(result, session.config))
-    if result.get("result") != "Passed" or not result.get("imdb_id"):
+    if not _resolve_imdb_id(result, session):
         session.db.write(result)
         return False
     # Try cached IMDb metadata before hitting the API.
@@ -630,6 +637,18 @@ def _enrich_result(result: ResultDict, session: _SearchSession) -> bool:
     return True
 
 
+def _release_identity(result: ResultDict) -> tuple[str, str, str, str]:
+    """Return *(imdb_title, imdb_year, release_title, release_year)* for the comparison."""
+    imdb_title = str(result.get("imdb_title") or "")
+    imdb_year = str(result.get("imdb_year") or "")
+    # ``movie_title`` is the human form ("The Matrix"); ``movie_title_compare``
+    # is already squashed to a single normalised token, which would defeat the
+    # caller's word-level comparison.
+    release_title = str(result.get("movie_title") or result.get("movie_title_compare") or "")
+    release_year = str(result.get("movie_title_year") or "")
+    return imdb_title, imdb_year, release_title, release_year
+
+
 def _metadata_matches_release(result: ResultDict) -> bool:
     """Return True when fetched IMDb metadata plausibly belongs to this release.
 
@@ -639,13 +658,7 @@ def _metadata_matches_release(result: ResultDict) -> bool:
     original or an alternate title the metadata reports — so ``"Matrix"`` still
     matches ``"The Matrix"`` while ``"The Matrix Reloaded"`` does not.
     """
-    imdb_title = str(result.get("imdb_title") or "")
-    imdb_year = str(result.get("imdb_year") or "")
-    # ``movie_title`` is the human form ("The Matrix"); ``movie_title_compare``
-    # is already squashed to a single normalised token, which would defeat the
-    # word-level comparison below.
-    release_title = str(result.get("movie_title") or result.get("movie_title_compare") or "")
-    release_year = str(result.get("movie_title_year") or "")
+    imdb_title, imdb_year, release_title, release_year = _release_identity(result)
     if not imdb_title or not release_title:
         return True
     if _release_matches_metadata_titles(result, release_title):
@@ -728,9 +741,14 @@ def _title_words(title: str) -> tuple[str, ...]:
     # "Face/Off" and "M*A*S*H" must compare equal to their plain forms.
     words = [re.sub(r"[^a-z0-9]+", "", word.lower()) for word in title.split()]
     words = [normalise_for_compare(word) or word for word in words if word]
+    _drop_leading_articles(words)
+    return tuple(word for word in words if word)
+
+
+def _drop_leading_articles(words: list[str]) -> None:
+    """Remove leading articles from *words* in place."""
     while words and words[0] in {"the", "a", "an"}:
         words.pop(0)
-    return tuple(word for word in words if word)
 
 
 def _enrich_index_metadata(result: ResultDict) -> ResultDict:

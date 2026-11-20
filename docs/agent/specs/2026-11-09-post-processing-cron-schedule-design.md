@@ -130,7 +130,7 @@ work starts.
 | Existing `schedule.post_processing.schedule_time_mins` | Migrated `cron` |
 | --- | --- |
 | 1 to 60 | the smallest divisor of 60 that is at least N: `*/5`, `*/10` for 7, `0 * * * *` for 60 |
-| 61 to 1440 | the smallest divisor of 1440 that is at least N: `0 */2 * * *` for 90, `0 0 * * *` for 1380 |
+| 61 to 1440 | the smallest whole-hour divisor of 1440 that is at least N: `0 */2 * * *` for 90, `0 0 * * *` for 1380 |
 | 1441 to 10080 | `0 0 * * 0` (weekly) |
 | 10081 to 40320 (28 days) | `0 0 1 * *` (monthly; 28 days is the shortest month) |
 | beyond 40320 | `0 0 1 1 *` (yearly) |

@@ -11,7 +11,7 @@ from loguru import logger as _logger
 
 from movarr.downloader import HttpClient, HttpError
 from movarr.models import build_result_dict
-from movarr.parsing import normalise_imdb_id
+from movarr.parsing import normalise_imdb_id, strip_control_chars
 from movarr.utils import bytes_to_mb, redact_secrets
 
 if TYPE_CHECKING:
@@ -170,6 +170,8 @@ class JackettClient:
         index_title: str | None = item.get("title")
         if not index_title:
             return None
+        # Feed titles are untrusted text that reaches logs, the DB and notifications.
+        index_title = strip_control_chars(index_title)
 
         magnet_url = self._attr(item, "magneturl")
         tracker_elem = item.get("jackettindexer")

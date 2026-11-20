@@ -255,6 +255,15 @@ def _search_tmdb(result: ResultDict, config: Config) -> ResultDict:
 # Strategy 3 — OMDb
 
 
+def _record_omdb_failure(result: ResultDict, data: dict, title: str, year: str) -> None:
+    """Fail *result* with the OMDb error text, or with a not-found message."""
+    omdb_error = data.get("Error") or ""
+    if omdb_error and omdb_error != _OMDB_NOT_FOUND_ERROR:
+        _fail(result, f"OMDb: API error for '{title}' ({year}): {omdb_error}")
+    else:
+        _fail(result, f"OMDb: no result for '{title}' ({year}).")
+
+
 def _validate_omdb_title(
     data: dict,
     title: str,
@@ -270,11 +279,7 @@ def _validate_omdb_title(
     omdb_title = raw_omdb_title if isinstance(raw_omdb_title, str) else None
     omdb_norm = normalise_for_compare(omdb_title) if omdb_title else None
     if not omdb_title or not omdb_norm:
-        omdb_error = data.get("Error") or ""
-        if omdb_error and omdb_error != _OMDB_NOT_FOUND_ERROR:
-            _fail(result, f"OMDb: API error for '{title}' ({year}): {omdb_error}")
-        else:
-            _fail(result, f"OMDb: no result for '{title}' ({year}).")
+        _record_omdb_failure(result, data, title, year)
         return None
     if omdb_norm != movie_title_compare:
         _fail(result, f"OMDb: '{omdb_title}' does not match '{title}' ({year}).")
@@ -424,11 +429,13 @@ def _get_str(result: ResultDict, key: str) -> str:
 
 
 def _search_duckduckgo(result: ResultDict, _config: Config) -> ResultDict:
-    """Search IMDb ID via DuckDuckGo web search.
+    """Search for an IMDb ID via DuckDuckGo web search.
 
     Uses ``ddgs`` (a maintained, scraper-friendly alternative
-    to the fragile Google HTML scraper).  Returns the first IMDb URL whose
-    normalised title matches ``movie_title_compare`` or ``movie_title_and_year_compare``.
+    to the fragile Google HTML scraper).  Mutates and returns *result*: it is
+    passed with ``imdb_id`` set for the first IMDb hit whose normalised title
+    matches ``movie_title_compare`` or ``movie_title_and_year_compare``, and
+    failed with a message otherwise.
     """
     search_term = result.get("movie_title_and_year_search", "")
     movie_title_compare = _get_str(result, "movie_title_compare")
