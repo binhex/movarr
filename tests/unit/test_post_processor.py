@@ -40,6 +40,12 @@ from movarr.post_processor import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_sweep_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts with the library-wide sweep throttle expired."""
+    monkeypatch.setattr("movarr.post_processor._last_staging_sweep_at", None)
+
+
 def _patch_poster_opener(
     mocker: MockerFixture,
     *,
@@ -3896,3 +3902,187 @@ class TestCanonicalNameSanitisation:
         assert "\x1b" not in cleaned
         assert "Movie" in cleaned
         assert cleaned == cleaned.strip()
+
+
+class TestStagingSweepWiring:
+    """The post-processing pass reclaims abandoned staging leftovers library-wide."""
+
+    def test_run_post_processing_sweeps_each_library_root(self, mocker: MockerFixture) -> None:
+        """At most one sweep per interval, on a pass that has work."""
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies", "/media/Movies4K"]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        db = mocker.MagicMock()
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, db)
+
+        sweep.assert_called_once_with(cfg.general.library_path_list)
+
+    def test_reclaims_are_reported(self, mocker: MockerFixture) -> None:
+        """A non-zero reclaim count is surfaced in the log."""
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=2)
+        mock_info = mocker.patch("movarr.post_processor.logger.info")
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        assert any(
+            call.args and call.args[0].startswith("Reclaimed {} abandoned staging file(s)") and call.args[1] == 2
+            for call in mock_info.call_args_list
+        )
+
+    def test_idle_pass_does_not_walk_the_library(self, mocker: MockerFixture) -> None:
+        """A pass with no completed torrents must not sweep every library root."""
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = []
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        sweep.assert_not_called()
+
+    def test_sweep_is_rate_limited_across_passes(self, mocker: MockerFixture) -> None:
+        """Back-to-back passes must not walk the library more than once per interval."""
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        assert sweep.call_count == 1, "a second pass inside the interval must not sweep again"
+
+    def test_sweep_covers_the_configured_copy_destinations(self, mocker: MockerFixture) -> None:
+        """A destination outside library_path_list must still be swept."""
+        from movarr.config import CopyLibraryRuleConfig
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        cfg.post_process.default_copy_library.hd_path = "/mnt/disk1/Movies/HD"
+        cfg.post_process.copy_library_rules = [
+            CopyLibraryRuleConfig(name="kids", hd_path="/mnt/disk2/Kids", uhd_path="/mnt/disk2/Kids4K")
+        ]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        roots = sweep.call_args.args[0]
+        assert "/media/Movies" in roots
+        assert "/mnt/disk1/Movies/HD" in roots
+        assert "/mnt/disk2/Kids" in roots
+        assert "/mnt/disk2/Kids4K" in roots
+
+    def test_sweep_prunes_roots_nested_inside_another_root(self, mocker: MockerFixture) -> None:
+        """A destination inside a library root must not be walked twice."""
+        from movarr.config import CopyLibraryRuleConfig
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies", "/media/Movies"]
+        cfg.post_process.default_copy_library.uhd_path = "/media/Movies4K"
+        cfg.post_process.copy_library_rules = [CopyLibraryRuleConfig(name="kids", hd_path="/media/Movies/Kids")]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        roots = sweep.call_args.args[0]
+        assert roots.count("/media/Movies") == 1, "an exact duplicate must be walked once"
+        assert "/media/Movies4K" in roots, "a separate default destination must be swept"
+        assert "/media/Movies/Kids" not in roots, "a nested destination is covered by its root"
+
+    def test_first_pass_sweeps_shortly_after_boot(self, mocker: MockerFixture) -> None:
+        """The 'never swept' sentinel must not suppress the sweep for the first two hours."""
+        from movarr.post_processor import run_post_processing
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        qbt = mocker.MagicMock()
+        qbt.is_reachable.return_value = True
+        qbt.list_completed.return_value = [{"torrent_name": "Movie"}]
+        mocker.patch("movarr.post_processor.torrent_client_health.check_and_notify")
+        mocker.patch("movarr.post_processor._process_one")
+        mocker.patch("movarr.post_processor.time.monotonic", return_value=10.0)  # 10 s after boot
+        sweep = mocker.patch("movarr.post_processor.sweep_stale_staging_roots", return_value=0)
+
+        run_post_processing(cfg, qbt, mocker.MagicMock())
+
+        sweep.assert_called_once()
+
+    def test_pruning_is_independent_of_configuration_order(self, mocker: MockerFixture) -> None:
+        """A destination listed before its parent must still be pruned."""
+        from movarr.post_processor import _staging_sweep_roots
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies/Kids", "/media/Movies"]
+
+        roots = _staging_sweep_roots(cfg)
+
+        assert "/media/Movies" in roots
+        assert "/media/Movies/Kids" not in roots
+
+    def test_symlinked_destination_keeps_its_own_sweep_root(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """os.walk does not follow symlinks, so a linked destination must stay a root."""
+        from movarr.post_processor import _staging_sweep_roots
+
+        root = tmp_path / "Movies"
+        (root / "HD").mkdir(parents=True)
+        link = tmp_path / "linkHD"
+        link.symlink_to(root / "HD")
+        cfg = Config()
+        cfg.general.library_path_list = [str(root)]
+        cfg.post_process.default_copy_library.hd_path = str(link)
+
+        roots = _staging_sweep_roots(cfg)
+
+        assert str(link) in roots
+
+    def test_sweep_roots_survive_an_unstatable_symlink_probe(self, mocker: MockerFixture) -> None:
+        """An un-statable root must not abort the pass at the symlink probe (3.12 floor)."""
+        from movarr.post_processor import _staging_sweep_roots
+
+        cfg = Config()
+        cfg.general.library_path_list = ["/media/Movies"]
+        mocker.patch("pathlib.Path.is_symlink", side_effect=PermissionError("denied"))
+
+        roots = _staging_sweep_roots(cfg)
+
+        assert "/media/Movies" in roots

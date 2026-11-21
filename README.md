@@ -549,7 +549,9 @@ Two ordering rules are easy to get wrong:
 | `Staged copy '...' disappeared while swapping in '...': [Errno 2] No such file or directory` | the rename relocated the staged copy to another array disk | same fix; then check for a duplicate |
 | `Replacement of '...' did not take effect: the path resolves to different content` | a same-named copy on another disk shadows the new file | remove the stale duplicate (below) |
 | `Destination '...' checksum mismatch (src=..., dst=...); replacing.` | the library file differs from the download, so a replace starts (normal) | none - unless it repeats every run, then check for a duplicate |
-| `Could not remove stale staging file '...'` | a leftover `.part` from an interrupted run is itself locked | unlock it; unlocked leftovers are reclaimed after two hours |
+| `Could not stage '...': a cleanup pass is still holding it (...)` | another movarr process (`--once` beside the daemon) held the staging lock through the retry budget | retry; if it repeats, stop the second process |
+| `Could not stage '...': this file system cannot lock it (...)` | the destination file system refuses advisory locks (some NFS/CIFS/FUSE exports) | copy destinations must support `flock`; there is no lock-less fallback by design |
+| `Could not remove stale staging file '...'` | the leftover cannot be removed (immutable, or not writable by this user) | unlock or fix its permissions; the library-wide sweep reclaims it at most once every two hours, on the next pass that processes a completed torrent |
 | `Permission denied deleting '...'` and `Failed to auto-delete superseded library file` | the folder was re-locked before the deletion pass | unlock in `pre_delete`, re-lock in `post_delete`, not `post_copy` |
 | `pre_copy hook failed (exit 127)` | the command is missing in the container, or `sudo` is unavailable | mount the script, install `sudo`, restart the container |
 | Post-processing stops producing output | `hook_timeout_mins: 0` and a hook is hanging | set a timeout, fix the hook |
@@ -571,7 +573,15 @@ ls -d /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'
 stat -c '%n %s %z' /mnt/disk*/Movies/UHD/<profile>/'<Title> (<Year>)'/*.mkv
 
 # Leftovers from interrupted runs (the rename or the unlock failed mid-swap).
+# Post-processing sweeps each library root and every configured copy destination for
+# these at most once every two hours, and
+# removes any that are older than two hours and not held open by a live copy.
 find /mnt/disk*/Movies -name '.*.movarr-*.part'
+
+# Pre-1.5.3 leftovers carry no `movarr-` marker (.<name>.<8 hex>.part) and are never
+# reclaimed automatically: that shape is indistinguishable from a user file.  List
+# them once and delete only the ones you recognise.
+find /mnt/disk*/Movies -name '.*.part' ! -name '*.movarr-*.part'
 
 # Is sudo usable without a password prompt?
 sudo -n true && echo "sudo ok"
@@ -592,7 +602,10 @@ sudo -n true && echo "sudo ok"
 
 Knowing the steps makes the messages above easier to place:
 
-1. Copy the download to `.<name>.movarr-<8 hex>.part` beside the destination (dot-prefixed so players ignore it).
+1. Copy the download to `.<name>.movarr-<8 hex>.part` beside the destination (dot-prefixed so players ignore it;
+   a short hash replaces `<name>` when the readable stem would leave too little room for the
+   marker; the destination file system must support advisory (`flock`) locks, with no lock-less
+   fallback).
 2. Re-read the download and the staged copy, and compare their SHA-256 digests.
 3. Rename the staged file over the destination in one atomic step.
 4. If a destination already existed, re-read it and compare the digest again - this is what catches a cross-disk

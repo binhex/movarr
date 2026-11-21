@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import fcntl
 import hashlib
 import os
 import shutil
@@ -10,16 +12,21 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger as _logger
 
 from movarr.parsing import strip_control_chars
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = [
     "walk_library",
     "copy_with_verify",
     "make_directory",
     "delete_file",
+    "sweep_stale_staging_roots",
 ]
 
 
@@ -40,8 +47,13 @@ _CHUNK_SIZE = 65_536  # 64 KiB — balance between I/O calls and memory usage
 
 
 def _display(path: object) -> str:
-    """Return *path* as log-safe text: torrent file names are untrusted."""
-    return strip_control_chars(str(path))
+    """Return *path* as log-safe text: torrent file names are untrusted.
+
+    Control characters are replaced, and text that cannot be encoded (a lone
+    surrogate from an undecodable file name) is substituted, so the sink never
+    drops the record.
+    """
+    return strip_control_chars(str(path)).encode("utf-8", "replace").decode("utf-8")
 
 
 def _sha256(file_path: Path, label: str | None = None) -> str:
@@ -195,12 +207,36 @@ def _try_clear_immutable(target: Path) -> None:
 
 _HEX_CHARS = frozenset("0123456789abcdef")
 _STAGING_TOKEN_LEN = 8
+# NAME_MAX on ext4/xfs/shfs; a staging name longer than this cannot be created.
+# Not every mount uses 255 (eCryptfs uses 143) and the limit is not probed.
+_STAGING_NAME_MAX = 255
+_STAGING_HASH_LEN = 16
+#: A cleanup probe can hold a brand-new staging file's lock briefly; retry this often.
+_PROBE_LOCK_RETRIES = 3
+_PROBE_LOCK_WAIT_SECS = 0.01
 _STAGING_MARKER = "movarr-"
 _STAGING_SUFFIX = ".part"
 # A staging file is written for the whole copy, read once more to verify it,
 # and read again after it is swapped in, so its change time stays fresh for the
 # length of a slow multi-gigabyte copy plus the hashing passes.
 _STALE_STAGING_MIN_AGE_SECS = 2 * 60 * 60
+
+
+def _staging_stem(dst: Path) -> str:
+    """Return the destination-identity prefix of the staging name for *dst*.
+
+    The readable ``.<destination name>`` prefix is used while it leaves room for the
+    marker, token and suffix within ``NAME_MAX``; a long destination name is replaced
+    by a fixed-length hash of that name instead, so the staging file can still be
+    created (a 237-byte destination name would otherwise overflow at 259 bytes).
+    """
+    readable = f".{dst.name}"
+    # NAME_MAX counts bytes, not characters: a 79-character CJK name is 237 bytes.
+    # surrogatepass keeps this total: a lone surrogate (JSON metadata) must not raise.
+    readable_bytes = len(readable.encode("utf-8", "surrogatepass"))
+    if readable_bytes + 1 + len(_STAGING_MARKER) + _STAGING_TOKEN_LEN + len(_STAGING_SUFFIX) <= _STAGING_NAME_MAX:
+        return readable
+    return f".{hashlib.sha256(dst.name.encode('utf-8', 'surrogatepass')).hexdigest()[:_STAGING_HASH_LEN]}"
 
 
 def _staging_name(dst: Path) -> str:
@@ -211,22 +247,74 @@ def _staging_name(dst: Path) -> str:
     plausible user file, so leftover cleanup may only ever match a name that
     carries our marker.
     """
-    return f".{dst.name}.{_STAGING_MARKER}{uuid.uuid4().hex[:_STAGING_TOKEN_LEN]}{_STAGING_SUFFIX}"
+    return f"{_staging_stem(dst)}.{_STAGING_MARKER}{uuid.uuid4().hex[:_STAGING_TOKEN_LEN]}{_STAGING_SUFFIX}"
 
 
 def _is_stale_staging(candidate: Path, dst: Path) -> bool:
     """Return True when *candidate* is a staging file an earlier run left for *dst*.
 
-    Staging names are ``.<dst name>.movarr-<8 hex chars>.part``.  Matching the
-    marker and the exact token shape keeps a torrent that legitimately ships
+    Staging names are ``.<dst name>.movarr-<8 hex chars>.part``, or
+    ``.<16 hex chars>.movarr-<8 hex chars>.part`` when the destination name is
+    too long for ``NAME_MAX`` (see :func:`_staging_stem`).  Matching the marker
+    and the exact token shape keeps a torrent that legitimately ships
     ``<name>.part`` - or a user file named ``.<name>.<datestamp>.part`` - from
     being mistaken for one of our leftovers.
     """
-    prefix = f".{dst.name}.{_STAGING_MARKER}"
+    prefix = f"{_staging_stem(dst)}.{_STAGING_MARKER}"
     if not candidate.name.startswith(prefix) or not candidate.name.endswith(_STAGING_SUFFIX):
         return False
     token = candidate.name[len(prefix) : -len(_STAGING_SUFFIX)]
     return len(token) == _STAGING_TOKEN_LEN and all(char in _HEX_CHARS for char in token)
+
+
+def _is_staging_leftover_name(name: str) -> bool:
+    """Return True when *name* has the staging shape, without knowing its destination."""
+    if not name.startswith(".") or not name.endswith(_STAGING_SUFFIX):
+        return False
+    marker = f".{_STAGING_MARKER}"
+    index = name.rfind(marker)
+    if index <= 0:
+        return False
+    token = name[index + len(marker) : -len(_STAGING_SUFFIX)]
+    return len(token) == _STAGING_TOKEN_LEN and all(char in _HEX_CHARS for char in token)
+
+
+def _log_walk_error(exc: OSError) -> None:
+    """Report a directory the staging sweep could not scan."""
+    _logger.debug("Could not scan '{}' for stale staging files: {}.", _display(getattr(exc, "filename", "?")), exc)
+
+
+def sweep_stale_staging_roots(roots: Iterable[str], min_age_secs: float = _STALE_STAGING_MIN_AGE_SECS) -> int:
+    """Reclaim staging leftovers under each configured library root.
+
+    Replacing a file only cleans up leftovers for *that* destination, so a
+    leftover belonging to a title that is never retried would otherwise persist
+    forever.  The same lock probe and age guard apply here, so a copy that is
+    still running in another process is never touched.
+
+    Args:
+        roots: Library root paths to scan; missing or unreadable roots are skipped.
+        min_age_secs: Minimum inode change age before a leftover is reclaimed.
+
+    Returns:
+        The number of staging files removed.
+    """
+    cutoff = time.time() - min_age_secs
+    reclaimed = 0
+    for root in roots:
+        root_path = Path(root)
+        try:
+            if not root_path.is_dir():
+                continue
+            for dirpath, _dirnames, filenames in os.walk(root_path, onerror=_log_walk_error):
+                for filename in filenames:
+                    if not _is_staging_leftover_name(filename):
+                        continue
+                    if _reclaim_staging_file(Path(dirpath) / filename, cutoff):
+                        reclaimed += 1
+        except (OSError, ValueError) as exc:
+            _logger.debug("Could not sweep '{}' for stale staging files: {}.", _display(root_path), exc)
+    return reclaimed
 
 
 def _remove_stale_staging(dst: Path, min_age_secs: float = _STALE_STAGING_MIN_AGE_SECS) -> None:
@@ -236,25 +324,25 @@ def _remove_stale_staging(dst: Path, min_age_secs: float = _STALE_STAGING_MIN_AG
     host-side locker that marks it immutable makes the cleanup ``unlink`` fail
     too - every retry would then add another multi-gigabyte leftover.
 
-    Only files whose inode change time is older than *min_age_secs* are
-    removed.  A write refreshes the change time, and the metadata preservation
-    that backdates the modification time does not backdate it, so a staging
-    file that is still being written or hashed stays young.  Records with no
-    usable change time (``0``) are kept.
+    A staging file is also kept while a live copy holds its exclusive lock, so
+    a daemon and an operator-run ``--once`` can overlap safely.  Only files
+    whose inode change time is older than *min_age_secs* are removed.  A write
+    refreshes the change time, and the metadata preservation that backdates the
+    modification time does not backdate it, so a staging file that is still
+    being written or hashed stays young.  Records with no usable change time
+    (``0``) are kept.
 
-    Assumes no second movarr process is replacing the same destination: a
-    ``--once`` run started alongside the daemon is not covered.  File systems
-    that synthesise the change time from the modification time can make a live
-    staging file look old; ext4/xfs and Unraid's shfs report a real one.
-
-    Only leftovers beside the destination being replaced are reclaimed, so a
-    title that is never retried keeps its leftover until it is.
+    File systems that synthesise the change time from the modification time can
+    make a live staging file look old; ext4/xfs and Unraid's shfs report a real
+    one.  Only leftovers beside the destination being replaced are reclaimed
+    here; one belonging to a title that is never retried is covered by
+    :func:`sweep_stale_staging_roots`.
     """
     cutoff = time.time() - min_age_secs
     try:
         candidates = list(dst.parent.iterdir())
     except OSError as exc:
-        _logger.debug("Could not scan '{}' for stale staging files: {}.", dst.parent, exc)
+        _logger.debug("Could not scan '{}' for stale staging files: {}.", _display(dst.parent), exc)
         return
     for candidate in candidates:
         if not _is_stale_staging(candidate, dst):
@@ -262,34 +350,126 @@ def _remove_stale_staging(dst: Path, min_age_secs: float = _STALE_STAGING_MIN_AG
         _reclaim_staging_file(candidate, cutoff)
 
 
-def _reclaim_staging_file(candidate: Path, cutoff: float) -> None:
-    """Remove *candidate* when it is a stale staging file, otherwise keep it."""
+def _open_lockable(candidate: Path) -> tuple[int | None, int, OSError | None]:
+    """Open *candidate* for a lock probe with the first access mode it allows.
+
+    Returns:
+        ``(fd, flags, error)``.  ``fd`` is None when the file is gone or every
+        access mode failed; ``error`` is then the last open error, or None when
+        the file vanished between attempts.
+    """
+    last_error: OSError | None = None
+    for flags in (
+        os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC,
+        os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC,
+        os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC,
+    ):
+        try:
+            return os.open(candidate, flags), flags, None
+        except FileNotFoundError:
+            return None, flags, None
+        except OSError as exc:
+            last_error = exc
+    return None, 0, last_error
+
+
+def _lock_staging_candidate(candidate: Path) -> int | None:
+    """Open *candidate* and take a non-blocking exclusive lock on it.
+
+    Returns the descriptor, or None when the file is gone, cannot be opened in
+    any access mode, or is locked by another process (in which case it belongs to
+    a live copy and is kept).
+    """
+    fd, flags, open_error = _open_lockable(candidate)
+    if fd is None:
+        if open_error is None:
+            return None
+        if isinstance(open_error, PermissionError) or open_error.errno in (errno.EACCES, errno.EPERM):
+            _logger.warning(
+                "Could not remove stale staging file '{}': it cannot be opened by this user.  Unlock it "
+                "through the configured pre_copy hook (or chattr -i on the '/mnt/disk*' path) so the next "
+                "run can reclaim it.",
+                _display(candidate),
+            )
+        else:
+            _logger.debug("Could not inspect staging file '{}': {}.", _display(candidate), open_error)
+        return None
     try:
-        changed = candidate.stat().st_ctime
-    except FileNotFoundError:
-        return
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as exc:
-        _logger.debug("Could not inspect staging file '{}': {}.", candidate, exc)
-        return
+        if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+            if flags & os.O_RDWR:
+                _logger.debug("Keeping staging file '{}': another process is still using it.", _display(candidate))
+            else:
+                # A fallback descriptor: some lock backends refuse an exclusive
+                # lock taken through a read-only/write-only handle.
+                _logger.debug(
+                    "Keeping staging file '{}': this access mode cannot take an exclusive lock ({}).",
+                    _display(candidate),
+                    exc,
+                )
+        else:
+            _logger.debug("Keeping staging file '{}': this file system cannot lock it ({}).", _display(candidate), exc)
+        os.close(fd)
+        return None
+    return fd
+
+
+def _staging_change_time(candidate: Path) -> float | None:
+    """Return the candidate's inode change time, or None when it cannot be read."""
+    try:
+        return candidate.stat().st_ctime
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _logger.debug("Could not inspect staging file '{}': {}.", _display(candidate), exc)
+        return None
+
+
+def _unlink_stale_staging(candidate: Path, cutoff: float) -> bool:
+    """Remove *candidate* when its change time is old enough, reporting the outcome."""
+    changed = _staging_change_time(candidate)
+    if changed is None:
+        return False
     if changed <= 0:
-        _logger.debug("Keeping staging file '{}' with an unknown change time.", candidate)
-        return
+        _logger.debug("Keeping staging file '{}' with an unknown change time.", _display(candidate))
+        return False
     if changed > cutoff:
-        _logger.debug("Keeping recent staging file '{}'; it may belong to a running copy.", candidate)
-        return
+        _logger.debug("Keeping recent staging file '{}'; it may belong to a running copy.", _display(candidate))
+        return False
     try:
         candidate.unlink()
     except FileNotFoundError:
-        return
+        return False
     except OSError as exc:
         _logger.warning(
             "Could not remove stale staging file '{}': {}.  Unlock it through the configured pre_copy hook "
             "(or chattr -i on the '/mnt/disk*' path) so the next run can reclaim it.",
-            candidate,
+            _display(candidate),
             exc,
         )
-    else:
-        _logger.info("Removed stale staging file '{}' left by an earlier run.", candidate)
+        return False
+    _logger.info("Removed stale staging file '{}' left by an earlier run.", _display(candidate))
+    return True
+
+
+def _reclaim_staging_file(candidate: Path, cutoff: float) -> bool:
+    """Remove *candidate* when it is a stale staging file, otherwise keep it.
+
+    A candidate held under an exclusive lock belongs to a live copy in another
+    process - a daemon and an operator-running ``--once`` can overlap - so it is
+    kept rather than removed under the copy's feet.
+
+    Returns:
+        True when the file was removed, False when it was kept for any reason.
+    """
+    fd = _lock_staging_candidate(candidate)
+    if fd is None:
+        return False
+    try:
+        return _unlink_stale_staging(candidate, cutoff)
+    finally:
+        os.close(fd)
 
 
 def _confirm_swap(dst: Path, digest: str) -> bool:
@@ -316,9 +496,75 @@ def _confirm_swap(dst: Path, digest: str) -> bool:
         _logger.error(
             "Replacement of '{}' did not take effect: the path resolves to different content "
             "(a same-named duplicate on another array disk?  Check '/mnt/disk*').",
-            dst,
+            _display(dst),
         )
         return False
+    return True
+
+
+def _open_locked_staging(tmp: Path) -> int | None:
+    """Create *tmp* and hold an exclusive lock on it for the copy/verify window.
+
+    A concurrent cleanup (a daemon and an operator-run ``--once`` can overlap)
+    probes this lock and keeps the file when it cannot take it.
+
+    Returns:
+        The locked descriptor, or None when the staging file cannot be created or
+        locked; the temporary file is removed in the latter case.
+    """
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except (OSError, ValueError) as exc:
+        _logger.error("Could not stage '{}': {}.", _display(tmp), exc)
+        return None
+    contention = (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        # A cleanup probe can take the brand-new file's lock inside the open->flock
+        # window.  Retry a few times rather than waiting unbounded: a hung holder
+        # (max_instances=1) would otherwise stop post-processing until a restart.
+        for _attempt in range(_PROBE_LOCK_RETRIES):
+            if exc.errno not in contention:
+                break
+            time.sleep(_PROBE_LOCK_WAIT_SECS)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except OSError as retry_exc:
+                exc = retry_exc
+        if exc.errno in contention:
+            _logger.error("Could not stage '{}': a cleanup pass is still holding it ({}).", _display(tmp), exc)
+        else:
+            _logger.error("Could not stage '{}': this file system cannot lock it ({}).", _display(tmp), exc)
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        return None
+    return fd
+
+
+def _swap_verified_copy(tmp: Path, dst: Path, digest: str, *, confirm: bool) -> bool:
+    """Swap the staged copy in, clearing an immutable destination once if needed."""
+    try:
+        os.replace(tmp, dst)
+    except PermissionError:
+        # Immutable destination: clear the flag and retry the swap once.
+        _try_clear_immutable(dst)
+        try:
+            os.replace(tmp, dst)
+        except FileNotFoundError as exc:
+            _logger.error(
+                "Staged copy '{}' disappeared while swapping in '{}': {} "
+                "(the file system moved it without replacing the destination, or a cleanup removed it).",
+                _display(tmp),
+                _display(dst),
+                exc,
+            )
+            return False
+    if confirm and not _confirm_swap(dst, digest):
+        return False
+    _logger.info("Replaced '{}' with verified copy.", dst)
     return True
 
 
@@ -327,7 +573,9 @@ def _replace_copy(src: Path, dst: Path, *, confirm: bool) -> bool:
 
     The old destination is never removed before a verified replacement exists,
     so a copy that fails before the swap (disk full, permission error, vanished
-    source) leaves the previous library file untouched.
+    source) leaves the previous library file untouched.  The staging file is held
+    under an exclusive advisory lock for the whole window; a file system that
+    refuses ``flock`` aborts the copy instead of staging unguarded.
 
     Args:
         src: Source file path.
@@ -345,37 +593,22 @@ def _replace_copy(src: Path, dst: Path, *, confirm: bool) -> bool:
     """
     tmp = dst.with_name(_staging_name(dst))
     _remove_stale_staging(dst)
+    lock_fd = _open_locked_staging(tmp)
+    if lock_fd is None:
+        return False
     try:
         digest = _perform_copy(src, tmp)
         if digest is None:
             return False
-        try:
-            os.replace(tmp, dst)
-        except PermissionError:
-            # Immutable destination: clear the flag and retry the swap once.
-            _try_clear_immutable(dst)
-            try:
-                os.replace(tmp, dst)
-            except FileNotFoundError as exc:
-                _logger.error(
-                    "Staged copy '{}' disappeared while swapping in '{}': {} "
-                    "(the file system moved it without replacing the destination, or a cleanup removed it).",
-                    tmp,
-                    dst,
-                    exc,
-                )
-                return False
-        if confirm and not _confirm_swap(dst, digest):
-            return False
-        _logger.info("Replaced '{}' with verified copy.", dst)
-        return True
-    except OSError as exc:
-        _logger.error("Could not replace '{}': {}.", dst, exc)
+        return _swap_verified_copy(tmp, dst, digest, confirm=confirm)
+    except (OSError, ValueError) as exc:
+        _logger.error("Could not replace '{}': {}.", _display(dst), exc)
         return False
     finally:
         with contextlib.suppress(OSError):
             if tmp.exists():
                 tmp.unlink()
+        os.close(lock_fd)
 
 
 def _do_copy(src: Path, dst: Path) -> None:
@@ -388,6 +621,7 @@ def _do_copy(src: Path, dst: Path) -> None:
         FileNotFoundError: if *src* does not exist.
         PermissionError: if *src* cannot be read or *dst* cannot be written.
         OSError: on any other I/O error.
+        ValueError: if either path cannot be encoded for the file system.
     """
     total = src.stat().st_size
     next_pct = 25
@@ -410,8 +644,10 @@ def _perform_copy(src: Path, dst: Path) -> str | None:
     """Copy *src* to *dst* with chunked progress and SHA-256 verification.
 
     Returns:
-        The verified SHA-256 hex digest of the copied content, or ``None`` on
-        any copy or verification failure.
+        The verified SHA-256 hex digest of the copied content, or ``None`` on any
+        copy or verification failure.  An unencodable path raises ``ValueError``
+        (``UnicodeEncodeError``) past this function; ``_replace_copy`` converts it
+        into a ``False`` result.
     """
     try:
         _do_copy(src, dst)
@@ -453,6 +689,11 @@ def _perform_copy(src: Path, dst: Path) -> str | None:
 
 def copy_with_verify(src: str | Path, dst: str | Path) -> bool:
     """Copy *src* to *dst* with SHA-256 pre/post verification.
+
+    Replacement is staged beside *dst* under an exclusive advisory lock.  A
+    destination file system that refuses ``flock`` (some NFS/CIFS/FUSE exports)
+    makes every replacement return ``False`` with a logged error; there is no
+    lock-less fallback.
 
     - If *dst* already exists and checksums match, the copy is skipped.
     - If *dst* exists but checksums differ, the file is copied to a temporary

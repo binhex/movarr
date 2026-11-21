@@ -637,16 +637,24 @@ class TestCopyWithVerify:
         dst = tmp_path / "dst.mkv"
         src.write_bytes(b"source data")
         dst.write_bytes(b"different data")
-        candidate = mocker.MagicMock()
-        candidate.name = ".dst.mkv.movarr-feedface.part"
-        candidate.stat.return_value = SimpleNamespace(st_ctime=0)
-        mocker.patch("pathlib.Path.iterdir", return_value=[candidate])
+        candidate = tmp_path / ".dst.mkv.movarr-feedface.part"
+        candidate.write_bytes(b"leftover")
+        # A real file (the cleanup opens a descriptor to probe the lock); only the
+        # candidate reports an unknown change time.
+        real_stat = Path.stat
+
+        def _stat(self: Path) -> object:
+            if self.name == candidate.name:
+                return SimpleNamespace(st_ctime=0)
+            return real_stat(self)
+
+        mocker.patch.object(Path, "stat", _stat)
 
         with _captured_logs() as records:
             assert copy_with_verify(src, dst) is True
 
         assert any("unknown change time" in message for message in _messages(records, "DEBUG"))
-        candidate.unlink.assert_not_called()
+        assert candidate.exists(), "an unknown change time must keep the leftover"
 
     def test_mismatched_destination_is_replaced_atomically(self, tmp_path: Path) -> None:
         """The swapped-in file holds the verified source content."""
@@ -923,24 +931,29 @@ class TestImmutableFlagRetry:
 class TestReclaimStagingFile:
     """_reclaim_staging_file removes only demonstrably abandoned staging files."""
 
-    def test_vanished_staging_file_is_ignored(self, mocker: MockerFixture) -> None:
-        """A file that disappears between the scan and the stat must not raise."""
-        candidate = mocker.MagicMock()
-        candidate.stat.side_effect = FileNotFoundError("gone")
+    def test_missing_candidate_is_ignored(self, tmp_path: Path) -> None:
+        """A candidate that is already gone is not an error and is not counted as reclaimed."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
 
-        file_utils._reclaim_staging_file(candidate, cutoff=0.0)
+        assert file_utils._reclaim_staging_file(candidate, cutoff=0.0) is False
 
-        candidate.unlink.assert_not_called()
-
-    def test_unreadable_staging_file_is_kept_and_reported(self, mocker: MockerFixture) -> None:
+    def test_unreadable_staging_file_is_kept_and_reported(self, mocker: MockerFixture, tmp_path: Path) -> None:
         """A stat failure keeps the leftover and explains why."""
-        candidate = mocker.MagicMock()
-        candidate.stat.side_effect = OSError("io error")
+        candidate = tmp_path / ".dst.mkv.movarr-feedface.part"
+        candidate.write_bytes(b"leftover")
+        real_stat = Path.stat
+
+        def _stat(self: Path) -> object:
+            if self.name == candidate.name:
+                raise OSError("io error")
+            return real_stat(self)
+
+        mocker.patch.object(Path, "stat", _stat)
 
         with _captured_logs() as records:
             file_utils._reclaim_staging_file(candidate, cutoff=0.0)
 
-        candidate.unlink.assert_not_called()
+        assert candidate.exists(), "a stat failure must keep the leftover"
         assert any("Could not inspect staging file" in message for message in _messages(records, "DEBUG"))
 
     def test_staging_file_vanishing_before_unlink_is_ignored(self, tmp_path: Path, mocker: MockerFixture) -> None:
@@ -950,3 +963,586 @@ class TestReclaimStagingFile:
         mocker.patch("pathlib.Path.unlink", side_effect=FileNotFoundError("gone"))
 
         file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)  # must not raise
+
+
+class TestStagingNameLength:
+    """The staging name must always be a valid, matchable file name."""
+
+    def test_staging_name_fits_name_max_for_long_destinations(self, tmp_path: Path) -> None:
+        """A long destination name must not push the staging name past NAME_MAX."""
+        dst = tmp_path / (("x" * 233) + ".mkv")
+
+        name = file_utils._staging_name(dst)
+
+        assert len(name.encode()) <= 255, f"staging name is {len(name.encode())} bytes"
+        assert file_utils._is_stale_staging(tmp_path / name, dst)
+
+    def test_staging_name_fits_name_max_for_multibyte_destinations(self, tmp_path: Path) -> None:
+        """NAME_MAX counts bytes: a multibyte destination name must use the hash stem."""
+        dst = tmp_path / ("君" * 79 + ".mkv")  # 241 bytes, 83 characters
+
+        name = file_utils._staging_name(dst)
+
+        assert len(name.encode()) <= 255, f"staging name is {len(name.encode())} bytes"
+        assert file_utils._is_stale_staging(tmp_path / name, dst)
+
+    def test_staging_name_matches_for_short_destinations(self, tmp_path: Path) -> None:
+        """The readable shape is kept when it fits."""
+        dst = tmp_path / "Movie.mkv"
+
+        name = file_utils._staging_name(dst)
+
+        assert name.startswith(".Movie.mkv.movarr-")
+        assert file_utils._is_stale_staging(tmp_path / name, dst)
+
+
+class TestStagingLock:
+    """A staging file held under an exclusive lock belongs to a live copy."""
+
+    def test_cleanup_skips_a_locked_staging_file(self, tmp_path: Path) -> None:
+        """Cleanup must leave a staging file another process has locked."""
+        import fcntl
+
+        dst = tmp_path / "dst.mkv"
+        dst.write_bytes(b"final")
+        staging = tmp_path / file_utils._staging_name(dst)
+        staging.write_bytes(b"in progress")
+
+        with staging.open("rb") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_utils._reclaim_staging_file(staging, cutoff=time.time() + 60)
+
+        assert staging.exists(), "a locked staging file must never be reclaimed"
+
+    def test_staging_file_is_locked_while_the_copy_runs(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A live copy holds the staging lock, so a second process cannot reclaim it."""
+        import fcntl
+
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        observed: dict[str, bool] = {}
+
+        def _fake_copy(_src: str, tmp: str) -> str:
+            path = Path(tmp)
+            if path.exists():
+                with path.open("rb") as fh:
+                    try:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        observed["locked"] = False
+                    except OSError:
+                        observed["locked"] = True
+            else:
+                observed["locked"] = False
+            path.write_bytes(b"staged")
+            return "digest"
+
+        mocker.patch("movarr.file_utils._perform_copy", side_effect=_fake_copy)
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is True
+        assert observed["locked"] is True, "the staging file must be locked for the copy"
+
+
+class TestLibrarySweep:
+    """Staging leftovers for titles that are never retried must still be reclaimed."""
+
+    def test_sweeps_abandoned_leftovers_across_movies(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A leftover beside another movie is reclaimed; look-alike user files are kept."""
+        root = tmp_path / "Movies"
+        movie_a = root / "A (2020)"
+        movie_b = root / "B (2021)"
+        movie_a.mkdir(parents=True)
+        movie_b.mkdir()
+        leftover = movie_b / ".B.2021.2160p.mkv.movarr-deadbeef.part"
+        leftover.write_bytes(b"abandoned")
+        user_file = movie_b / ".B.2021.2160p.mkv.20230101.part"
+        user_file.write_bytes(b"user file")
+        mocker.patch("movarr.file_utils.time.time", return_value=time.time() + 3 * 60 * 60)
+
+        reclaimed = file_utils.sweep_stale_staging_roots([str(root)])
+
+        assert reclaimed == 1
+        assert not leftover.exists(), "an abandoned staging leftover must be reclaimed"
+        assert user_file.exists(), "a user file that merely looks similar must be kept"
+
+
+class TestStagingMatcherAndSweepEdges:
+    """Defensive branches of the staging matcher, sweep and reclaim path."""
+
+    def test_matcher_rejects_shapes_it_does_not_own(self) -> None:
+        """Only dot-prefixed .part names carrying the marker and token are staging files."""
+        assert file_utils._is_staging_leftover_name("Movie.mkv") is False
+        assert file_utils._is_staging_leftover_name(".Movie.mkv.part") is False
+        assert file_utils._is_staging_leftover_name(".Movie.mkv.movarr-notahex.part") is False
+        assert file_utils._is_staging_leftover_name(".Movie.mkv.movarr-deadbeef.part") is True
+
+    def test_sweep_skips_a_root_that_does_not_exist(self, tmp_path: Path) -> None:
+        """A configured root that is absent must not raise or count."""
+        assert file_utils.sweep_stale_staging_roots([str(tmp_path / "missing")]) == 0
+
+    def test_sweep_survives_an_unreadable_tree(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """An OSError while walking a root is logged and skipped."""
+        mocker.patch("movarr.file_utils.os.walk", side_effect=OSError("permission denied"))
+
+        with _captured_logs() as records:
+            assert file_utils.sweep_stale_staging_roots([str(tmp_path)]) == 0
+
+        assert any("Could not sweep" in message for message in _messages(records, "DEBUG"))
+
+    def test_unopenable_leftover_logs_the_unlock_hint(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A leftover this user cannot open keeps the actionable warning."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.os.open", side_effect=PermissionError("denied"))
+
+        with _captured_logs() as records:
+            removed = file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)
+
+        assert removed is False
+        assert candidate.exists()
+        assert any(
+            "Unlock it through the configured pre_copy hook" in message for message in _messages(records, "WARNING")
+        )
+
+    def test_reclaim_keeps_a_file_that_vanishes_before_the_stat(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A candidate removed by another process between open and stat is not an error."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        real_stat = Path.stat
+
+        def _stat(self: Path) -> object:
+            if self.name == candidate.name:
+                raise FileNotFoundError("gone")
+            return real_stat(self)
+
+        mocker.patch.object(Path, "stat", _stat)
+
+        assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+    def test_staging_creation_failure_aborts_the_replace(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A staging file that cannot be created aborts cleanly instead of raising."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch("movarr.file_utils.os.open", side_effect=PermissionError("denied"))
+
+        with _captured_logs() as records:
+            assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        assert not dst.exists(), "a failed staging step must leave the destination absent"
+        assert any("Could not stage" in message for message in _messages(records, "ERROR"))
+
+    def test_flock_failure_aborts_the_replace_cleanly(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A file system that cannot lock must fail the copy gracefully, not raise."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch("movarr.file_utils.fcntl.flock", side_effect=OSError(38, "No locks available"))
+        close_spy = mocker.patch("movarr.file_utils.os.close", wraps=os.close)
+
+        with _captured_logs() as records:
+            assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        assert not dst.exists(), "the destination must be untouched"
+        assert close_spy.called, "the staging descriptor must be closed, not leaked"
+        assert any("cannot lock" in message for message in _messages(records, "ERROR"))
+
+    def test_unlockable_candidate_is_kept_with_an_accurate_reason(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A missing lock facility is not contention; the leftover is kept either way."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.fcntl.flock", side_effect=OSError(38, "No locks available"))
+
+        with _captured_logs() as records:
+            assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+        assert candidate.exists()
+        debug = " ".join(_messages(records, "DEBUG"))
+        assert "cannot lock" in debug
+        assert "another process is still using it" not in debug
+
+    def test_staging_name_survives_an_undecodable_name(self, tmp_path: Path) -> None:
+        """A lone surrogate (reachable from JSON metadata) must not raise here."""
+        dst = tmp_path / (("x" * 240) + "\ud800")
+
+        name = file_utils._staging_name(dst)
+
+        assert len(name.encode("utf-8", "surrogatepass")) <= 255
+        assert file_utils._is_stale_staging(tmp_path / name, dst)
+
+    def test_public_sweep_is_exported(self) -> None:
+        """A function imported as public API belongs in __all__."""
+        assert "sweep_stale_staging_roots" in file_utils.__all__
+
+    def test_flock_failure_leaves_no_staging_leftover(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A lockless mount must not accumulate one empty staging file per attempt."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch("movarr.file_utils.fcntl.flock", side_effect=OSError(38, "No locks available"))
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        leftovers = [p.name for p in tmp_path.iterdir() if p.name.endswith(".part")]
+        assert leftovers == [], f"staging leftovers remain: {leftovers}"
+
+    def test_sweep_reports_an_unreadable_subdirectory(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A directory that cannot be scanned is logged, not silently skipped."""
+
+        def _walk(_root: str, onerror: object = None, **_kwargs: object) -> Iterator[tuple[str, list[str], list[str]]]:
+            if callable(onerror):
+                onerror(OSError("permission denied"))
+            return iter(())
+
+        mocker.patch("movarr.file_utils.os.walk", side_effect=_walk)
+
+        with _captured_logs() as records:
+            assert file_utils.sweep_stale_staging_roots([str(tmp_path)]) == 0
+
+        assert any("Could not scan" in message for message in _messages(records, "DEBUG"))
+
+    def test_readable_stem_is_kept_at_the_exact_limit(self, tmp_path: Path) -> None:
+        """A 233-byte destination name still fits the readable stem (255-byte result)."""
+        dst = tmp_path / (("x" * 229) + ".mkv")
+
+        name = file_utils._staging_name(dst)
+
+        assert name.startswith("." + dst.name + ".movarr-")
+        assert len(name.encode()) == 255
+
+    def test_one_byte_over_the_limit_uses_the_hash_stem(self, tmp_path: Path) -> None:
+        """A 234-byte destination name would overflow, so it gets the hash stem."""
+        dst = tmp_path / (("x" * 230) + ".mkv")
+
+        name = file_utils._staging_name(dst)
+
+        assert not name.startswith("." + dst.name), "the readable stem cannot fit"
+        assert len(name.encode()) <= 255
+
+    def test_sweep_reclaims_the_hashed_staging_shape(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The shape matcher must also recognise the hashed stem the sweep exists for."""
+        movie = tmp_path / "A (2020)"
+        movie.mkdir()
+        hashed = movie / ".0123456789abcdef.movarr-deadbeef.part"
+        hashed.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.time.time", return_value=time.time() + 3 * 60 * 60)
+
+        assert file_utils.sweep_stale_staging_roots([str(tmp_path)]) == 1
+        assert not hashed.exists()
+
+    def test_read_only_leftover_is_reclaimed(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A leftover that only opens for reading must still be reclaimed.
+
+        The write-mode failure is forced so the test does not depend on running as an
+        unprivileged user (root opens a 0444 file for writing).
+        """
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        real_open = os.open
+        attempted: list[int] = []
+
+        def _open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            attempted.append(flags)
+            if flags & os.O_RDWR:
+                raise PermissionError("denied")
+            return real_open(path, flags, *args, **kwargs)
+
+        mocker.patch("movarr.file_utils.os.open", side_effect=_open)
+
+        assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is True
+        assert not candidate.exists()
+        assert any(flags & os.O_RDWR for flags in attempted), "the write attempt must come first"
+        assert any(not flags & os.O_RDWR for flags in attempted), "the read-only fallback must run"
+
+    def test_probe_survives_an_unexpected_open_error(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A non-permission open failure keeps the leftover and logs at debug."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.os.open", side_effect=OSError(5, "I/O error"))
+
+        with _captured_logs() as records:
+            assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+        assert candidate.exists()
+        assert any("Could not inspect staging file" in message for message in _messages(records, "DEBUG"))
+
+    def test_fifo_shaped_like_a_staging_file_does_not_hang(self, tmp_path: Path) -> None:
+        """A FIFO the probe cannot open for writing must not block the reclaim path."""
+        import os as _os
+
+        fifo = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        _os.mkfifo(fifo, 0o444)
+        try:
+            # Must return promptly; a blocking O_RDONLY open would hang here.
+            assert file_utils._reclaim_staging_file(fifo, cutoff=time.time() + 60) in (True, False)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                _os.unlink(fifo)
+
+    def test_sweep_skips_a_root_it_cannot_stat(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A root that cannot be stat'ed must not abort the whole post-processing pass."""
+        real_is_dir = Path.is_dir
+
+        def _is_dir(self: Path) -> bool:
+            if self.name == "unreadable":
+                raise PermissionError("denied")
+            return real_is_dir(self)
+
+        mocker.patch.object(Path, "is_dir", _is_dir)
+
+        with _captured_logs() as records:
+            assert file_utils.sweep_stale_staging_roots([str(tmp_path / "unreadable")]) == 0
+
+        assert any("Could not sweep" in message for message in _messages(records, "DEBUG"))
+
+    def test_existing_staging_name_is_never_reused(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A colliding staging name must abort, not write into someone else's file."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        fixed = mocker.MagicMock()
+        fixed.hex = "deadbeef" * 4
+        mocker.patch("movarr.file_utils.uuid.uuid4", return_value=fixed)
+        staging = tmp_path / file_utils._staging_name(dst)
+        staging.write_bytes(b"someone else's copy")
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        assert staging.read_bytes() == b"someone else's copy", "the existing staging file must be untouched"
+
+    def test_staging_logs_do_not_echo_control_characters(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A swept look-alike name can carry escapes; the log lines must stay clean."""
+        candidate = tmp_path / ".Evil\x1b]0;pwn\x07\nFORGED.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch("movarr.file_utils.os.open", side_effect=PermissionError("denied"))
+
+        with _captured_logs() as records:
+            file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)
+
+        emitted = " ".join(record["message"] for record in records)
+        assert "\x1b" not in emitted
+        assert "\n" not in emitted
+
+    def test_vanished_candidate_is_not_reported_as_unlockable(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A file removed between the two open attempts must not raise a warning."""
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch(
+            "movarr.file_utils.os.open",
+            side_effect=[PermissionError("denied"), FileNotFoundError("gone")],
+        )
+
+        with _captured_logs() as records:
+            assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+        assert not _messages(records, "WARNING"), "a vanished file is not an unlock problem"
+
+    def test_fifo_fallback_uses_nonblocking_flags(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The read-only fallback must carry O_NONBLOCK regardless of the test user's uid."""
+        import os as _os
+
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        real_open = _os.open
+        flags_seen: list[int] = []
+
+        def _open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            flags_seen.append(flags)
+            if flags & _os.O_RDWR:
+                raise PermissionError("denied")
+            return real_open(path, flags, *args, **kwargs)
+
+        mocker.patch("movarr.file_utils.os.open", side_effect=_open)
+
+        file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)
+
+        fallback = [flags for flags in flags_seen if not flags & _os.O_RDWR]
+        assert fallback, "the read-only fallback must run"
+        assert all(flags & _os.O_NONBLOCK for flags in fallback)
+
+    def test_exception_text_does_not_echo_control_characters(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The exception carries the filename too; that channel must be sanitised as well."""
+        candidate = tmp_path / ".Evil\x1b]0;pwn\x07\nFORGED.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch(
+            "movarr.file_utils.os.open",
+            side_effect=OSError(5, "I/O error", str(candidate)),
+        )
+
+        with _captured_logs() as records:
+            file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)
+
+        emitted = " ".join(record["message"] for record in records)
+        assert "\x1b" not in emitted
+        assert "\n" not in emitted
+
+    def test_unlink_failure_does_not_echo_control_characters(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """The unlink WARNING must sanitise the exception that names the file."""
+        candidate = tmp_path / ".Evil\x1b]0;pwn\x07\nFORGED.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        mocker.patch(
+            "pathlib.Path.unlink",
+            side_effect=OSError(1, "Operation not permitted", str(candidate)),
+        )
+
+        with _captured_logs() as records:
+            file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60)
+
+        emitted = " ".join(record["message"] for record in records)
+        assert "\x1b" not in emitted
+        assert "\n" not in emitted
+
+    def test_sweep_skips_a_root_whose_is_dir_raises_value_error(self, mocker: MockerFixture) -> None:
+        """is_dir() raises ValueError on the 3.12 floor for a NUL host path; the sweep must not abort."""
+        mocker.patch("pathlib.Path.is_dir", side_effect=ValueError("embedded null byte"))
+
+        with _captured_logs() as records:
+            assert file_utils.sweep_stale_staging_roots(["/media/Movies"]) == 0
+
+        assert any("Could not sweep" in message for message in _messages(records, "DEBUG"))
+
+    def test_lock_descriptor_is_closed_after_a_successful_replace(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A successful replace must release its staging lock descriptor."""
+        import os as _os
+
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        close_spy = mocker.patch("movarr.file_utils.os.close", wraps=_os.close)
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is True
+
+        assert close_spy.called, "the staging descriptor must be released"
+
+    def test_staging_lock_retries_when_a_cleanup_probe_holds_it(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A probe can take the brand-new file's lock in the open->flock window."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch(
+            "movarr.file_utils.fcntl.flock",
+            side_effect=[OSError(11, "Resource temporarily unavailable"), None],
+        )
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is True
+        assert dst.read_bytes() == b"source data"
+
+    def test_unencodable_name_aborts_cleanly(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A name the filesystem cannot encode (ValueError) must not escape the replace path."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch(
+            "movarr.file_utils.os.open",
+            side_effect=UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed"),
+        )
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is False
+        assert not dst.exists()
+
+    def test_contention_retry_failure_aborts_cleanly(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A retry that fails must return False, release the fd, and leave no leftover."""
+        import os as _os
+
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch(
+            "movarr.file_utils.fcntl.flock",
+            side_effect=[OSError(11, "Resource temporarily unavailable")] * 8,
+        )
+        close_spy = mocker.patch("movarr.file_utils.os.close", wraps=_os.close)
+
+        assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        assert not dst.exists()
+        assert not [p for p in tmp_path.iterdir() if p.name.endswith(".part")]
+        assert close_spy.called, "the staging descriptor must be released"
+
+    def test_contention_failure_message_names_the_cause(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A persistent holder must be reported as contention, not as a lockless mount."""
+        src = tmp_path / "src.mkv"
+        dst = tmp_path / "dst.mkv"
+        src.write_bytes(b"source data")
+        mocker.patch(
+            "movarr.file_utils.fcntl.flock",
+            side_effect=[OSError(11, "Resource temporarily unavailable")] * 8,
+        )
+
+        with _captured_logs() as records:
+            assert file_utils._replace_copy(src, dst, confirm=False) is False
+
+        errors = " ".join(_messages(records, "ERROR"))
+        assert "a cleanup pass is still holding it" in errors
+        assert "cannot lock" not in errors
+
+    def test_write_only_leftover_is_reclaimed(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A leftover whose mode denies reading can still be locked and unlinked."""
+        import os as _os
+
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        real_open = _os.open
+
+        def _open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if not flags & _os.O_WRONLY:  # O_RDONLY is 0, so test the write bit instead
+                raise PermissionError("denied")
+            return real_open(path, flags, *args, **kwargs)
+
+        mocker.patch("movarr.file_utils.os.open", side_effect=_open)
+
+        assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is True
+        assert not candidate.exists()
+
+    def test_display_is_encodable_for_undecodable_names(self) -> None:
+        """A log line must never carry text the sink cannot encode."""
+        text = file_utils._display(".Evil\udcff.movarr-deadbeef.part")
+
+        assert text.encode("utf-8")
+        assert "\udcff" not in text
+
+    def test_probe_reports_an_io_error_instead_of_the_unlock_hint(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A non-permission open failure is an I/O problem, not an unlock problem."""
+        import os as _os
+
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+
+        def _open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if flags & _os.O_RDWR:
+                raise PermissionError("denied")
+            raise OSError(5, "I/O error", str(path))
+
+        mocker.patch("movarr.file_utils.os.open", side_effect=_open)
+
+        with _captured_logs() as records:
+            assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+        assert not any("Unlock it through" in message for message in _messages(records, "WARNING"))
+        assert any("Could not inspect staging file" in message for message in _messages(records, "DEBUG"))
+
+    def test_fallback_mode_contention_is_reported_accurately(self, mocker: MockerFixture, tmp_path: Path) -> None:
+        """A lock refusal through a read-only handle is not another process's doing."""
+        import os as _os
+
+        candidate = tmp_path / ".dst.mkv.movarr-deadbeef.part"
+        candidate.write_bytes(b"leftover")
+        real_open = _os.open
+
+        def _open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if flags & _os.O_RDWR:
+                raise PermissionError("denied")
+            return real_open(path, flags, *args, **kwargs)
+
+        mocker.patch("movarr.file_utils.os.open", side_effect=_open)
+        mocker.patch(
+            "movarr.file_utils.fcntl.flock",
+            side_effect=OSError(11, "Resource temporarily unavailable"),
+        )
+
+        with _captured_logs() as records:
+            assert file_utils._reclaim_staging_file(candidate, cutoff=time.time() + 60) is False
+
+        debug = " ".join(_messages(records, "DEBUG"))
+        assert "cannot take an exclusive lock" in debug
+        assert "another process is still using it" not in debug

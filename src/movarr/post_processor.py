@@ -24,6 +24,7 @@ import shlex
 import signal
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,7 +34,12 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from movarr import torrent_client_health
-from movarr.file_utils import copy_with_verify, delete_file, make_directory
+from movarr.file_utils import (
+    copy_with_verify,
+    delete_file,
+    make_directory,
+    sweep_stale_staging_roots,
+)
 from movarr.filters import edition_token_set, supersession_quality_score
 from movarr.parsing import (
     extract_movie_title,
@@ -208,6 +214,69 @@ def _safe_path_component(value: str) -> str:
     return strip_control_chars(_RE_PATH_UNSAFE.sub("", value)).strip()
 
 
+#: How often the library-wide staging sweep may run.  This is deliberately its own
+#: constant rather than the per-file age guard in file_utils, so the two can be
+#: tuned independently.
+_STAGING_SWEEP_INTERVAL_SECS = 2 * 60 * 60
+
+#: Monotonic time of the last library-wide staging sweep, or None when it has never
+#: run (0.0 would mean "two hours before boot" on a monotonic clock).
+_last_staging_sweep_at: float | None = None
+
+
+def _staging_sweep_roots(config: Config) -> list[str]:
+    """Return every directory a staging leftover can live in.
+
+    Staging files are created beside the *copy destination*, which is chosen from
+    ``copy_library_rules``/``default_copy_library`` and is not required to sit
+    inside ``general.library_path_list``, so both sources are swept.
+    """
+    roots = list(config.general.library_path_list or [])
+    fallback = config.post_process.default_copy_library
+    roots.extend(path for path in (fallback.hd_path, fallback.uhd_path) if path)
+    for rule in config.post_process.copy_library_rules:
+        roots.extend(path for path in (rule.hd_path, rule.uhd_path) if path)
+    # A path configured twice must not be walked twice, and a destination nested
+    # inside an already-kept root is covered by that root's walk.
+    pruned: list[str] = []
+    # Shallowest first, so a nested destination is compared against its parent, and an
+    # exact duplicate is rejected by the equality half of the check below.
+    for root in sorted(roots, key=lambda item: len(pathlib.Path(item).parts)):
+        path = pathlib.Path(root)
+        try:
+            is_link = path.is_symlink()
+        except (OSError, ValueError):
+            # A root we cannot stat stays a root: a redundant walk, never lost coverage.
+            is_link = False
+        if not is_link and any(
+            path == pathlib.Path(kept) or path.is_relative_to(pathlib.Path(kept)) for kept in pruned
+        ):
+            # A symlinked destination is not reachable from its parent's walk
+            # (os.walk does not follow links), so it must stay a root of its own.
+            continue
+        pruned.append(root)
+    return pruned
+
+
+def _sweep_staging_leftovers(config: Config) -> None:
+    """Reclaim abandoned staging leftovers across every library root, at most every two hours.
+
+    Replacing a file only reclaims leftovers beside that destination, so a title
+    that is never retried would otherwise keep its staging copy forever.  The sweep
+    is rate-limited to at most one sweep per ``_STAGING_SWEEP_INTERVAL_SECS``:
+    completed torrents stay listed until they are removed, so "the pass has work"
+    is not a useful gate.
+    """
+    global _last_staging_sweep_at
+    now = time.monotonic()
+    if _last_staging_sweep_at is not None and now - _last_staging_sweep_at < _STAGING_SWEEP_INTERVAL_SECS:
+        return
+    _last_staging_sweep_at = now
+    reclaimed = sweep_stale_staging_roots(_staging_sweep_roots(config))
+    if reclaimed:
+        logger.info("Reclaimed {} abandoned staging file(s) across the library.", reclaimed)
+
+
 def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) -> None:
     """Main post-processing entry point.
 
@@ -231,6 +300,10 @@ def run_post_processing(config: Config, qbt: QBittorrentClient, db: Database) ->
     if not completed:
         logger.debug("No completed torrents to post-process.")
         return
+
+    # Sweep only on a pass that has work; the interval throttle inside
+    # _sweep_staging_leftovers is what bounds the walk.
+    _sweep_staging_leftovers(config)
 
     for torrent in completed:
         # One malformed torrent must never abort the remaining torrents in the cycle.
